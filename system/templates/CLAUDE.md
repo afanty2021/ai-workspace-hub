@@ -46,7 +46,7 @@
 | research | 研究闭环 | `system/skills/research.md` | 否（websearch） |
 | screen | 快速筛选 | `system/skills/screen.md` | 可选（外部 Longbridge Skill / tushare / FMP） |
 | hypothesis | 假设追踪 | `system/integrations/hypothesis-tracker.md` | 否 |
-| podcast | 播客/博客摄入 | `system/skills/podcast.md` | 需要 LLM key |
+| podcast | 播客/博客摄入 | `system/skills/podcast.md` | 当前 Agent 无需独立 Key；后台摘要需 Key |
 | daily-watch | 日报监控 | `system/skills/daily-watch.md` | 可选（tushare / FMP） |
 
 工具代码在 `tools/` 目录下。首次使用时 agent 检查依赖，缺什么用 `python3 -m pip install ...` 安装；如果环境只有 `python`，再替换成 `python -m pip ...`。
@@ -102,15 +102,19 @@ Claude 应该创建一篇 `wiki/sources/YYYY-MM-DD-first-note.md`，并在 `work
 
 | 数据源 | 市场 | env key | 费用 |
 |--------|------|---------|------|
-| tushare | A 股 | `TUSHARE_TOKEN` | 按官方套餐 |
-| FMP | 全球 | `FMP_API_KEY` | 按官方套餐 |
-| Finnhub / EOD / yfinance | 美股（daily-watch 降级源） | `FINNHUB_API_KEY` / `EOD_API_KEY` / `ENABLE_YFINANCE` | 免费档可用 |
+| Nasdaq | 美股基础行情 | 无 | 无 Key 自动降级源 |
+| tushare | A 股 | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线；其他接口看权限 |
+| FMP | 美股 EOD/profile 起步；扩展市场看套餐 | `FMP_API_KEY` | 免费 Basic 当前 250 次/日 |
+| Finnhub | 美股备用 | `FINNHUB_API_KEY` | 免费账户端点可用，额度以官方为准 |
+| EODHD | HK/KR/FI 最近 EOD 备用 | `EOD_API_KEY` | 免费账户当前 20 次/日；不是实时价 |
+| yfinance | 多市场个人研究备用 | `ENABLE_YFINANCE=1` | 无 Key，需额外安装；非官方 Yahoo SDK |
 | Longbridge Skill | 多市场 | 独立安装与授权 | 外部 Agent 扩展，不是日报脚本内置源 |
 
 获取方式：
+- 完整选择与验证：`DATA-SOURCES.md`
 - Longbridge：https://open.longbridge.com/zh-CN/skill/
 - tushare：https://tushare.pro/register
-- FMP：https://financialmodelingprep.com/
+- FMP：https://site.financialmodelingprep.com/developer/docs/pricing
 
 ## friction-log：同一个坑不打第二次补丁
 

@@ -73,6 +73,8 @@ python3 tools/daily-watch/scripts/check_setup.py --init
 
 预期：缺失的示例配置会被初始化；缺 API key 只显示警告或跳过对应数据源，必要目录和依赖检查通过。
 
+检查输出还应明确：`daily-watch` 已内置；Nasdaq 美股基础行情无需 key；Finnhub、EODHD、Tushare、FMP 和 yfinance 是否已配置。逐步接入见 `DATA-SOURCES.md`。
+
 ## 自动测试
 
 ```bash

@@ -51,6 +51,7 @@ class InstallWorkspaceTests(unittest.TestCase):
                 "AGENTS.md",
                 "CLAUDE.md",
                 "START-HERE.md",
+                "DATA-SOURCES.md",
                 "workspace/workspace-config.md",
                 "workspace/research-profile.md",
                 "workspace/review-queue.md",
@@ -117,6 +118,28 @@ class InstallWorkspaceTests(unittest.TestCase):
             self.assertEqual(leaked, [], "installer must not copy caches or local .env files")
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(CHECKER.check(target), 0)
+
+    def test_checker_explains_builtin_tools_and_free_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "workspace"
+            INSTALLER.install(
+                REPO_ROOT,
+                target,
+                merge=False,
+                name="SANDBOX",
+                primary_use="investing",
+                wiki_root="./wiki",
+            )
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                self.assertEqual(CHECKER.check(target), 0)
+            output = stream.getvalue()
+            self.assertIn("daily-watch and podcast are already included", output)
+            self.assertIn("Nasdaq no-key fallback", output)
+            self.assertIn("FINNHUB_API_KEY", output)
+            self.assertIn("EOD_API_KEY", output)
+            self.assertIn("yfinance no-key fallback", output)
+            self.assertIn("DATA-SOURCES.md", output)
 
     def test_nonempty_target_requires_explicit_merge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -6,7 +6,7 @@ import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from threading import Lock
@@ -397,31 +397,46 @@ def fetch_eod_quote(ticker: str, market: str, api_key: str) -> dict[str, Any] | 
     if not suffix:
         return None
     symbol = strip_market_suffix(ticker)
+    # Use the EOD endpoint instead of real-time. EODHD's free account currently
+    # includes up to one year of EOD history (20 calls/day). This path uses
+    # dated daily bars, not live/delayed quotes. A 14-day slice normally contains
+    # at least two sessions and keeps the response small without relying on an
+    # undocumented `limit` parameter.
+    start_date = (date.today() - timedelta(days=14)).isoformat()
     url = (
-        f"https://eodhd.com/api/real-time/{symbol}.{suffix}"
-        f"?api_token={api_key}&fmt=json"
+        f"https://eodhd.com/api/eod/{symbol}.{suffix}"
+        f"?api_token={api_key}&fmt=json&period=d&order=d&from={start_date}"
     )
     try:
         payload = request_json(url)
     except Exception as exc:  # noqa: BLE001
         log(f"Warning: eod fallback failed for {ticker}: {exc}")
         return None
-    if not isinstance(payload, dict):
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
         return None
-    price = parse_float(payload.get("close"))
-    if price is None or str(payload.get("code", "")).upper() == "NA":
+    latest = payload[0]
+    previous = payload[1] if len(payload) > 1 and isinstance(payload[1], dict) else {}
+    price = parse_float(latest.get("close"))
+    previous_close = parse_float(previous.get("close"))
+    if price is None:
         return None
+    change = price - previous_close if previous_close is not None else None
+    change_pct = (
+        change / previous_close * 100
+        if change is not None and previous_close
+        else None
+    )
     return {
         "symbol": ticker,
         "price": price,
-        "change": parse_float(payload.get("change")),
-        "changesPercentage": parse_float(payload.get("change_p")),
-        "previousClose": parse_float(payload.get("previousClose")),
-        "open": parse_float(payload.get("open")),
-        "dayHigh": parse_float(payload.get("high")),
-        "dayLow": parse_float(payload.get("low")),
-        "volume": parse_float(payload.get("volume")),
-        "tradeDate": str(payload.get("timestamp", "")),
+        "change": change,
+        "changesPercentage": change_pct,
+        "previousClose": previous_close,
+        "open": parse_float(latest.get("open")),
+        "dayHigh": parse_float(latest.get("high")),
+        "dayLow": parse_float(latest.get("low")),
+        "volume": parse_float(latest.get("volume")),
+        "tradeDate": str(latest.get("date", "")),
         "source": "eod",
     }
 
@@ -577,8 +592,11 @@ def week_bounds(today: date) -> tuple[date, date]:
 
 
 def fetch_earnings_calendar(
-    api_key: str, watchlist_map: dict[str, dict[str, str]]
+    api_key: str, watchlist_map: dict[str, dict[str, str]],
+    status: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    if status is not None:
+        status.update(state="not_configured" if not api_key else "failed", source="fmp")
     if not api_key:
         log("Warning: FMP_API_KEY not set, skipping earnings calendar")
         return []
@@ -621,6 +639,9 @@ def fetch_earnings_calendar(
         )
 
     results.sort(key=lambda row: (row.get("date") or "", row["ticker"]))
+    if status is not None:
+        status.update(state="ok", count=len(results), period_start=monday.isoformat(),
+                      period_end=friday.isoformat())
     return results
 
 
@@ -857,6 +878,7 @@ def build_snapshot(
         if item["ticker"].endswith(CN_SUFFIXES) or item["ticker"].endswith(HK_SUFFIX)
     ]
 
+    earnings_status: dict[str, Any] = {"state": "disabled"}
     quotes: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=3) as executor:
         quote_future = executor.submit(fetch_fmp_quotes, fmp_tickers, api_key, max_workers)
@@ -864,7 +886,7 @@ def build_snapshot(
             fetch_tushare_quotes, tushare_tickers, tushare_token, max_workers
         )
         earnings_future = (
-            executor.submit(fetch_earnings_calendar, api_key, watchlist_map)
+            executor.submit(fetch_earnings_calendar, api_key, watchlist_map, earnings_status)
             if include_earnings
             else None
         )
@@ -912,6 +934,16 @@ def build_snapshot(
         "quotes": quotes,
         "movers": movers,
         "earnings": earnings,
+        "meta": {
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "quotes": {
+                "state": "ok" if len(quotes) == len(watchlist) else "partial" if quotes else "unavailable",
+                "requested": len(watchlist), "received": len(quotes),
+                "missing_tickers": [x["ticker"] for x in watchlist
+                                    if x["ticker"] not in {q["ticker"] for q in quotes}],
+            },
+            "earnings": earnings_status,
+        },
     }
 
 

@@ -90,7 +90,7 @@
 
 **原因**：正常行为。没有配置 API key 时，日报工具会生成骨架但跳过需要数据源的部分。
 
-**解决**：如果需要实际数据，在 `config/` 下配置对应的 API key（tushare / FMP）。不配 key 时 Core Mode 仍然可用。
+**解决**：先看 [DATA-SOURCES.md](DATA-SOURCES.md) 按市场选择。美股基础行情不填 key 也会尝试 Nasdaq；A 股可接 Tushare；个人研究可选择 yfinance；宏观和财报仍可能需要 FMP 或其他授权。不配 key 时 Core Mode 仍然可用。
 
 ### tushare 返回空数据
 

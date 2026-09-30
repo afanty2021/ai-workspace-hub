@@ -193,7 +193,7 @@ decision_scenarios: []
 
 ## 自动标签契约
 
-新建 source 或 exploration 后，调用同一个打标器：
+新建 source 或 exploration 后，交互会话可由当前 Agent 按下表契约补空字段，保留人工值并复用已有词表；完成后记录 `tagging: {status: completed, schema_version: 1, provider: current_agent}`。后台自动化或用户选择独立模型时，调用统一打标器：
 
 ```bash
 python3 system/scripts/wiki_tagger.py --root . --env-file config/pod2wiki.env tag <页面.md> --apply

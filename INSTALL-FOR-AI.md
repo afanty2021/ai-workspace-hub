@@ -133,6 +133,7 @@ system/templates/
 复制模板和工具代码：
 
 **入口文件**（从 `system/templates/` 复制）：
+- `DATA-SOURCES.md` -> `DATA-SOURCES.md`
 - `system/templates/AGENTS.md` -> `AGENTS.md`
 - `system/templates/CLAUDE.md` -> `CLAUDE.md`
 - `system/templates/workspace-config.md` -> `workspace/workspace-config.md`
@@ -188,6 +189,7 @@ system/templates/
 
 **依赖文件**：
 - `requirements.txt` -> `requirements.txt`
+- `requirements.lock` -> `requirements.lock`
 - `requirements-pdf.txt` -> `requirements-pdf.txt`
 
 **试跑材料**：
@@ -255,9 +257,9 @@ python3 "{用户工作区}/system/scripts/check_workspace.py" --root "{用户工
 - Enhanced Mode 里的 API key 警告：只代表可选自动化未开启，不是安装失败。
 - 如果 Python 不可用，但核心文件都已经复制完成，也可以让用户直接用 AI agent 执行 `inbox/first-note.md → wiki` 的 Markdown 试跑。
 
-### Step 6：默认建议配置自己的 LLM API（Enhanced Mode）
+### Step 6：按用户市场引导免费数据源与 LLM（Enhanced Mode）
 
-默认询问用户是否要填写自己的 LLM API key，用于 wiki 自动标签和播客摘要。不要把 key 当成安装成功的硬前置；用户暂时不填时，明确说明 Core Mode 仍可运行，但脚本自动标签会跳过。行情类数据源继续按需配置。
+先明确告诉用户：`daily-watch` 和 `podcast` 已经随 Hub 就位，不需要安装独立项目。再只问一个合并问题：主要跟踪美股、A 股、港股/其他市场中的哪些，以及现在是否要开启行情日报、wiki 自动标签或播客摘要。不要把 key 当成安装成功的硬前置；用户暂时不填时，明确说明 Core Mode 仍可运行。
 
 问用户追踪哪些市场，然后设置对应配置：
 
@@ -270,13 +272,26 @@ python3 "{用户工作区}/system/scripts/check_workspace.py" --root "{用户工
    - `tools/podcast/examples/config.ai-investing.yaml` -> `config/pod2wiki.config.yaml`
    - `tools/podcast/.env.example` -> `config/pod2wiki.env`
 
-2. 告诉用户哪些 key 要填：
+2. 按市场推荐最低成本路径，不要笼统地把 FMP 写成“免费全球行情”：
 
-| 功能 | 需要填的 key | 没填时 | 获取方式 |
-|------|-------------|--------|---------|
-| 日报（A 股） | `TUSHARE_TOKEN` | 跳过 A 股 | [tushare](https://tushare.pro/register) |
-| wiki 自动标签 + 播客摘要 | `LLM_API_KEY`（DeepSeek 等） | wiki 保留空标签；播客用 `--no-llm` | [DeepSeek](https://platform.deepseek.com/) |
-| 日报（全球市场） | `FMP_API_KEY` | 美股尝试 Nasdaq 等降级源 | [FMP](https://financialmodelingprep.com/) |
+| 用户需求 | 首选 | 需要配置 | 没配置时 |
+|------|------|---------|---------|
+| 美股基础行情 | Nasdaq 无 Key 降级源 | 只需安装 `requirements.txt` | 自动尝试 Nasdaq |
+| 美股备用行情 | Finnhub 免费账户 | `FINNHUB_API_KEY` | 继续用 Nasdaq |
+| A 股日线 | Tushare 当前 120 积分档可起步 | `TUSHARE_TOKEN` + `requirements-tushare.txt` | 跳过 A 股 |
+| 多市场个人研究备用 | yfinance | 安装 `yfinance` + `ENABLE_YFINANCE=1` | 不启用该降级源 |
+| 港股/KR/FI 小股票池最近 EOD 备用 | EODHD 免费账户当前 20 次/日；不是实时价 | `EOD_API_KEY` | 跳过该降级源 |
+| EOD/profile 测试 | FMP 免费 Basic 当前 250 次/日 | `FMP_API_KEY` | 美股仍可尝试 Nasdaq |
+| wiki 自动标签 + 播客摘要 | 兼容的 LLM API | `LLM_API_KEY` + provider/model/base URL | wiki 保留空标签；播客用 `--no-llm` |
+
+3. 打开工作区根目录的 `DATA-SOURCES.md`，把对应市场的官方链接、安装命令、额度边界和验证命令展示给用户。免费政策是易变事实；如果当前日期明显晚于文档的“最近核对”日期，先查服务商官方页面再承诺额度。
+
+4. key 只写入本地 `config/*.env`，不在终端回显、不写进 README/AGENTS/聊天总结。配置后运行：
+
+```bash
+python3 "{用户工作区}/system/scripts/check_workspace.py" --root "{用户工作区}"
+python3 "{用户工作区}/tools/daily-watch/scripts/check_setup.py"
+```
 
 Longbridge 不是上述脚本的环境变量数据源。它是独立 Agent Skill/CLI/MCP；用户需要时，按[官方安装说明](https://open.longbridge.com/zh-CN/skill/)另行安装和授权，可用于 screen / research 的行情查询。
 
@@ -287,7 +302,8 @@ Longbridge 不是上述脚本的环境变量数据源。它是独立 Agent Skill
 1. `AGENTS.md` 和 `CLAUDE.md` 已创建。
 2. `tools/podcast/` 和 `tools/daily-watch/` 已就位。
 3. `check_workspace.py` 已显示 Core Mode 是否可用；如果用户还没填 API key，说明 Enhanced Mode 可之后再开。
-4. 如果用户用 Obsidian：`reading-hub.md` 已安装为阅读首页（需要 Obsidian 1.9+ 的 Bases 功能），每天从它开始扫新内容。
+4. `DATA-SOURCES.md` 已就位；说明零 Key、免费档和付费档的区别，并给出用户所选市场的下一步。
+5. 如果用户用 Obsidian：`reading-hub.md` 已安装为阅读首页（需要 Obsidian 1.9+ 的 Bases 功能），每天从它开始扫新内容。
 
 先用一份材料确认系统能工作：
 
@@ -323,3 +339,7 @@ Longbridge 不是上述脚本的环境变量数据源。它是独立 Agent Skill
 - 遇到摩擦时，优先记录到 `workspace/meta/friction-log.md`。
 
 <!-- 文件说明：交给 AI agent 执行的安装协议。 -->
+
+### 交互整理与后台自动摘要
+
+不要因为用户未配置 LLM Key 阻止当前会话整理材料。播客交互整理使用 `system/skills/podcast.md` 的 `--agent-handoff` 流程，由当前 Agent 完成；只有后台脚本独立摘要需要配置 LLM Key。

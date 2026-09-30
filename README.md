@@ -11,7 +11,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/Benboerba620/ai-workspace-hub?style=social)](https://github.com/Benboerba620/ai-workspace-hub/stargazers)
 [![License](https://img.shields.io/github/license/Benboerba620/ai-workspace-hub)](LICENSE)
 
-[30 秒上手](#-30-秒上手) · [六大能力](#-六大能力) · [第一周怎么用](#-第一周怎么用) · [故障排查](TROUBLESHOOTING.md)
+[30 秒上手](#-30-秒上手) · [六大能力](#-六大能力) · [免费数据源](DATA-SOURCES.md) · [第一周怎么用](#-第一周怎么用) · [故障排查](TROUBLESHOOTING.md)
 
 ![完整流程演示：一句话安装 → Core Mode READY → 首次股票研究 → 研究偏好 → 主题假设 → 日报跟踪](docs/demo.gif)
 
@@ -21,7 +21,7 @@
 
 ---
 
-> **最近更新（2026-08-18）**：新增可选 Obsidian 阅读台，自动汇总 inbox、研究、筛选、Podcast 和日报新内容；同时明确 daily-watch 与 podcast 已随 Hub 内置，无需单独安装。
+> **最近更新（2026-09-30）**：当前 Agent 可直接完成材料摘要与标签；日报显示数据来源、日期和缺失状态；安装附带免费数据源指南，daily-watch 与 podcast 均已内置。
 
 > 对话很聪明，但工作流没有记忆；今天做完，明天又从头解释。
 
@@ -121,13 +121,13 @@ Agent 会汇总进行中的研究、待复盘证据、到期假设和待确认�
 | 🔍 | **screen** | "帮我筛选 AI 产业链股票" | `output/screen/` | 可选 |
 | 📊 | **daily-watch** | "生成今天的盯盘日报" | `output/daily-watch/` + `evidence/` | 可选 |
 | 🧪 | **hypothesis** | "把这个投资假设建档并追踪" | `hypothesis/` | 不需要 |
-| 🎙️ | **podcast** | "扫一下这几个播客并写进 wiki" | `wiki/sources/` + `output/pod2wiki/` | 需要 LLM key |
+| 🎙️ | **podcast** | "扫一下这几个播客并写进 wiki" | `wiki/sources/` + `output/pod2wiki/` | 当前 Agent 无需独立 Key；后台摘要需 Key |
 
-> **daily-watch 和 podcast 已经内置在 Hub 中，不需要再单独安装。** 只有行情、自动标签、播客摘要等 Enhanced Mode 能力需要你按需填写 API key。
+> **daily-watch 和 podcast 已经内置在 Hub 中，不需要再单独安装。** 后台自动标签、独立运行的播客摘要和部分行情源需要按需填写 API key；交互整理可由当前 Agent 完成。
 >
-> **零 key 可用**：wiki 仍可摄入，但跳过脚本自动标签；research、hypothesis、screen（websearch 模式）、daily-watch（报告骨架 + 美股降级源）照常可用。
+> **零 key 可用**：wiki 可由当前 Agent 摄入和补齐有依据的标签，不调用独立模型 API；research、hypothesis、screen（websearch 模式）、daily-watch（报告骨架 + 美股降级源）照常可用。
 >
-> **默认建议配置**：自己的 DeepSeek / Kimi / GLM / Qwen key 用于 wiki 自动标签和播客摘要；tushare（A 股）· FMP（全球行情）· [Longbridge Skill](https://open.longbridge.com/zh-CN/skill/)（多市场查询）按需开启。
+> **默认建议配置**：先按 [免费数据源接入指南](DATA-SOURCES.md) 选择市场——美股可零 Key 使用 Nasdaq，A 股可从 Tushare 的基础日线档起步，yfinance 可作为个人研究备用；再按需配置 LLM、FMP 或 [Longbridge Skill](https://open.longbridge.com/zh-CN/skill/)。
 
 ---
 
@@ -156,7 +156,7 @@ flowchart LR
 
 wiki 变大后也不会每次全量加载。每次研究先运行 Research Preflight：按 `rule -> pattern -> exploration` 加载相关可复用知识，同时扫描 `entities / concepts / sources`，只返回少量命中页面、命中理由和过期/冲突提示，再决定哪些问题需要联网。扫描不调用大模型，并生成可检查的回执。知识按 `source -> exploration -> pattern -> rule` 逐级提炼；每次晋级、降级或退役都保留用户确认、复审日期和失效条件。
 
-材料进入 wiki 时由同一个打标器补齐 `domain / ticker / concepts / related / entity_salience / tags`。新材料直接写入，历史补标默认只预览；已有人工字段不会被覆盖。
+材料进入 wiki 时按同一标签契约补齐 `domain / ticker / concepts / related / entity_salience / tags`。交互模式由当前 Agent 处理，后台模式使用统一打标器；历史补标默认只预览，已有人工字段不会被覆盖。
 
 ### 用真实案例理解 Wiki 晋级
 
@@ -173,9 +173,9 @@ wiki 变大后也不会每次全量加载。每次研究先运行 Research Prefl
 | 模式 | API key | 能做什么 | 适合 |
 |------|---------|----------|------|
 | **Core** | 不需要 | wiki 摄入（无脚本自动标签）、研究草稿、快速筛选、假设建档、断点续传 | 临时未配置 API 时 |
-| **Enhanced** | 建议填写 | wiki 自动标签、播客摘要、行情日报、A 股 / 全球市场数据、自动监控 | 默认日常使用 |
+| **Enhanced** | 按市场选填 | wiki 自动标签、播客摘要、行情日报、A 股 / 多市场数据、自动监控 | 默认日常使用 |
 
-推荐路径：安装后运行 `check_workspace.py` → 把自己的 LLM key 填到 `config/pod2wiki.env` → 用第一篇材料验证自动标签。暂时没有 key 时仍可先跑 Core Mode。
+推荐路径：安装后运行 `check_workspace.py` → 按 [DATA-SOURCES.md](DATA-SOURCES.md) 选择免费或付费数据源 → 只填写实际需要的 key。暂时没有 key 时仍可先跑 Core Mode，美股基础行情还可走 Nasdaq 无 Key 源。
 
 ---
 
@@ -183,10 +183,10 @@ wiki 变大后也不会每次全量加载。每次研究先运行 Research Prefl
 
 | 天数 | 动作 | 目标 |
 |:----:|------|------|
-| Day 1 | 配置自己的 LLM key，跑通 `inbox/first-note.md → wiki` | 确认摘要、自动标签和分类都能工作 |
+| Day 1 | 用当前 Agent 跑通 `inbox/first-note.md → wiki`；后台自动化再配置 Key | 确认摘要、自动标签和分类都能工作 |
 | Day 2 | 放入 3-5 条真实材料 | 建立第一批知识库 |
 | Day 3 | 让 agent 研究一个公司 / 行业 | 生成第一篇结构化报告 |
-| Day 4 | `check_workspace.py`，按需配 tushare / FMP | 增强行情能力 |
+| Day 4 | `check_workspace.py`，按免费数据源指南选择 Nasdaq / Tushare / yfinance 等 | 增强行情能力 |
 | Day 5 | 做一次主题筛选 | 形成候选池 |
 | Day 6 | 扫一次播客 / 博客 | 建立外部信息流 |
 | Day 7 | 运行结构体检，删掉没用规则 | 防止系统变胖 |
@@ -235,9 +235,11 @@ ai-workspace-hub/
 | 名称 | 类型 | 用途 | 是否内置 |
 |------|------|------|----------|
 | Nasdaq | 无 key 降级源 | 美股基础行情 | 是 |
-| Finnhub / EOD / yfinance | 降级源 | 美股行情备选（Finnhub / EOD 需各自免费 key，yfinance 用 `ENABLE_YFINANCE=1` 开启） | 是 |
-| tushare | API 数据源 | A 股行情 / 财务 | 是，需 token |
-| FMP | API 数据源 | 全球行情 / 财报 / 宏观 | 是，需 key |
+| Finnhub | 免费账户 / 付费 | 美股行情备选；免费端点和额度以官方账户为准 | 是，需 key |
+| EODHD | 免费小额度 / 付费 | 港股、韩国、芬兰等最近 EOD 备用；免费账户当前 20 次/日，不是实时价 | 是，需 key |
+| yfinance | 无 Key | 多市场个人研究备用；非官方 Yahoo SDK，需额外安装 | 是，需开启 |
+| tushare | 积分 / 单独权限 | A 股行情；当前 120 积分档可取非复权日线 | 是，需 token |
+| FMP | 免费 Basic / 付费 | 免费档适合 EOD/profile 测试；全球覆盖和高级数据取决于套餐 | 是，需 key |
 | Longbridge Skill | 外部 Agent 扩展 | 多市场查询、筛选、研究 | 否，独立安装授权 |
 | websearch | Agent 能力 | 补充新闻、资料、公司信息 | 取决于 agent |
 
@@ -275,7 +277,7 @@ Python 工具需要 3.10+。**Windows 用户**用 `python` 代替 `python3`，�
 不一定。任何能读写文件的 AI agent 都可以。Codex 和 Claude Code 效果最好，Cursor 和 Cline 也可以。
 
 **Q：安装 Hub 后，还要单独安装 daily-watchlist 或 pod2wiki 吗？**
-不需要。两套工具及其配置模板已经包含在 `tools/daily-watch/` 和 `tools/podcast/`；你只需要按用途配置自己的 API key 或可选依赖。
+不需要。两套工具及其配置模板已经包含在 `tools/daily-watch/` 和 `tools/podcast/`；你只需要按用途安装可选依赖，并按 [免费数据源接入指南](DATA-SOURCES.md) 选择是否配置 key。
 
 **Q：wiki 越来越大怎么办？**
 用 Obsidian 打开 `wiki/` 目录做可视化管理，或让 AI agent 帮你整理归档。
@@ -324,3 +326,7 @@ Python 工具需要 3.10+。**Windows 用户**用 `python` 代替 `python3`，�
 AI Workspace Hub 是个人研究与知识管理工具，不构成投资建议。所有市场数据、公司信息、财务数字、新闻和监管信息都应以原始来源为准。
 
 <!-- 文件说明：项目首页、价值介绍和快速上手。 -->
+
+### 为什么已经在 Agent 中使用，还可能需要模型 Key？
+
+交互整理可以由当前 Agent 完成：播客工具使用 `--agent-handoff` 准备原文与待处理队列，Agent 阅读原文后完成摘要和标签，不要求另配模型 Key。脚本在后台独立生成摘要才需要模型 API。两种方式的步骤与完成标准见 [Podcast 流程](system/skills/podcast.md)。

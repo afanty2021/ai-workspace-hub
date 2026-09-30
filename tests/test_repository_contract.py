@@ -30,7 +30,9 @@ class RepositoryContractTests(unittest.TestCase):
         pattern = re.compile(r"\[[^]]*\]\(([^)]+)\)")
         broken: list[str] = []
         for markdown in REPO_ROOT.rglob("*.md"):
-            if ".git" in markdown.parts:
+            if set(markdown.relative_to(REPO_ROOT).parts) & {
+                ".git", "node_modules", ".venv", "venv", "dist", "build", ".next",
+            }:
                 continue
             for target in pattern.findall(markdown.read_text(encoding="utf-8")):
                 target = target.split("#", 1)[0].strip()

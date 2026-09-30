@@ -260,12 +260,14 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 | 数据源 | 市场 | 费用 | 必要性 | env key |
 |--------|------|------|--------|---------|
-| FMP | 全球（行情 + 财报 + 宏观） | 按官方套餐 | 可选（全功能需要） | `FMP_API_KEY` |
-| tushare | A 股（.SH/.SZ）、港股（.HK） | 按官方套餐 | A 股/港股需要 | `TUSHARE_TOKEN` |
+| FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | 免费 250 次/日 / 付费 | 可选（财报、宏观等功能需要） | `FMP_API_KEY` |
+| tushare | A 股（.SH/.SZ）、港股（.HK） | 120 积分非复权日线当前 0 元；其他看权限 | A 股/港股需要 | `TUSHARE_TOKEN` |
 | Nasdaq | 美股基础行情 | 无 Key | 自动 fallback（FMP 未返回时） | 无 |
-| Finnhub | 美股 | 免费/付费 | 可选 fallback | `FINNHUB_API_KEY` |
-| EOD | 港股、韩国、芬兰等 | 付费 | 可选 fallback | `EOD_API_KEY` |
-| yfinance | 全球 | 无 Key | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
+| Finnhub | 美股 | 免费账户 / 付费 | 可选 fallback | `FINNHUB_API_KEY` |
+| EODHD | 港股、韩国、芬兰等最近 EOD | 免费 20 次/日 / 付费 | 可选 fallback；不是实时价 | `EOD_API_KEY` |
+| yfinance | 多市场 | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
+
+完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
 **Fallback 顺序**（单只股票 FMP 未返回时）：Nasdaq → Finnhub → EOD → yfinance。每个源按 env key 是否配置自动决定是否尝试。
 
@@ -278,7 +280,7 @@ Longbridge Skill/CLI 是独立 Agent 扩展，不是本脚本的内置数据源�
 配置文件 `config/daily-watchlist.env`：
 
 ```bash
-# 可选：Financial Modeling Prep（全球行情、财报和宏观）
+# 可选：Financial Modeling Prep（免费 Basic 功能有限；扩展市场、财报和宏观看套餐）
 FMP_API_KEY=your_fmp_api_key
 
 # 可选：Tushare Pro，用于 A 股（.SH/.SZ）和港股（.HK）
@@ -329,7 +331,7 @@ python tools/daily-watch/scripts/check_setup.py --init
 1. **Ticker 格式**：A 股必须带后缀（`601857.SH` 不是 `601857`），港股必须带 `.HK`（`0700.HK` 不是 `700`），后缀必须大写
 2. **数据源**：A 股 / 港股需要 tushare token；纯美股无 key 时 Nasdaq 源能覆盖大部分
 3. **非交易时间**：脚本取最近 5-14 个自然日内的数据，周末和长假也能拿到最近一个交易日的数据
-4. **FMP 限流**：免费 plan 有 250 次/天的限制，股票池太大时会被截断
+4. **FMP 限流与覆盖**：免费 Basic 当前有 250 次/天限制，且不是免费全球全功能；股票池太大或请求高级端点时会缺数据
 
 ### 找不到配置文件
 

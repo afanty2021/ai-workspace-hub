@@ -148,9 +148,42 @@
   - `evidence/`
   - `hypothesis/`（只追加证据引用，不自动改变状态）
 
-## 数据源（配了才用，没配降级不报错）
+## 数据源（按市场选择，没配降级不报错）
 
-> key 走环境变量或 `config/*.env`，不要写进 repo。没配的字段 agent 会标 `[待验证]` 而不是编造。
+> 完整接入指南见 `DATA-SOURCES.md`。key 走环境变量或 `config/*.env`，不要写进 repo。没配的字段 agent 会标 `[待验证]` 而不是编造。
+
+### nasdaq（美股基础行情，无 Key 自动降级）
+
+- status: `enabled-no-key`
+- env_key: none
+- markets: US
+- used_by: `daily-watch`
+- limits: 基础行情，稳定性与覆盖不作承诺
+
+### finnhub（美股备用）
+
+- status: `available-unconfigured`
+- env_key: `FINNHUB_API_KEY`
+- markets: US
+- used_by: `daily-watch`
+- pricing: 免费账户端点可用，额度以官方当前账户为准
+
+### eodhd（小额度 EOD 备用）
+
+- status: `available-unconfigured`
+- env_key: `EOD_API_KEY`
+- markets: HK, KR, FI
+- used_by: `daily-watch`
+- pricing: 免费账户当前 20 次调用/日，可取过去一年 EOD 历史；不是实时行情
+
+### yfinance（个人研究备用）
+
+- status: `optional-no-key`
+- env_key: `ENABLE_YFINANCE=1`
+- markets: multiple
+- used_by: `daily-watch`
+- dependency: `yfinance`（需额外安装）
+- boundary: 非官方 Yahoo SDK，仅适合个人研究/教育用途
 
 ### longbridge-skill（外部 Agent 扩展）
 
@@ -167,13 +200,14 @@
 - env_key: `TUSHARE_TOKEN`
 - markets: CN (.SH/.SZ), HK (.HK)
 - used_by: `daily-watch`, `screen`, `research`
+- pricing: 当前 120 积分档可取非复权日线；其他接口看积分或单独权限
 - 获取方式: https://tushare.pro/register
 
-### fmp（可选：全球行情 / 财报 / 宏观）
+### fmp（可选：EOD / profile / 财报 / 宏观）
 
 - status: `available-unconfigured`
 - env_key: `FMP_API_KEY`
-- markets: US, HK, EU, JP, CN
+- markets: 免费 Basic 以 EOD/profile 测试为主；扩展和全球覆盖取决于套餐
 - used_by: `daily-watch`, `screen`, `research`
-- pricing: 以 FMP 官方当前套餐为准
-- 获取方式: https://financialmodelingprep.com/
+- pricing: 免费 Basic 当前 250 次调用/日；高级端点和全球覆盖为更高套餐
+- 获取方式: https://site.financialmodelingprep.com/developer/docs/pricing

@@ -258,7 +258,7 @@ def render_other_movers(
 
 
 def render_earnings_sections(
-    earnings: list[dict[str, Any]], enabled: bool
+    earnings: list[dict[str, Any]], enabled: bool, status: dict[str, Any] | None = None
 ) -> tuple[str, str]:
     reported_rows = [
         "| 代码 | 日期 | 预期 EPS | 实际 EPS | Surprise | 市场反应 |",
@@ -272,6 +272,12 @@ def render_earnings_sections(
         reported_rows.append("| 模块关闭 | N/A | N/A | N/A | N/A | 财报模块已关闭 |")
         upcoming_rows.append("| 模块关闭 | N/A | N/A |")
         return "\n".join(reported_rows), "\n".join(upcoming_rows)
+
+    if status is not None and status.get("state") != "ok":
+        reason = {"not_configured": "未配置财报数据源，本轮未检查",
+                  "failed": "财报获取失败，不能判断是否有财报",
+                  "disabled": "财报模块已关闭"}.get(status.get("state"), "财报数据状态未确认")
+        return f"> {reason}", f"> {reason}"
 
     if earnings:
         for item in earnings[:10]:
@@ -806,6 +812,35 @@ def apply_hypothesis_updates(
     return writeback_count
 
 
+def render_data_coverage(market_data: dict[str, Any], macro_data: dict[str, Any],
+                         modules: dict[str, bool]) -> str:
+    """Preserve provider dates and distinguish missing data from empty results."""
+    meta = market_data.get("meta") or {}
+    quote_meta = meta.get("quotes") or {}
+    rows = ["### 数据覆盖与日期", "",
+            f"- 行情抓取时间（UTC）：{meta.get('fetched_at') or '未提供'}"]
+    missing = quote_meta.get("missing_tickers") or []
+    if missing:
+        rows.append("- 行情未取得：" + "、".join(missing) + "；异动结论仅覆盖成功取得的数据。")
+    if not market_data.get("quotes"):
+        rows.append("- 没有可用行情，不能据此判断市场没有异动。")
+    earnings = meta.get("earnings") or {}
+    if modules["earnings"] and earnings.get("state") == "ok":
+        rows.append(f"- 财报检查区间：{earnings.get('period_start', '未提供')} 至 {earnings.get('period_end', '未提供')}。")
+    if modules["macro"]:
+        macro_meta = macro_data.get("meta") or {}
+        if macro_meta.get("reason") == "FMP_API_KEY not set":
+            rows.append("- 宏观数据源未配置，本轮未检查。")
+        elif not macro_data.get("macro") or macro_meta.get("missing_symbols"):
+            rows.append("- 宏观数据未完整取得，N/A 不代表数值为零或没有变化。")
+    rows.extend(["", "| 代码 | 来源 | 来源交易日 / 时间（原始口径） |", "|---|---|---|"])
+    for quote in market_data.get("quotes") or []:
+        stamp = quote.get("tradeDate")
+        rows.append(f"| {quote['ticker']} | {quote.get('source') or '未提供'} | {stamp or '未提供，时效待确认'} |")
+    rows.extend(["", "来源日期不等于报告日期；最近可用报价不承诺为实时行情。"])
+    return "\n".join(rows)
+
+
 def build_report(
     workspace_root: Path,
     config: dict[str, Any],
@@ -836,7 +871,7 @@ def build_report(
     earnings = market_data.get("earnings") or []
     market_table, market_summary = render_market_overview(macro_data, modules["macro"])
     earnings_reported, earnings_upcoming = render_earnings_sections(
-        earnings, modules["earnings"]
+        earnings, modules["earnings"], (market_data.get("meta") or {}).get("earnings", {"state": "unknown"})
     )
     context = SafeFormatDict(
         DATE=today.isoformat(),
@@ -847,13 +882,13 @@ def build_report(
         ),
         MARKET_OVERVIEW_TABLE=market_table,
         MARKET_SUMMARY=market_summary,
-        KEY_MOVERS_TABLE=render_key_movers(movers),
+        KEY_MOVERS_TABLE=(render_key_movers(movers) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
         OTHER_MOVERS_TABLE=render_other_movers(quotes, movers),
         EARNINGS_REPORTED_TABLE=earnings_reported,
         EARNINGS_UPCOMING_TABLE=earnings_upcoming,
         THEMES_SECTION=render_themes(config, modules["focus_areas"]),
         HYPOTHESIS_SECTION=build_hypothesis_section(hypotheses, signals, config),
-        SOURCES_SECTION=render_sources(modules),
+        SOURCES_SECTION=render_sources(modules) + "\n\n" + render_data_coverage(market_data, macro_data, modules),
     )
     rendered = template_text.format_map(context).rstrip() + "\n"
     report_path.write_text(rendered, encoding="utf-8")

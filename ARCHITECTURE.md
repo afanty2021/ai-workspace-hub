@@ -32,8 +32,8 @@ flowchart TB
 
     subgraph DATA["内置数据源 · 按需配置"]
         TS["tushare<br/>A 股（可选）"]
-        FMP2["FMP<br/>全球（可选）"]
-        FB["Nasdaq 等<br/>降级源"]
+        FMP2["FMP<br/>免费 Basic / 扩展套餐"]
+        FB["Nasdaq / yfinance 等<br/>免费降级源"]
     end
 
     subgraph EXT["外部 Agent 扩展 · 独立授权"]
@@ -99,13 +99,15 @@ flowchart TB
 
 | 数据源 | 市场 | 费用 | 用于 |
 |--------|------|------|------|
-| tushare | A 股 (.SH/.SZ) | 按官方套餐 | daily-watch, screen, research |
-| FMP | 全球 | 按官方套餐 | daily-watch, screen, research |
-| Nasdaq / Finnhub / EOD / yfinance | 各自覆盖市场 | 各自规则 | daily-watch 降级源 |
+| tushare | A 股 (.SH/.SZ) | 120 积分非复权日线当前 0 元；其他看权限 | daily-watch, screen, research |
+| FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | 免费 250 次/日 / 付费 | daily-watch, screen, research |
+| Nasdaq | 美股基础行情 | 无 Key | daily-watch 自动降级源 |
+| Finnhub / EODHD | 各自覆盖市场 | 免费小额度 / 付费 | daily-watch 可选降级源 |
+| yfinance | 多市场个人研究 | 无 Key；需额外安装 | daily-watch 可选降级源 |
 | websearch | — | Agent 自带 | 全部能力的兜底 |
 | Longbridge Skill | 以官方支持范围为准 | 独立安装与授权 | screen, research 外部扩展 |
 
-日报脚本按市场使用 tushare / FMP，并在缺失或请求失败时尝试 Nasdaq、Finnhub、EOD、yfinance。零 Key 时仍生成报告骨架，Agent 可用 websearch 补充；Longbridge 不在日报脚本调用链中。
+日报脚本按市场使用 tushare / FMP，并在缺失或请求失败时尝试 Nasdaq、Finnhub、EODHD、yfinance。零 Key 时，美股基础行情可尝试 Nasdaq，其余缺口保留在报告骨架中，Agent 可用 websearch 补充；Longbridge 不在日报脚本调用链中。详细边界见 `DATA-SOURCES.md`。
 
 ---
 

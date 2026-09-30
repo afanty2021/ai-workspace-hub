@@ -22,6 +22,7 @@
 3. 如需 API 数据，在 `config/daily-watchlist.env` 填入对应数据源 key；没有 Key 也可以生成骨架并尝试无 Key 降级源
 
 Agent 首次使用时检查上述条件，缺什么补什么。
+免费与低成本数据源的选择、安装命令和授权边界统一读取 `DATA-SOURCES.md`，不要凭旧印象承诺额度。
 
 ## 核心流程（dw-today）
 
@@ -41,11 +42,11 @@ Agent 首次使用时检查上述条件，缺什么补什么。
 
 | 优先级 | 数据源 | 市场 | env key | 费用 | 获取 |
 |--------|--------|------|---------|------|------|
-| 1 | tushare | A 股 (.SH/.SZ) | `TUSHARE_TOKEN` | 按官方套餐 | [注册](https://tushare.pro/register) |
-| 2 | FMP | 全球 | `FMP_API_KEY` | 按官方套餐 | [注册](https://financialmodelingprep.com/) |
-| 3+ | Nasdaq / Finnhub / EOD / yfinance | 各种 | 无 Key 或各自 key | 自动 fallback | — |
+| 1 | tushare | A 股 (.SH/.SZ) | `TUSHARE_TOKEN` | 120 积分非复权日线当前 0 元；其他看权限 | [注册](https://tushare.pro/register) |
+| 2 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | `FMP_API_KEY` | 免费 250 次/日 / 付费 | [Pricing](https://site.financialmodelingprep.com/developer/docs/pricing) |
+| 3+ | Nasdaq / Finnhub / EODHD / yfinance | 各自覆盖 | 无 Key 或各自 key | 自动 fallback | `DATA-SOURCES.md` |
 
-无任何 key → 报告骨架仍生成，行情数据标 `[待补充]`，agent 用 websearch 补充。
+无任何 key → 美股基础行情先尝试 Nasdaq，其余缺口在报告骨架中标 `[待补充]`，agent 用 websearch 补充。
 
 Longbridge Skill/CLI 是独立 Agent 扩展，不是 `tools/daily-watch/` 的内置数据源。需要时可用于 Agent 的临时查询，但不要把它写成日报脚本已接入。
 

@@ -6,6 +6,7 @@ Daily Watchlist + Hypothesis Tracker 环境检查。
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import shutil
 import sys
@@ -57,6 +58,17 @@ def check(name: str, passed: bool, msg: str = "") -> bool:
 def warn(name: str, msg: str = "") -> None:
     detail = f" - {msg}" if msg else ""
     print(f"  {WARN} {name}{detail}")
+
+
+def usable_key(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value or value.lower().startswith(("your_", "replace_")):
+        return ""
+    return value
+
+
+def flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def load_env_file(env_file: Path) -> None:
@@ -181,9 +193,12 @@ def main() -> int:
         check(f"config/{env_file.name}", True)
         load_env_file(env_file)
 
-        fmp_key = os.getenv("FMP_API_KEY", "")
-        if not fmp_key or fmp_key.startswith("your_"):
-            warn("FMP_API_KEY", "未配置（可选；美股会尝试 Nasdaq 无 Key 降级源）")
+        fmp_key = usable_key("FMP_API_KEY")
+        if not fmp_key:
+            warn(
+                "FMP_API_KEY",
+                "未配置（可选；免费 Basic 功能有限，美股会尝试 Nasdaq 无 Key 降级源）",
+            )
         else:
             try:
                 import requests
@@ -203,8 +218,8 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 all_pass &= check("FMP_API_KEY", False, f"连接失败：{exc}")
 
-        ts_token = os.getenv("TUSHARE_TOKEN", "")
-        if ts_token and not ts_token.startswith("your_"):
+        ts_token = usable_key("TUSHARE_TOKEN")
+        if ts_token:
             try:
                 import tushare as ts
 
@@ -222,7 +237,34 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 warn("TUSHARE_TOKEN", f"检查跳过：{exc}")
         else:
-            warn("TUSHARE_TOKEN", "未配置（可选，仅 A 股/港股需要）")
+            warn("TUSHARE_TOKEN", "未配置（可选；A 股日线可从官方 120 积分档起步）")
+
+        check("Nasdaq 无 Key 美股基础行情", True, "自动降级源，无需注册")
+
+        if usable_key("FINNHUB_API_KEY"):
+            check("FINNHUB_API_KEY", True, "已配置（美股备用行情）")
+        else:
+            warn("FINNHUB_API_KEY", "未配置（可选；可申请免费账户 key）")
+
+        if usable_key("EOD_API_KEY"):
+            check("EOD_API_KEY", True, "已配置（HK/KR/FI 最近 EOD 备用，不是实时价）")
+        else:
+            warn("EOD_API_KEY", "未配置（可选；免费账户当前 20 次/日 EOD 历史）")
+
+        yfinance_enabled = flag_enabled("ENABLE_YFINANCE")
+        yfinance_installed = importlib.util.find_spec("yfinance") is not None
+        if yfinance_enabled and yfinance_installed:
+            check("yfinance 无 Key 备用行情", True, "已启用；仅用于个人研究/教育")
+        elif yfinance_enabled:
+            warn(
+                "yfinance 无 Key 备用行情",
+                f"已开启但未安装（{PIP_INSTALL} yfinance）",
+            )
+        else:
+            warn(
+                "yfinance 无 Key 备用行情",
+                "未开启（可选；安装 yfinance 后设置 ENABLE_YFINANCE=1）",
+            )
 
     config_file = resolve_config_path(config_dir)
     if config_file.exists():
@@ -292,6 +334,7 @@ def main() -> int:
             "所有必要检查已通过。现在可以运行 "
             "/dw-today、/ht-new、/ht-status、/ht-trade。"
         )
+        print("免费数据源接入和限制见 DATA-SOURCES.md。")
         return 0
 
     print("仍有未完成项，请按上面的提示修复后再运行。")

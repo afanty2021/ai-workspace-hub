@@ -128,7 +128,14 @@ def load_key_values(root: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for relative in ENV_FILES:
         values.update(parse_env_file(root / relative))
-    for key in ("LLM_API_KEY", "FMP_API_KEY", "TUSHARE_TOKEN"):
+    for key in (
+        "LLM_API_KEY",
+        "FMP_API_KEY",
+        "TUSHARE_TOKEN",
+        "FINNHUB_API_KEY",
+        "EOD_API_KEY",
+        "ENABLE_YFINANCE",
+    ):
         if os.environ.get(key):
             values[key] = os.environ[key]
     return values
@@ -136,6 +143,10 @@ def load_key_values(root: Path) -> dict[str, str]:
 
 def has_key(values: dict[str, str], key: str) -> bool:
     return not is_placeholder(values.get(key))
+
+
+def flag_enabled(values: dict[str, str], key: str) -> bool:
+    return values.get(key, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def status_line(ok: bool, label: str, detail: str = "") -> str:
@@ -204,19 +215,70 @@ def check(root: Path) -> int:
     print(status_line(module_available("requests"), "dependency: requests"))
     print(status_line(module_available("dotenv"), "dependency: python-dotenv / dotenv"))
     print(status_line(module_available("yaml"), "dependency: pyyaml / yaml"))
+    requests_ready = module_available("requests")
+    yfinance_enabled = flag_enabled(values, "ENABLE_YFINANCE")
+    yfinance_installed = module_available("yfinance")
     print(
         status_line(
             has_key(values, "LLM_API_KEY"),
-            "LLM_API_KEY for wiki auto-tagging and podcast summaries",
+            "LLM_API_KEY for background wiki tagging and podcast summaries",
         )
     )
-    print(status_line(has_key(values, "FMP_API_KEY"), "FMP_API_KEY for global market data"))
-    print(status_line(has_key(values, "TUSHARE_TOKEN"), "TUSHARE_TOKEN for China A-share data"))
+    print(
+        status_line(
+            requests_ready,
+            "Nasdaq no-key fallback for US basic quotes",
+            "automatic after base dependencies are installed",
+        )
+    )
+    print(
+        status_line(
+            has_key(values, "FINNHUB_API_KEY"),
+            "FINNHUB_API_KEY for optional US quote fallback",
+            "free-account endpoints available; provider limits apply",
+        )
+    )
+    print(
+        status_line(
+            has_key(values, "EOD_API_KEY"),
+            "EOD_API_KEY for optional HK/KR/FI EOD fallback",
+            "free account currently has 20 calls/day for recent EOD history",
+        )
+    )
+    print(
+        status_line(
+            yfinance_enabled and yfinance_installed,
+            "yfinance no-key fallback",
+            (
+                "enabled"
+                if yfinance_enabled and yfinance_installed
+                else "set ENABLE_YFINANCE=1 and install yfinance; personal/research use only"
+            ),
+        )
+    )
+    print(
+        status_line(
+            has_key(values, "FMP_API_KEY"),
+            "FMP_API_KEY for EOD/profile/macro features",
+            "free Basic is limited; expanded/global coverage depends on plan",
+        )
+    )
+    print(
+        status_line(
+            has_key(values, "TUSHARE_TOKEN"),
+            "TUSHARE_TOKEN for China A-share data",
+            "some daily data can start at the official 120-point tier",
+        )
+    )
 
     print()
     print("Interpretation:")
     print("- Missing API keys only disable optional automation.")
-    print("- Configure your own API keys for wiki auto-tagging, podcast, market data, or daily-watch automation.")
+    print("- daily-watch and podcast are already included; do not install separate projects.")
+    print("- US basic quotes can use Nasdaq without a key after installing requirements.txt.")
+    print("- See DATA-SOURCES.md for free-tier choices, setup commands, limits, and official links.")
+    print("- Interactive podcast processing: use --agent-handoff with your current agent; no separate LLM key.")
+    print("- Configure your own API keys only for the optional providers you choose.")
     print("- Keep keys in local config/*.env files; do not commit real secrets.")
     print("- Core Mode remains useful for Markdown wiki, research drafts, and hypothesis files.")
     return 0 if core_ok else 2

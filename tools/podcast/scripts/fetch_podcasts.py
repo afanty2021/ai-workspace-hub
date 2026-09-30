@@ -1102,6 +1102,7 @@ related: {yaml_list(related)}
 created: {item['date']}
 updated: {datetime.now().date().isoformat()}
 confidence: {structured.get('confidence') or 'medium'}
+summary_status: {structured.get('summary_status') or 'completed'}
 speakers: {yaml_list(structured.get('speakers') or [])}
 language: {locale}
 {transcribed_line}{tagging_lines}---
@@ -1263,6 +1264,7 @@ def main() -> int:
     parser.add_argument("--source-url", help="Original URL override for a single --input-file run.")
     parser.add_argument("--date", help="YYYY-MM-DD override for local files.")
     parser.add_argument("--no-llm", action="store_true", help="Write an extractive low-confidence source page without calling an LLM.")
+    parser.add_argument("--agent-handoff", action="store_true", help="Collect raw material and persist a pending queue for the current agent; no LLM API calls.")
     parser.add_argument("--no-auto-tag", action="store_true", help="Skip structured wiki auto-tagging after source pages are written.")
     parser.add_argument("--max-items", type=int, help="Global limit on items to summarize/write after collection.")
     parser.add_argument("--max-items-per-feed", type=int, help="Limit RSS/blog items collected from each feed. Defaults to config max_items_per_feed.")
@@ -1283,6 +1285,11 @@ def main() -> int:
     parser.add_argument("--write-insight-log", action="store_true", help="Append a run-level insight report.")
     parser.add_argument("--insight-log", help="Insight log path. Defaults to <output-dir>/ai-insights-log.md.")
     args = parser.parse_args()
+    if args.agent_handoff:
+        args.no_llm = True
+        args.no_auto_tag = True
+        if args.translate_full or args.write_insight_log:
+            parser.error("--agent-handoff delegates translation and insight writing to the current agent")
 
     global OUTPUT
     if args.output_dir:
@@ -1377,8 +1384,14 @@ def main() -> int:
     )
     auto_tag = not args.no_llm and not args.no_auto_tag
 
+    queue_path = OUTPUT / "agent-handoff.json"
+    queue = ({"tasks": {}} if not args.agent_handoff or not queue_path.exists()
+             else json.loads(queue_path.read_text(encoding="utf-8")))
     try:
         for item in items:
+            if args.agent_handoff and item["id"] in queue["tasks"]:
+                # Resume the persistent task instead of overwriting an agent's work.
+                continue
             if not item.get("raw_text"):
                 continue
             try:
@@ -1394,6 +1407,9 @@ def main() -> int:
                 eprint(f"- LLM skipped: {item.get('title')} ({exc})")
                 processing_errors.append(f"{item.get('title')}: {exc}")
                 continue
+            structured["summary_status"] = (
+                "pending_agent" if args.agent_handoff else "extractive" if args.no_llm else "completed"
+            )
             raw_path = write_raw(item, wiki_root)
             raw_ref = str(raw_path.relative_to(wiki_root)).replace("\\", "/")
             local_raw_copy = write_raw(item, OUTPUT)
@@ -1443,6 +1459,18 @@ def main() -> int:
                     "translation_pages": item_translation_pages,
                 }
             )
+            if args.agent_handoff:
+                pages = [str(local_source.resolve())]
+                if wiki_source_dir:
+                    pages.append(str(wiki_source.resolve()))
+                queue["tasks"][item["id"]] = {
+                    "status": "pending_agent", "title": item["title"],
+                    "raw_path": str(raw_path.resolve()), "source_pages": pages,
+                    "source_url": item.get("url") or item.get("link"),
+                }
+                pending = queue_path.with_suffix(".tmp")
+                pending.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
+                pending.replace(queue_path)
             if item.get("source_kind") != "file":
                 history[item["id"]] = datetime.now(timezone.utc).isoformat()
                 # Persist per item so a mid-run crash never re-bills completed LLM/Whisper work.
@@ -1460,10 +1488,15 @@ def main() -> int:
             insight_log_path = str(target)
         except LLMError as exc:
             eprint(f"- insight log skipped: {exc}")
+    if args.agent_handoff and not queue_path.exists():
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
     payload = {
         "ok": not processing_errors,
         "items_found": len(items),
-        "items_summarized": len(processed),
+        "items_summarized": 0 if args.agent_handoff else len(processed),
+        "items_pending_agent": sum(task.get("status") == "pending_agent" for task in queue["tasks"].values()) if args.agent_handoff else 0,
+        "agent_handoff": str(OUTPUT / "agent-handoff.json") if args.agent_handoff else None,
         "source_pages_count": len(source_pages),
         "source_pages_written": source_pages,
         "raw_pages_written": raw_pages,

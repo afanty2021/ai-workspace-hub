@@ -37,6 +37,7 @@ DIRECTORIES = (
 
 FILE_MAPPINGS = (
     ("START-HERE.md", "START-HERE.md"),
+    ("DATA-SOURCES.md", "DATA-SOURCES.md"),
     ("system/templates/AGENTS.md", "AGENTS.md"),
     ("system/templates/CLAUDE.md", "CLAUDE.md"),
     ("system/templates/workspace-config.md", "workspace/workspace-config.md"),
@@ -292,10 +293,18 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     target = args.target.resolve()
+    python_command = str(Path(sys.executable).resolve())
     print(f"Installed AI Workspace Hub to {target}")
     print(f"Created files: {created}; preserved existing files: {skipped}")
-    print(f'Next: python3 "{target / "system/scripts/check_workspace.py"}" --root "{target}" (verifies Core Mode)')
-    print("Enhanced Mode (optional): run tools/daily-watch/scripts/check_setup.py later.")
+    print(
+        f'Next: "{python_command}" '
+        f'"{target / "system/scripts/check_workspace.py"}" --root "{target}" '
+        "(verifies Core Mode)"
+    )
+    print("daily-watch and podcast: included; do not install separate projects.")
+    print("Free market-data starter: US quotes use Nasdaq without a key after dependencies are installed.")
+    print(f"Data-source guide: {target / 'DATA-SOURCES.md'}")
+    print("Enhanced Mode (optional): install requirements.txt, then run tools/daily-watch/scripts/check_setup.py.")
     if args.obsidian_reading_hub or detect_obsidian_vault(target):
         print("Obsidian Reading Hub: installed reading-hub.base + reading-hub.md "
               "(open reading-hub.md in Obsidian 1.9+).")

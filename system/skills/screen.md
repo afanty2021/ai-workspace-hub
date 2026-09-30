@@ -28,7 +28,9 @@
 **数据源优先级**：
 1. 已独立安装并授权的 [Longbridge Skill/CLI](https://open.longbridge.com/zh-CN/skill/)：`longbridge quote {TICKER} --format json`
 2. [tushare](https://tushare.pro/register)（A 股 .SH/.SZ）：通过 `tools/daily-watch/scripts/fetch_market_data.py`
-3. [FMP](https://financialmodelingprep.com/)（全球，可选）：通过 `tools/daily-watch/scripts/fetch_market_data.py`
+3. [FMP](https://site.financialmodelingprep.com/developer/docs/pricing)（免费 Basic 以美股 EOD/profile 测试为主；扩展市场按套餐）：通过 `tools/daily-watch/scripts/fetch_market_data.py`
+
+免费数据源接入与授权边界先读 `DATA-SOURCES.md`；不要把 FMP 免费 Basic 写成免费全球全功能。
 
 **拉取字段**：当前价、市值、P/E、P/B、股息率、近 1 年营收增速、近 3 月涨跌幅。
 

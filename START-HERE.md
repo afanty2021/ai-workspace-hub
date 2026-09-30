@@ -2,6 +2,18 @@
 
 这个工作区默认服务于股票研究。第一次使用时，不需要先设计模板，也不需要先整理大量资料。
 
+## 先确认你已经装好
+
+`daily-watch` 和 `podcast` 已经包含在这个工作区里，不需要再安装两个独立项目。先运行：
+
+```bash
+python3 system/scripts/check_workspace.py
+```
+
+看到 `Core Mode result: READY` 就可以开始研究。Python 依赖和 API key 的警告只影响可选自动化。
+
+如果你要开行情日报，先读 [DATA-SOURCES.md](DATA-SOURCES.md)：美股基础行情可直接用 Nasdaq 无 Key 源；A 股可按当前官方规则从 Tushare 120 积分日线档起步；yfinance 可作为个人研究的无 Key 备用源。指南里有逐步配置和验证命令。
+
 把下面这句话发给 Agent：
 
 > 研究一家公司，同时帮我建立第一版研究偏好。公司是：____；我现在关注它是因为：____。

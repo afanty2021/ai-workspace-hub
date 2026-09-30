@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### 改进
+
+- 日报保留行情来源、交易日和抓取时间，区分财报未配置、获取失败和成功但无事件，标明宏观与行情覆盖缺口。
+- 播客新增 `--agent-handoff`，准备原文、待处理页面和持久队列，由当前 Agent 完成摘要，不要求独立模型 Key。
+- 文档链接检查排除第三方依赖及构建目录，避免本地 UI 原型干扰测试。
+
+- 新增 `DATA-SOURCES.md` 安装后数据源向导，并随新工作区复制；按美股、A 股和多市场需求区分 Nasdaq 无 Key、Tushare 基础日线、yfinance 个人研究备用，以及 Finnhub / EODHD / FMP 免费档的真实边界。
+- 安装器和 `check_workspace.py` 明确 daily-watch / podcast 已内置，显示 Finnhub、EODHD、yfinance 的配置状态，并给出免费数据源下一步。
+- EODHD 降级改用最近 EOD 历史接口，用最近两个交易日计算涨跌并明确不是实时价。
+- 修正把 FMP 笼统描述为“免费全球行情”的文档偏差；免费 Basic、全球覆盖与高级端点不再混写。
+
 ## 0.8.1 - 2026-08-27
 
 ### 新增

@@ -21,12 +21,12 @@
    - 关键证据
    - 待验证问题
    - 下一步动作
-8. 用统一打标器补齐空的结构化字段：
+8. 交互会话由当前 Agent 按 `wiki/_schema.md` 的标签契约补齐有原文依据的空字段，复用现有词表、保留人工字段；记录 `tagging: {status: completed, schema_version: 1, provider: current_agent}`。无法判断的字段留空并说明。后台自动化或用户选择独立模型时，用统一打标器：
    ```bash
    python3 system/scripts/wiki_tagger.py --root . --env-file config/pod2wiki.env tag wiki/sources/YYYY-MM-DD-{输入文件名}.md --apply
    ```
    Windows 用 `python`。脚本只补空字段，不覆盖已有人工值；API 缺失或失败时保留空字段，在报告中写明，不阻塞归档和摘要。
-9. 根据打标结果和 `wiki/_schema.md` 分类决策树，**至少创建一个** `concepts/` 或 `entities/` 分类页；如有综合多来源的判断，另写 `wiki/explorations/`。这些新页面也用同一条 `wiki_tagger.py tag ... --apply` 命令补空字段。
+9. 根据打标结果和 `wiki/_schema.md` 分类决策树，**至少创建一个** `concepts/` 或 `entities/` 分类页；如有综合多来源的判断，另写 `wiki/explorations/`。这些新页面也按第 8 步的同一模式补空字段。
 10. 写一份 `output/YYYY-MM-DD-{输入文件名}-report.md` 试跑报告（处理了什么、标签写入了哪些字段、产出了哪些文件、遇到什么问题）。
 11. 更新 `workspace/meta/active-context.md`，记录试跑完成。
 12. 如果过程中发现路径缺失或规则不清，追加到 `workspace/meta/friction-log.md`。
