@@ -39,8 +39,8 @@ build/
 inbox/sample-ai-workspace.md
 
 # 个人使用数据（本地工作产物不入库；已跟踪的结构文件不受 gitignore 影响。
-# workspace/meta/ 的 active-context 与 friction-log 已跟踪，本地修改用
-# `git update-index --skip-worktree` 隐藏）
+# active-context / friction-log 已 untrack，新工作区由 install_workspace.py
+# 从 system/templates/ 重建）
 .zcode/
 output/*
 wiki/raw/*
@@ -48,6 +48,8 @@ wiki/sources/*
 wiki/concepts/*
 wiki/entities/*
 wiki/explorations/*
+workspace/meta/active-context.md
+workspace/meta/friction-log.md
 
 # OS / 编辑器
 .DS_Store
