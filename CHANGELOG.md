@@ -9,6 +9,8 @@
 
 ### 改进
 
+- 仓库不再跟踪 `workspace/meta/active-context.md` 与 `friction-log.md` 实例文件（已加入 .gitignore）：本仓库原地使用 Hub 产生的个人条目不再进入公开仓库历史，模板仍由 `system/templates/` 提供，新工作区由安装器重建。
+- 评审修复：腾讯 / 新浪行情端点从明文 HTTP 改为 HTTPS；`build_quote_record` 把 `YYYYMMDD` 形式的 tradeDate 统一归一为 ISO 格式（tushare / 腾讯原始口径混排曾并存）；东财请求去掉未使用的 f58 字段；新浪涨跌额按 Nasdaq 源惯例 round 到 6 位；AGENTS.md / CLAUDE.md 数据源表补东财 / 腾讯 / 新浪行。
 - `check_setup.py --init` 初始化股票池改用空模板，与安装器统一：新工作区不再被种入美股演示股票（AAPL/MSFT/NVDA 等），避免用户直接追加时把演示股混进日报；新增回归测试守住该边界。
 - 日报保留行情来源、交易日和抓取时间，区分财报未配置、获取失败和成功但无事件，标明宏观与行情覆盖缺口。
 - 播客新增 `--agent-handoff`，准备原文、待处理页面和持久队列，由当前 Agent 完成摘要，不要求独立模型 Key。

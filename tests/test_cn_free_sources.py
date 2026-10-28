@@ -14,6 +14,7 @@ from _test_paths import REPO_ROOT  # noqa: F401 (also sets up sys.path)
 
 from fetch_market_data import (  # noqa: E402
     _cn_quote_symbol,
+    build_quote_record,
     fetch_eastmoney_quote,
     fetch_fallback_quote,
     fetch_sina_quote,
@@ -160,6 +161,19 @@ class SinaQuoteTests(unittest.TestCase):
 
         self.assertIsNone(fetch_sina_quote("AAPL", "US"))
         mock_get.assert_called_once()
+
+
+class TradeDateNormalizationTests(unittest.TestCase):
+    def test_yyyymmdd_becomes_iso_in_quote_record(self) -> None:
+        entry = {"ticker": "600276.SH", "name": "", "market": "CN", "market_cap": "", "category": ""}
+        raw = {"price": 1.0, "tradeDate": "20261028"}
+        self.assertEqual(build_quote_record(raw, entry)["tradeDate"], "2026-10-28")
+        raw["tradeDate"] = "2026-10-28"
+        self.assertEqual(build_quote_record(raw, entry)["tradeDate"], "2026-10-28")
+        raw["tradeDate"] = ""
+        # Empty date falls through the `or timestamp` chain to None, matching
+        # how other absent fields normalize.
+        self.assertIsNone(build_quote_record(raw, entry)["tradeDate"])
 
 
 class FallbackChainOrderTests(unittest.TestCase):

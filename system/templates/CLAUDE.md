@@ -103,6 +103,7 @@ Claude 应该创建一篇 `wiki/sources/YYYY-MM-DD-first-note.md`，并在 `work
 | 数据源 | 市场 | env key | 费用 |
 |--------|------|---------|------|
 | Nasdaq | 美股基础行情 | 无 | 无 Key 自动降级源 |
+| 东方财富 / 腾讯 / 新浪 | A 股 + ETF 备用行情 | 无 | 无 Key 自动降级源，tushare 未返回时依次尝试 |
 | tushare | A 股 | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线；其他接口看权限 |
 | FMP | 美股 EOD/profile 起步；扩展市场看套餐 | `FMP_API_KEY` | 免费 Basic 当前 250 次/日 |
 | Finnhub | 美股备用 | `FINNHUB_API_KEY` | 免费账户端点可用，额度以官方为准 |

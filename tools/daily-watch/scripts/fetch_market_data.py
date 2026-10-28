@@ -474,7 +474,7 @@ def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
             params={
                 "secid": secid,
                 "fltt": "2",
-                "fields": "f43,f44,f45,f46,f47,f58,f60,f86,f169,f170",
+                "fields": "f43,f44,f45,f46,f47,f60,f86,f169,f170",
             },
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"},
@@ -512,9 +512,11 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
     symbol = _cn_quote_symbol(ticker)
     if symbol is None:
         return None
+    # 10s (not DEFAULT_TIMEOUT=20) on purpose: these are lightweight text/JSON
+    # endpoints; fail fast so the fallback chain reaches the next source.
     try:
         response = requests.get(
-            f"http://qt.gtimg.cn/q={symbol}",
+            f"https://qt.gtimg.cn/q={symbol}",
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.qq.com"},
         )
@@ -542,7 +544,7 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "dayHigh": parse_float(fields[33]),
             "dayLow": parse_float(fields[34]),
             "volume": parse_float(fields[6]),
-            "tradeDate": fields[30][:8] if len(fields[30]) >= 8 else fields[30],
+            "tradeDate": fields[30][:8],
             "source": "tencent",
         }
     except Exception as exc:  # noqa: BLE001
@@ -556,7 +558,7 @@ def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
         return None
     try:
         response = requests.get(
-            f"http://hq.sinajs.cn/list={symbol}",
+            f"https://hq.sinajs.cn/list={symbol}",
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.sina.com.cn"},
         )
@@ -577,7 +579,7 @@ def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
         previous_close = parse_float(fields[2])
         if price is None or price <= 0:
             return None
-        change = price - previous_close if previous_close else None
+        change = round(price - previous_close, 6) if previous_close else None
         change_pct = change / previous_close * 100 if change is not None and previous_close else None
         volume_shares = parse_float(fields[8])
         return {
@@ -708,6 +710,14 @@ def fetch_fallback_quotes(
     return recovered
 
 
+def _iso_trade_date(value: Any) -> Any:
+    """Normalize YYYYMMDD trade dates to ISO; pass anything else through."""
+    if isinstance(value, str) and re.fullmatch(r"\d{8}", value.strip()):
+        raw = value.strip()
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    return value
+
+
 def build_quote_record(
     raw_quote: dict[str, Any],
     watchlist_entry: dict[str, str],
@@ -730,7 +740,7 @@ def build_quote_record(
         "dayHigh": parse_float(raw_quote.get("dayHigh")),
         "dayLow": parse_float(raw_quote.get("dayLow")),
         "volume": parse_float(raw_quote.get("volume")),
-        "tradeDate": raw_quote.get("tradeDate") or raw_quote.get("timestamp"),
+        "tradeDate": _iso_trade_date(raw_quote.get("tradeDate") or raw_quote.get("timestamp")),
         "source": raw_quote.get("source", "fmp"),
     }
 
