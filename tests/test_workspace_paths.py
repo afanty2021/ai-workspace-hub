@@ -47,6 +47,20 @@ class WorkspacePathTests(unittest.TestCase):
             self.assertEqual(second, [])
             self.assertTrue((root / "config" / "daily-watchlist.yaml").is_file())
 
+    def test_initialize_config_seeds_empty_watchlist_not_demo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            initialize_config(root)
+            watchlist = (root / "config" / "daily-watchlist-watchlist.md").read_text(
+                encoding="utf-8"
+            )
+            # The demo example (AAPL/MSFT/...) must not leak into a fresh
+            # workspace; only the empty template with its table header ships.
+            self.assertNotIn("AAPL", watchlist)
+            self.assertNotIn("NVDA", watchlist)
+            self.assertIn("| Ticker |", watchlist)
+            self.assertIn("唯一执行股票池", watchlist)
+
     def test_setup_check_surfaces_free_source_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

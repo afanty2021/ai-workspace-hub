@@ -42,7 +42,9 @@ PIP_INSTALL = f"{sys.executable} -m pip install"
 CONFIG_EXAMPLE_MAPPINGS = {
     "daily-watchlist.example.yaml": "daily-watchlist.yaml",
     "daily-watchlist.env.example": "daily-watchlist.env",
-    "daily-watchlist.watchlist.example.md": "daily-watchlist-watchlist.md",
+    # Empty template, not the demo watchlist: --init must not seed a fresh
+    # workspace with US demo tickers (install_workspace.py already uses .empty).
+    "daily-watchlist.watchlist.empty.md": "daily-watchlist-watchlist.md",
     "hypothesis-tracker.example.yaml": "hypothesis-tracker.yaml",
     "hypothesis-tracker.rules.example.md": "hypothesis-tracker.rules.md",
 }
