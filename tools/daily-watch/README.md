@@ -265,11 +265,14 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | Nasdaq | 美股基础行情 | 无 Key | 自动 fallback（FMP 未返回时） | 无 |
 | Finnhub | 美股 | 免费账户 / 付费 | 可选 fallback | `FINNHUB_API_KEY` |
 | EODHD | 港股、韩国、芬兰等最近 EOD | 免费 20 次/日 / 付费 | 可选 fallback；不是实时价 | `EOD_API_KEY` |
+| 东方财富 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（tushare 未返回时；ETF 行情的主要来源） | 无 |
+| 腾讯 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（东财之后） | 无 |
+| 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | yfinance | 多市场 | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
-**Fallback 顺序**（单只股票 FMP 未返回时）：Nasdaq → Finnhub → EOD → yfinance。每个源按 env key 是否配置自动决定是否尝试。
+**Fallback 顺序**（单只股票 FMP 未返回时）：Nasdaq → Finnhub → EOD → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（Nasdaq / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
 
 **yfinance 后缀映射**：Yahoo 对上交所使用 `.SS` 后缀，脚本会自动把 watchlist 里的 `601857.SH` 映射为 `601857.SS` 再查询；`.SZ` / `.HK` 与 Yahoo 一致，无需转换。watchlist 中仍然统一写 tushare 风格的 `.SH`。
 

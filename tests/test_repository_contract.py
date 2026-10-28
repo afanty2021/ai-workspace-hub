@@ -19,10 +19,26 @@ class RepositoryContractTests(unittest.TestCase):
             ("system/templates/research-profile.md", "workspace/research-profile.md"),
             ("system/templates/review-queue.md", "workspace/review-queue.md"),
         )
+        # active-context and friction-log are append-only working logs: the
+        # in-repo workspace accumulates real entries the moment anyone
+        # dogfoods the hub here. Only the static instructions above their
+        # first append sections are contractual; entries below are usage.
+        append_only = {
+            "system/templates/active-context.md": "## 最近对话延续",
+            "system/templates/friction-log.md": "## Log",
+        }
         for template, public in pairs:
+            template_text = (REPO_ROOT / template).read_text(encoding="utf-8")
+            public_text = (REPO_ROOT / public).read_text(encoding="utf-8")
+            marker = append_only.get(template)
+            if marker is not None:
+                marker_index = template_text.find(marker)
+                if marker_index != -1:
+                    template_text = template_text[:marker_index]
+                    public_text = public_text[: public_text.find(marker)]
             self.assertEqual(
-                (REPO_ROOT / template).read_text(encoding="utf-8"),
-                (REPO_ROOT / public).read_text(encoding="utf-8"),
+                template_text,
+                public_text,
                 f"{template} and {public} diverged",
             )
 

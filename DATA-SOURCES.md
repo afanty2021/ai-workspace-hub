@@ -12,6 +12,7 @@
 | 美股备用行情 | Finnhub | 注册后取得 API key；免费端点和额度以官方当前账户为准 | 把 key 写入 `FINNHUB_API_KEY` |
 | 个人研究的多市场备用行情 | yfinance | 无 Key；非官方 Yahoo 接口，只适合个人研究/教育用途 | 安装 `yfinance`，再设置 `ENABLE_YFINANCE=1` |
 | A 股日线 | Tushare | 官方当前规则下，120 积分档的非复权日线价格为 0 元；更完整数据需要更多积分或单独权限 | 注册、补全资料、取得 token，并安装 tushare 依赖 |
+| A 股 + ETF 备用行情 | 东方财富 / 腾讯 / 新浪 | 免费、无 Key、零配置；非官方公开接口，稳定性与时效不作承诺，tushare 未返回时依次尝试 | 无需任何操作，脚本自动使用 |
 | 港股 / 韩国 / 芬兰小股票池 EOD 备用 | EODHD | 免费账户当前为 20 次调用/日，可取任意 ticker 过去一年 EOD 历史；不是实时行情 | 把 key 写入 `EOD_API_KEY` |
 | 美股 EOD / profile 测试 | FMP Basic | 免费 Basic 当前为 250 次调用/日；全球覆盖和高级数据属于更高套餐 | 把 key 写入 `FMP_API_KEY` |
 | 后台 wiki 自动标签 / 播客摘要 | 任一兼容的 LLM API | 通常按量计费；不是 Core Mode 前提 | 在 `config/pod2wiki.env` 选择 provider 并填写 `LLM_API_KEY` |

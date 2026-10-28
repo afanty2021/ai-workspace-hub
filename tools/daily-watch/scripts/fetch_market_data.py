@@ -295,7 +295,8 @@ def fetch_tushare_quotes(
 
 # --- Fallback data sources ---
 # Used when FMP doesn't return a ticker (rate-limited, symbol not covered, etc.).
-# Order per ticker: Nasdaq (US, no key) -> Finnhub -> EOD -> yfinance.
+# Order per ticker: Nasdaq (US, no key) -> Finnhub -> EOD
+#   -> Eastmoney/Tencent/Sina (CN A-share + ETF, no key) -> yfinance.
 
 EOD_MARKET_SUFFIX = {"HK": "HK", "KR": "KO", "FI": "HE"}
 
@@ -441,6 +442,162 @@ def fetch_eod_quote(ticker: str, market: str, api_key: str) -> dict[str, Any] | 
     }
 
 
+# Eastmoney / Tencent / Sina quote endpoints are free and keyless and cover
+# A-share ETFs that tushare's `daily` endpoint misses (fund quotes need a
+# higher point tier). Symbol rules verified against the Eastmoney secid
+# convention: SH-listed (incl. 51/52/56/58 ETFs) -> "1.{code}",
+# SZ-listed (incl. 15/16/18 ETFs) -> "0.{code}".
+
+CN_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _cn_quote_symbol(ticker: str) -> str | None:
+    """600276.SH -> sh600276 (Tencent/Sina style); None for non-CN tickers."""
+    base, sep, suffix = ticker.upper().rpartition(".")
+    if not sep or not base.isdigit() or len(base) != 6:
+        return None
+    if suffix == "SH":
+        return f"sh{base}"
+    if suffix == "SZ":
+        return f"sz{base}"
+    return None
+
+
+def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    symbol = _cn_quote_symbol(ticker)
+    if symbol is None:
+        return None
+    secid = ("1." if symbol.startswith("sh") else "0.") + symbol[2:]
+    try:
+        response = requests.get(
+            "https://push2.eastmoney.com/api/qt/stock/get",
+            params={
+                "secid": secid,
+                "fltt": "2",
+                "fields": "f43,f44,f45,f46,f47,f58,f60,f86,f169,f170",
+            },
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"},
+        )
+        response.raise_for_status()
+        data = response.json().get("data") or {}
+        price = parse_float(data.get("f43"))
+        if price is None or price <= 0:
+            return None
+        trade_ts = parse_float(data.get("f86"))
+        trade_date = (
+            datetime.fromtimestamp(trade_ts, CN_BEIJING_TZ).strftime("%Y-%m-%d")
+            if trade_ts
+            else ""
+        )
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": parse_float(data.get("f169")),
+            "changesPercentage": parse_float(data.get("f170")),
+            "previousClose": parse_float(data.get("f60")),
+            "open": parse_float(data.get("f46")),
+            "dayHigh": parse_float(data.get("f44")),
+            "dayLow": parse_float(data.get("f45")),
+            "volume": parse_float(data.get("f47")),
+            "tradeDate": trade_date,
+            "source": "eastmoney",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: Eastmoney fallback failed for {ticker}: {exc}")
+        return None
+
+
+def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    symbol = _cn_quote_symbol(ticker)
+    if symbol is None:
+        return None
+    try:
+        response = requests.get(
+            f"http://qt.gtimg.cn/q={symbol}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.qq.com"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        # Fields (split on ~): 1=name 3=price 4=pre_close 5=open 6=volume(lots)
+        # 30=yyyymmddHHMMSS 31=change 32=change_pct 33=high 34=low
+        fields = content[data_start + 1 : data_end].split("~")
+        if len(fields) < 35:
+            return None
+        price = parse_float(fields[3])
+        if price is None or price <= 0:
+            return None
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": parse_float(fields[31]),
+            "changesPercentage": parse_float(fields[32]),
+            "previousClose": parse_float(fields[4]),
+            "open": parse_float(fields[5]),
+            "dayHigh": parse_float(fields[33]),
+            "dayLow": parse_float(fields[34]),
+            "volume": parse_float(fields[6]),
+            "tradeDate": fields[30][:8] if len(fields[30]) >= 8 else fields[30],
+            "source": "tencent",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: Tencent fallback failed for {ticker}: {exc}")
+        return None
+
+
+def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    symbol = _cn_quote_symbol(ticker)
+    if symbol is None:
+        return None
+    try:
+        response = requests.get(
+            f"http://hq.sinajs.cn/list={symbol}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.sina.com.cn"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        if '=""' in content:
+            return None
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        # Fields (split on ,): 0=name 1=open 2=pre_close 3=price 4=high
+        # 5=low 8=volume(shares) 30=date. Change is computed: Sina omits it.
+        fields = content[data_start + 1 : data_end].split(",")
+        if len(fields) < 31:
+            return None
+        price = parse_float(fields[3])
+        previous_close = parse_float(fields[2])
+        if price is None or price <= 0:
+            return None
+        change = price - previous_close if previous_close else None
+        change_pct = change / previous_close * 100 if change is not None and previous_close else None
+        volume_shares = parse_float(fields[8])
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": change,
+            "changesPercentage": change_pct,
+            "previousClose": previous_close,
+            "open": parse_float(fields[1]),
+            "dayHigh": parse_float(fields[4]),
+            "dayLow": parse_float(fields[5]),
+            "volume": volume_shares / 100 if volume_shares is not None else None,
+            "tradeDate": fields[30],
+            "source": "sina",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: Sina fallback failed for {ticker}: {exc}")
+        return None
+
+
 def fetch_yfinance_quote(ticker: str) -> dict[str, Any] | None:
     try:
         import yfinance as yf  # type: ignore
@@ -505,6 +662,20 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str]) -> dict[str,
         quote = fetch_eod_quote(ticker, market, eod_key)
         if quote:
             return quote
+
+    # Keyless A-share fallbacks (also cover ETFs tushare `daily` misses).
+    # The _cn_quote_symbol gate inside each fetcher returns None for non-CN.
+    quote = fetch_eastmoney_quote(ticker, market)
+    if quote:
+        return quote
+
+    quote = fetch_tencent_quote(ticker, market)
+    if quote:
+        return quote
+
+    quote = fetch_sina_quote(ticker, market)
+    if quote:
+        return quote
 
     yf_flag = env.get("ENABLE_YFINANCE", "").strip().lower()
     if yf_flag in ("1", "true", "yes", "on"):
