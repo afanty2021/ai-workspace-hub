@@ -28,6 +28,13 @@ class RepositoryContractTests(unittest.TestCase):
             "system/templates/friction-log.md": "## Log",
         }
         for template, public in pairs:
+            public_path = REPO_ROOT / public
+            if not public_path.exists():
+                # Instance files (active-context / friction-log) are untracked:
+                # a fresh clone has no workspace/meta yet until the installer
+                # rebuilds them from templates. Nothing to compare there; the
+                # tracked entrypoints below always exist.
+                continue
             template_text = (REPO_ROOT / template).read_text(encoding="utf-8")
             public_text = (REPO_ROOT / public).read_text(encoding="utf-8")
             marker = append_only.get(template)

@@ -18,6 +18,7 @@
 ## 边界
 
 - 用户文件永不自动覆盖。
+- `workspace/meta/active-context.md` 和 `friction-log.md` 是实例文件（追加式工作日志），公开仓库不跟踪、不随升级覆盖；新工作区缺失时由安装器从 `system/templates/` 重建，已有条目只属于本地。
 - 混合文件只提示人工合并。
 - 不删除新版中已不存在的旧文件。
 - 不自动 commit、push 或发布。

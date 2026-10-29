@@ -378,6 +378,7 @@ def fetch_finnhub_quote(ticker: str, api_key: str) -> dict[str, Any] | None:
     price = parse_float(payload.get("c"))
     if price in (None, 0, 0.0):
         return None
+    t_epoch = parse_float(payload.get("t"))
     return {
         "symbol": ticker,
         "price": price,
@@ -388,7 +389,11 @@ def fetch_finnhub_quote(ticker: str, api_key: str) -> dict[str, Any] | None:
         "dayHigh": parse_float(payload.get("h")),
         "dayLow": parse_float(payload.get("l")),
         "volume": None,
-        "tradeDate": str(payload.get("t", "")),
+        "tradeDate": (
+            datetime.fromtimestamp(t_epoch, timezone.utc).strftime("%Y-%m-%d")
+            if t_epoch
+            else ""
+        ),
         "source": "finnhub",
     }
 

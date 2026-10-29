@@ -123,6 +123,10 @@ class TencentQuoteTests(unittest.TestCase):
         self.assertEqual(quote["volume"], 123456)
         self.assertEqual(quote["tradeDate"], "20261028")
         self.assertEqual(quote["source"], "tencent")
+        self.assertTrue(
+            str(mock_get.call_args.args[0]).startswith("https://"),
+            "tencent endpoint must stay HTTPS",
+        )
         self.assertIn("q=sh600276", str(mock_get.call_args))
 
     @patch("fetch_market_data.requests.get")
@@ -153,6 +157,10 @@ class SinaQuoteTests(unittest.TestCase):
         self.assertEqual(quote["volume"], 123456)
         self.assertEqual(quote["tradeDate"], "2026-10-28")
         self.assertEqual(quote["source"], "sina")
+        self.assertTrue(
+            str(mock_get.call_args.args[0]).startswith("https://"),
+            "sina endpoint must stay HTTPS",
+        )
 
     @patch("fetch_market_data.requests.get")
     def test_returns_none_on_empty_and_non_cn(self, mock_get: MagicMock) -> None:
