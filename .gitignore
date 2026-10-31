@@ -56,3 +56,9 @@ workspace/meta/friction-log.md
 Thumbs.db
 .idea/
 .vscode/
+
+# 个人研究数据：假设与证据只留契约 README，内容不入库（与 output/ 同策略）
+hypothesis/*
+!hypothesis/README.md
+evidence/*
+!evidence/README.md
