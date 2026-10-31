@@ -655,8 +655,11 @@ def build_signal_marker(date_text: str, signal: dict[str, Any]) -> str:
 
 
 def build_evidence_id(date_text: str, signal: dict[str, Any]) -> str:
-    marker = build_signal_marker(date_text, signal)
-    return "E-" + marker.removeprefix("DW-")
+    # 契约（object-model）：E-YYYYMMDD-...，日期紧凑无连字符；DW- marker 保持 ISO 连字符。
+    signal_type = slugify(str(signal["signal_type"]))
+    ref = slugify(str(signal["ref"]))
+    hypothesis_id = slugify(str(signal["hypothesis_id"]))
+    return f"E-{date_text.replace('-', '')}-{signal_type}-{ref}-{hypothesis_id}"
 
 
 def write_signal_evidence(
@@ -812,6 +815,17 @@ def apply_hypothesis_updates(
     return writeback_count
 
 
+# 行情 ticker 与实际交付口径不一致（或需要口径提示）时的注记。
+# ticker 名义来源与真实交付源不同时，读者需要在这里看到，而不是翻 README。
+SOURCE_CALIBER_NOTES = {
+    "HG=F": "交付口径为 LME 三月铜（USD/吨）；ticker 名义是 COMEX 铜（USD/磅），两者价位差约 4 倍",
+    "^TNX": "FRED DGS10 官方序列，T+1 发布",
+    "XAUUSD=X": "现货金（伦敦金），USD/盎司",
+    "DX-Y.NYB": "ICE 美元指数（DINIW 口径）",
+    "000660.KS": "KRW 计价；EOD 源为收盘价非实时",
+}
+
+
 def render_data_coverage(market_data: dict[str, Any], macro_data: dict[str, Any],
                          modules: dict[str, bool]) -> str:
     """Preserve provider dates and distinguish missing data from empty results."""
@@ -837,6 +851,13 @@ def render_data_coverage(market_data: dict[str, Any], macro_data: dict[str, Any]
     for quote in market_data.get("quotes") or []:
         stamp = quote.get("tradeDate")
         rows.append(f"| {quote['ticker']} | {quote.get('source') or '未提供'} | {stamp or '未提供，时效待确认'} |")
+    caliber_notes = [
+        f"- 口径注记（{ticker}）：{note}"
+        for ticker, note in SOURCE_CALIBER_NOTES.items()
+        if any(q.get("ticker") == ticker for q in market_data.get("quotes") or [])
+    ]
+    if caliber_notes:
+        rows.extend(["", *caliber_notes])
     rows.extend(["", "来源日期不等于报告日期；最近可用报价不承诺为实时行情。"])
     return "\n".join(rows)
 

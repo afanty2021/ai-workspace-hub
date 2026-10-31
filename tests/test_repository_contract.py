@@ -26,6 +26,9 @@ class RepositoryContractTests(unittest.TestCase):
         append_only = {
             "system/templates/active-context.md": "## 最近对话延续",
             "system/templates/friction-log.md": "## Log",
+            # review-queue 是被跟踪的实例文件，但表格行是使用数据（agent 自动追加）：
+            # 只有表头以上的静态说明是契约，分隔线以下的行不比较。
+            "system/templates/review-queue.md": "|---|---|---|---|---|---|---|",
         }
         for template, public in pairs:
             public_path = REPO_ROOT / public

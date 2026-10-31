@@ -47,3 +47,14 @@ class CoverageTests(unittest.TestCase):
                                     {'earnings': True, 'macro': True})
         for value in ['nasdaq', 'Sep 29, 2026', 'OTHER', '宏观数据源未配置', '2026-09-30T01:00:00']:
             self.assertIn(value, text)
+
+    def test_caliber_note_shows_when_watched_ticker_present(self):
+        market = {'quotes': [{'ticker': 'HG=F', 'source': 'sina', 'tradeDate': '2026-10-31'},
+                             {'ticker': '000630.SZ', 'source': 'tushare', 'tradeDate': '2026-10-30'}],
+                  'meta': {'fetched_at': '2026-10-31T12:00:00+00:00'}}
+        text = render_data_coverage(market, {'meta': {}}, {'earnings': False, 'macro': False})
+        self.assertIn('口径注记（HG=F）', text)
+        self.assertIn('LME 三月铜', text)
+        # 未命中注记表的标的不能带出口径行。
+        self.assertNotIn('口径注记（000630.SZ）', text)
+        self.assertNotIn('口径注记（^TNX）', text)

@@ -147,7 +147,7 @@ def test_fresh_stock_research_reaches_reviewed_evidence_loop() -> None:
             item_type="hypothesis",
             object_id="H1",
             action="复盘新增证据，不因价格本身调整确定性",
-            source="E-2026-07-11-mover-ifx-de-h1",
+            source="E-20260711-mover-ifx-de-h1",
             today=today,
         )
         assert created
@@ -173,6 +173,6 @@ def test_fresh_stock_research_reaches_reviewed_evidence_loop() -> None:
         assert after_review["pending_evidence"] == []
         assert after_review["pending_reviews"] == []
         assert len(after_review["open_hypotheses"]) == 1
-        assert "E-2026-07-11-mover-ifx-de-h1" in hypothesis_path.read_text(
+        assert "E-20260711-mover-ifx-de-h1" in hypothesis_path.read_text(
             encoding="utf-8"
         )
