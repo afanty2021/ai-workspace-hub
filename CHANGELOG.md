@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+### 修复
+
+- 评审修复（2026-10-31 第二轮）：证据 ID 修根对齐契约——`build_evidence_id` 改生成 `E-YYYYMMDD-*`（object-model 口径），消除带连字符日期的双轨命名；FRED 请求加 `cosd` 只拉近 30 天，不再下载全量历史；新浪环球周末快照的 tradeDate 回滚到最后交易日（周六采集冻结的是周五收盘）；日报「数据覆盖与日期」表为口径与 ticker 名义不一致的标的（HG=F → LME 三月铜 USD/吨等）追加口径注记；新浪环球 Referer 改 HTTPS 并补东财环球 HTTPS 断言；KRX UTC 日期测试 fixture 移到 UTC/北京分属两天的判别边界上；仓库契约测试把 review-queue 纳入「静态段契约、表格行属使用数据」的处理（与 active-context/friction-log 同一先例）。
+- 仓库不再跟踪 `hypothesis/`、`evidence/` 目录内容（已加入 .gitignore，README 契约文档除外）：本仓库原地使用产生的个人假设与证据不再有 `git add -A` 误入公开历史的风险。
+
 ### 新增
 
+- daily-watch 新增全球指数与宏观无 Key 行情源，覆盖纳指（^IXIC）、费城半导体指数（^SOX）、美十债收益率（^TNX → FRED DGS10 官方序列）、美元指数（DX-Y.NYB → 新浪 DINIW）、伦敦金（XAUUSD=X → 新浪 hf_XAU）与伦铜（HG=F → 东财 109.LCPT 主源 / 新浪 hf_CAD 备用，LME 三月铜），并经东财韩股市场（177）接通 SK 海力士（000660.KS → 177.000660，当前唯一无 Key 的 KRX 通路）。watchlist 统一写 Yahoo 风格逻辑 ticker，脚本内映射表转换为各源代码，yfinance 恢复可用时同一 ticker 自动成为备源；海外/宏观/韩股行情不再依赖 yfinance 可用性。东财环球映射按完整 ticker 匹配（KR 000660 与 A 股 000660.SZ 同码防碰撞），全球 fetcher 交易日按 UTC 归一，配套单元测试覆盖字段解析、非映射拒绝、同码防误路由和链路路由。
 - daily-watch 新增东方财富、腾讯、新浪三个无 Key 的 A 股备用行情源，在 tushare 未返回时依次尝试（东财 → 腾讯 → 新浪）；同时覆盖 tushare `daily` 接口取不到的场内 ETF，使全 A 股股票池在零 key 时也能拿到完整行情。字段映射与量纲（成交量统一为手）与既有源对齐，配套单元测试覆盖正常解析、非 CN 拒绝和链路顺序。
 - 仓库契约测试只校验 active-context / friction-log 的静态说明段：这两个文件是设计上的追加式工作日志，在本仓库原地使用 Hub 时必然积累真实条目，逐字节比对模板与使用方式冲突。
 
