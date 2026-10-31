@@ -109,6 +109,10 @@ class FredSeriesQuoteTests(unittest.TestCase):
         self.assertEqual(mock_get.call_args.kwargs["params"]["id"], "DGS10")
         # cosd 限定近 30 天窗口，避免全量历史。
         self.assertIn("cosd", mock_get.call_args.kwargs["params"])
+        self.assertTrue(
+            str(mock_get.call_args.args[0]).startswith("https://"),
+            "FRED endpoint must stay HTTPS",
+        )
 
     @patch("fetch_market_data.requests.get")
     def test_skips_missing_observations_and_needs_two_valid_rows(self, mock_get: MagicMock) -> None:
@@ -247,6 +251,16 @@ class EastmoneyGlobalQuoteTests(unittest.TestCase):
             str(mock_get.call_args.args[0]).startswith("https://"),
             "eastmoney global endpoint must stay HTTPS",
         )
+
+    @patch("fetch_market_data.requests.get")
+    def test_null_data_payload_returns_none(self, mock_get: MagicMock) -> None:
+        # 东财对无效 secid 等场景返回 data:null——必须安全落到 None，不产出空行情。
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": None}
+        mock_get.return_value = response
+
+        self.assertIsNone(fetch_eastmoney_global_quote("000660.KS", "KR"))
 
     @patch("fetch_market_data.requests.get")
     def test_secid_mapping_for_each_venue(self, mock_get: MagicMock) -> None:

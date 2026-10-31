@@ -236,8 +236,8 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 ```
 ### 2026-06-24
 
-- 🟡 **[DW-2026-06-24-mover-nvda-h1] E-2026-06-24-mover-nvda-h1** - NVDA 今日涨跌幅 +4.52%，分类 Technology
-  - 证据：evidence/2026-06/E-2026-06-24-mover-nvda-h1.md
+- 🟡 **[DW-2026-06-24-mover-nvda-h1] E-20260624-mover-nvda-h1** - NVDA 今日涨跌幅 +4.52%，分类 Technology
+  - 证据：evidence/2026-06/E-20260624-mover-nvda-h1.md
   - 来源：output/daily-watch/2026-06/2026-06-24.md
   - 影响：待复盘；本条引用不改变 frontmatter 中的确定性或状态。
 ```
