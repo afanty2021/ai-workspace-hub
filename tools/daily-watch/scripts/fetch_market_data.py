@@ -295,7 +295,9 @@ def fetch_tushare_quotes(
 
 # --- Fallback data sources ---
 # Used when FMP doesn't return a ticker (rate-limited, symbol not covered, etc.).
-# Order per ticker: Nasdaq (US, no key) -> Finnhub -> EOD
+# Order per ticker: Nasdaq (US stocks, no key) -> Finnhub -> EOD
+#   -> Nasdaq index API / FRED / Eastmoney global / Sina global (mapped
+#   global+macro tickers, no key)
 #   -> Eastmoney/Tencent/Sina (CN A-share + ETF, no key) -> yfinance.
 
 EOD_MARKET_SUFFIX = {"HK": "HK", "KR": "KO", "FI": "HE"}
@@ -605,6 +607,237 @@ def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
         return None
 
 
+# --- Global index / macro feeds (keyless) ---
+# Logical tickers stay Yahoo-style so yfinance remains a compatible fallback.
+# Each fetcher gates on its own mapping table: a ticker not in the map returns
+# None with no network call, the same way _cn_quote_symbol gates CN fetchers.
+NASDAQ_INDEX_SYMBOLS = {"^IXIC": "COMP", "^SOX": "SOX"}
+# FRED publishes the official H.15 daily close with roughly a one-day lag.
+FRED_SERIES_SYMBOLS = {"^TNX": "DGS10"}
+# Sina global codes: DINIW = ICE US Dollar Index; hf_XAU = spot gold (USD/oz);
+# hf_CAD = LME copper 3M (USD/tonne). hf_ field layout follows akshare 1.18's
+# production parser; DINIW has no published contract, so the layout below was
+# cross-checked against two independent references and is guarded by length
+# checks (feed values drift into None + warning instead of wrong numbers).
+SINA_GLOBAL_SYMBOLS = {"DX-Y.NYB": "DINIW", "XAUUSD=X": "hf_XAU", "HG=F": "hf_CAD"}
+
+
+def fetch_nasdaq_index_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    symbol = NASDAQ_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if symbol is None:
+        return None
+    url = f"https://api.nasdaq.com/api/quote/{symbol}/info?assetclass=index"
+    try:
+        response = requests.get(
+            url,
+            timeout=DEFAULT_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        primary = data.get("primaryData") if isinstance(data, dict) else None
+        if not isinstance(primary, dict):
+            return None
+        close = parse_float(primary.get("lastSalePrice"))
+        change = parse_float(primary.get("netChange"))
+        change_pct = parse_float(primary.get("percentageChange"))
+        if close is None:
+            return None
+        previous_close = round(close - change, 6) if change is not None else None
+        return {
+            "symbol": ticker,
+            "price": close,
+            "change": change,
+            "changesPercentage": change_pct,
+            "previousClose": previous_close,
+            "open": None,
+            "dayHigh": None,
+            "dayLow": None,
+            "volume": parse_float(primary.get("volume")),
+            "tradeDate": primary.get("lastTradeTimestamp", ""),
+            "source": "nasdaq",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: Nasdaq index fallback failed for {ticker}: {exc}")
+        return None
+
+
+def fetch_fred_series_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    series = FRED_SERIES_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if series is None:
+        return None
+    try:
+        response = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv",
+            timeout=DEFAULT_TIMEOUT,
+            # cosd 限定起始日：只需末两行做差分，不拉全量历史（DGS10 全序列 16k+ 行）。
+            params={"id": series, "cosd": (date.today() - timedelta(days=30)).isoformat()},
+        )
+        response.raise_for_status()
+        rows = [line.split(",") for line in response.text.strip().splitlines() if line]
+        # Rows are "observation_date,value"; "." marks a missing observation.
+        observations = [(r[0], r[1]) for r in rows[1:] if len(r) >= 2 and r[1] != "."]
+        if len(observations) < 2:
+            return None
+        prev_date, prev_value = observations[-2]
+        last_date, last_value = observations[-1]
+        price = parse_float(last_value)
+        previous_close = parse_float(prev_value)
+        if price is None or previous_close in (None, 0):
+            return None
+        change = round(price - previous_close, 6)
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": change,
+            "changesPercentage": round(change / previous_close * 100, 6),
+            "previousClose": previous_close,
+            "open": None,
+            "dayHigh": None,
+            "dayLow": None,
+            "volume": None,
+            "tradeDate": last_date,
+            "source": "fred",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: FRED fallback failed for {ticker}: {exc}")
+        return None
+
+
+def _roll_weekend_snapshot_to_friday(trade_date: str) -> str:
+    # 新浪环球周末快照冻结的是周五收盘价，日期字段却是采集日（周六）——回滚到最后交易日。
+    try:
+        day = datetime.strptime(trade_date, "%Y-%m-%d").date()
+    except ValueError:
+        return trade_date
+    if day.weekday() >= 5:
+        day -= timedelta(days=day.weekday() - 4)
+    return day.isoformat()
+
+
+def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    code = SINA_GLOBAL_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if code is None:
+        return None
+    try:
+        response = requests.get(
+            f"https://hq.sinajs.cn/list={code}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        fields = content[data_start + 1 : data_end].split(",")
+        if code == "DINIW":
+            # 0=time 1=last 2=prev_close 3=open 4=vol 5=bid 6=high 7=low
+            # 8=ask 9=name 10=date. Weekend snapshots freeze last==prev_close.
+            if len(fields) < 11:
+                return None
+            price = parse_float(fields[1])
+            previous_close = parse_float(fields[2])
+            open_price = parse_float(fields[3])
+            day_high = parse_float(fields[6])
+            day_low = parse_float(fields[7])
+            trade_date = fields[10]
+        else:
+            # hf_ feed: 0=current 2=bid 3=ask 4=high 5=low 6=time 7=last_settle
+            # 8=open 12=date 13=name. Change is computed against last settlement.
+            if len(fields) < 14:
+                return None
+            price = parse_float(fields[0])
+            previous_close = parse_float(fields[7])
+            open_price = parse_float(fields[8])
+            day_high = parse_float(fields[4])
+            day_low = parse_float(fields[5])
+            trade_date = fields[12]
+        trade_date = _roll_weekend_snapshot_to_friday(trade_date)
+        if price is None or price <= 0:
+            return None
+        change = round(price - previous_close, 6) if previous_close else None
+        change_pct = change / previous_close * 100 if change is not None and previous_close else None
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": change,
+            "changesPercentage": change_pct,
+            "previousClose": previous_close,
+            "open": open_price,
+            "dayHigh": day_high,
+            "dayLow": day_low,
+            "volume": None,  # Spot/level feeds carry no clean volume field.
+            "tradeDate": trade_date,
+            "source": "sina",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: Sina global fallback failed for {ticker}: {exc}")
+        return None
+
+
+# Eastmoney serves global venues under their own market numbers; the secids
+# below came from eastmoney's own suggest API (QuoteID) and each was verified
+# live against an independent feed on 2026-10-31 (SOX/IXIC == nasdaq.com,
+# LCPT == sina hf_CAD, 000660 pct == SKHY ADR move).
+# Keyed by the FULL ticker on purpose: stripping suffixes would collide KR
+# 000660 (SK hynix) with CN 000660.SZ (铜陵有色).
+EASTMONEY_GLOBAL_SYMBOLS = {
+    "000660.KS": "177.000660",  # KRX (SK hynix) — the only keyless KRX feed
+    "HG=F": "109.LCPT",         # LME copper 3M (综合铜03)
+    "^SOX": "251.SOX",          # PHLX semiconductor, backup to the nasdaq API
+    "^IXIC": "100.NDX",         # eastmoney's NDX is the composite, not NASDAQ-100
+}
+
+
+def fetch_eastmoney_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    secid = EASTMONEY_GLOBAL_SYMBOLS.get(ticker.upper())
+    if secid is None:
+        return None
+    try:
+        response = requests.get(
+            "https://push2.eastmoney.com/api/qt/stock/get",
+            params={
+                "secid": secid,
+                "fltt": "2",
+                "fields": "f43,f44,f45,f46,f47,f60,f86,f169,f170",
+            },
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"},
+        )
+        response.raise_for_status()
+        data = response.json().get("data") or {}
+        price = parse_float(data.get("f43"))
+        if price is None or price <= 0:
+            return None
+        # UTC date, not Beijing: a US 16:00 ET close lands on Saturday Beijing
+        # time, which would mislabel the trading day (unlike the CN fetcher).
+        trade_ts = parse_float(data.get("f86"))
+        trade_date = (
+            datetime.fromtimestamp(trade_ts, timezone.utc).strftime("%Y-%m-%d")
+            if trade_ts
+            else ""
+        )
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": parse_float(data.get("f169")),
+            "changesPercentage": parse_float(data.get("f170")),
+            "previousClose": parse_float(data.get("f60")),
+            "open": parse_float(data.get("f46")),
+            "dayHigh": parse_float(data.get("f44")),
+            "dayLow": parse_float(data.get("f45")),
+            "volume": parse_float(data.get("f47")),
+            "tradeDate": trade_date,
+            "source": "eastmoney",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: Eastmoney global fallback failed for {ticker}: {exc}")
+        return None
+
+
 def fetch_yfinance_quote(ticker: str) -> dict[str, Any] | None:
     try:
         import yfinance as yf  # type: ignore
@@ -669,6 +902,26 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str]) -> dict[str,
         quote = fetch_eod_quote(ticker, market, eod_key)
         if quote:
             return quote
+
+    # Keyless global index/macro feeds (mapped tickers only: ^IXIC/^SOX/^TNX,
+    # 美元指数, 伦敦金, 伦铜, 000660.KS); each fetcher self-gates via its map.
+    quote = fetch_nasdaq_index_quote(ticker, market)
+    if quote:
+        return quote
+
+    quote = fetch_fred_series_quote(ticker, market)
+    if quote:
+        return quote
+
+    # Eastmoney before Sina: fresher prev-close reference for LME; Sina stays
+    # as the resilient fallback when eastmoney's anti-bot drops the request.
+    quote = fetch_eastmoney_global_quote(ticker, market)
+    if quote:
+        return quote
+
+    quote = fetch_sina_global_quote(ticker, market)
+    if quote:
+        return quote
 
     # Keyless A-share fallbacks (also cover ETFs tushare `daily` misses).
     # The _cn_quote_symbol gate inside each fetcher returns None for non-CN.

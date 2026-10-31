@@ -268,11 +268,19 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | 东方财富 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（tushare 未返回时；ETF 行情的主要来源） | 无 |
 | 腾讯 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（东财之后） | 无 |
 | 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
+| Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
+| FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 自动 fallback；官方 H.15 序列，T+1 | 无 |
+| 东财环球 | 韩股（000660.KS → 177.000660）、LME 伦铜（HG=F → 109.LCPT）、纳指/费半备源（100.NDX / 251.SOX） | 无 Key | 自动 fallback（映射制；反爬间歇断连时落到新浪环球 / yfinance） | 无 |
+| 新浪环球 | 美元指数（DX-Y.NYB）、伦敦金（XAUUSD=X）、伦铜备用（hf_CAD = LME 三月铜） | 无 Key | 自动 fallback（映射制） | 无 |
 | yfinance | 多市场 | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
-**Fallback 顺序**（单只股票 FMP 未返回时）：Nasdaq → Finnhub → EOD → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（Nasdaq / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
+**Fallback 顺序**（单只股票 FMP 未返回时）：Nasdaq → Finnhub → EOD → Nasdaq 指数 / FRED / 东财环球 / 新浪环球（映射制）→ 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
+
+**海外与宏观 ticker 口径**：watchlist 统一写 Yahoo 风格逻辑 ticker（`^IXIC`、`^TNX`、`DX-Y.NYB`、`XAUUSD=X`、`HG=F`、`000660.KS`），脚本内映射表转换为各源的代码（如 COMP/SOX、DGS10、DINIW、hf_XAU、hf_CAD、东财 `177.000660`）；yfinance 恢复可用时同一 ticker 直接复用。
+
+**韩股与同码防碰撞**：东财市场号 177 覆盖韩股行情（Kospi/Kosdaq），`000660.KS`（海力士）由此接通——这是当前唯一无 Key 的 KRX 通路；东财反爬间歇断连时降级 yfinance / EOD（`EOD_API_KEY` 走 `000660.KO`）。注意 KR `000660` 与 A 股 `000660.SZ`（铜陵有色）同码不同市，东财环球映射按**完整 ticker**（含后缀）匹配，不做后缀剥离，测试已守住该边界。
 
 **yfinance 后缀映射**：Yahoo 对上交所使用 `.SS` 后缀，脚本会自动把 watchlist 里的 `601857.SH` 映射为 `601857.SS` 再查询；`.SZ` / `.HK` 与 Yahoo 一致，无需转换。watchlist 中仍然统一写 tushare 风格的 `.SH`。
 
