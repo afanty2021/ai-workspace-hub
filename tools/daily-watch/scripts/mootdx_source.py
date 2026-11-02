@@ -95,6 +95,8 @@ def _candidate_tdx_servers() -> list[tuple[str, int]]:
 
     只试精选表不够——它们要是恰好都不可用，而 mootdx 自带表里还有活着的主机，
     就会被误判成"全网不可达"并记 5 分钟负缓存。合并去重后逐台验证。
+    已知取舍：候选无上限（HQ_HOSTS 全表并入），极端网络下首轮逐台验证偏慢——
+    用首跑时延换覆盖面，TCP 预筛 + timeout=6 已把单台代价压住，不加总数上限。
     """
     servers = list(_TDX_SERVERS)
     seen = set(servers)
@@ -390,7 +392,12 @@ def fetch_mootdx_quote(ticker: str, market: str = "") -> dict[str, Any] | None:
 
 
 def _bars_trade_date(code: str) -> str:
-    """最新一根日线的交易日（ISO）。盘中即当日；周末/停牌冻结在上一交易日。"""
+    """最新一根日线的交易日（ISO）。盘中即当日；周末/停牌冻结在上一交易日。
+
+    已知取舍：bars 拉不到时记 warning 并返回空串——该票行情仍然入库，tradeDate
+    落空由日报的数据覆盖口径标注；交易日缺失不升级为取数失败（那样会把一次
+    bars 抖动放大成整票降级走 HTTP 爬虫链）。
+    """
     # pandas 局部导入：能走到这里说明 mootdx 已成功 import，它自身强依赖 pandas，
     # 此时 pandas 必然可用（顶层条件导入不如放函数里直白）。
     import pandas as pd

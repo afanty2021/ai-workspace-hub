@@ -183,7 +183,12 @@ class BatchFetchTests(unittest.TestCase):
             def quotes(self, symbol):
                 return snapshots
 
-        with patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()):
+        with (
+            patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
+            # 不触发真实锁重入（该契约由 LockContractTests 的限时用例专职覆盖），
+            # 否则锁类型回归时本用例先死锁挂起、整套测试跑不完。
+            patch.object(mootdx_source, "_bars_trade_date", return_value=""),
+        ):
             quotes = fetch_mootdx_quotes(["600276.SH", "002545.SZ"])
 
         # 002545 不在快照里：只降级该票，不影响 600276。
@@ -199,11 +204,49 @@ class BatchFetchTests(unittest.TestCase):
 
 
 class LockContractTests(unittest.TestCase):
+    """锁契约：可重入性是批量路径的硬前提，两种回归形态都要能确定性捕获。
+
+    若 RLock 被改回普通 Lock：① 类型断言当场红；② 真实重入路径（批量持锁 →
+    逐票 _bars_trade_date → _mootdx_call 二次拿锁）表现为**死锁挂起**而非报错。
+    因此其余批量用例一律不触发真实重入（patch 掉 _bars_trade_date 或
+    _mootdx_call），重入覆盖集中在下面的限时守护线程用例——把挂起转成 5 秒内
+    的确定性失败，全量跑法不依赖 pytest timeout 插件或 -x。
+    """
+
     def test_lock_is_reentrant(self) -> None:
-        # 批量路径持锁后，逐票的 bars 交易日经 _mootdx_call 会再次拿同一把锁——
-        # 普通 Lock 在这里自死锁（实测踩过）。锁类型必须是可重入的，且全部测试
-        # 不 mock 该锁，RLock 被改回 Lock 时这里当场红。
         self.assertIsInstance(mootdx_source._MOOTDX_LOCK, type(threading.RLock()))
+
+    def test_batch_reentry_completes_without_deadlock(self) -> None:
+        # 不 patch _bars_trade_date / _mootdx_call：重入必须穿过真实的两次锁获取。
+        snapshots = _StubSnapshotFrame(
+            [{"code": "600276", "price": 48.77, "last_close": 48.46, "vol": 1}]
+        )
+        bars_frame = _StubBarsFrame([date(2026, 11, 2)])
+
+        class StubClient:
+            def quotes(self, symbol):
+                return snapshots
+
+            def bars(self, symbol, frequency, offset):
+                return bars_frame
+
+        result: dict[str, list] = {}
+
+        def run() -> None:
+            result["quotes"] = fetch_mootdx_quotes(["600276.SH"])
+
+        with patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()):
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            worker.join(timeout=5)
+
+        if worker.is_alive():
+            self.fail(
+                "批量持锁后的重入路径 5s 未返回：死锁。"
+                "_MOOTDX_LOCK 是否被改回了普通 Lock？"
+            )
+        self.assertEqual(len(result["quotes"]), 1)
+        self.assertEqual(result["quotes"][0]["tradeDate"], "2026-11-02")
 
 
 class UnavailableContractTests(unittest.TestCase):

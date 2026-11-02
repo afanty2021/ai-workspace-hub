@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 from _test_paths import REPO_ROOT  # noqa: F401 (also sets up sys.path)
 
+import fetch_market_data  # noqa: E402
 from fetch_market_data import (  # noqa: E402
     _cn_quote_symbol,
     DEFAULT_THRESHOLDS,
@@ -21,6 +22,7 @@ from fetch_market_data import (  # noqa: E402
     fetch_fallback_quote,
     fetch_sina_quote,
     fetch_tencent_quote,
+    get_cached_tushare_client,
 )
 
 # ~-separated, >=35 fields; indexes 1/3/4/5/6/30/31/32/33/34 are load-bearing.
@@ -331,6 +333,48 @@ class FallbackChainOrderTests(unittest.TestCase):
             self.assertNotIn("eastmoney", url)
             self.assertNotIn("gtimg.cn", url)
             self.assertNotIn("sinajs", url)
+
+
+class CachedTushareClientTests(unittest.TestCase):
+    """get_cached_tushare_client 的缓存语义：token 键控复用、换 token 重建、失败不缓存。"""
+
+    def setUp(self) -> None:
+        # 模块级缓存会跨用例泄漏，每个用例从空缓存起步。
+        fetch_market_data._TUSHARE_CLIENT_CACHE.clear()
+
+    def test_empty_token_returns_none_without_loading(self) -> None:
+        with patch("fetch_market_data.load_tushare_client") as mock_load:
+            self.assertIsNone(get_cached_tushare_client(""))
+        mock_load.assert_not_called()
+
+    def test_same_token_reuses_the_cached_client(self) -> None:
+        sentinel = object()
+        with patch(
+            "fetch_market_data.load_tushare_client", return_value=sentinel
+        ) as mock_load:
+            first = get_cached_tushare_client("tok")
+            second = get_cached_tushare_client("tok")
+        self.assertIs(first, sentinel)
+        self.assertIs(second, sentinel)
+        self.assertEqual(mock_load.call_count, 1)
+
+    def test_token_change_rebuilds_and_replaces_cache(self) -> None:
+        old, new = object(), object()
+        with patch(
+            "fetch_market_data.load_tushare_client", side_effect=[old, new]
+        ) as mock_load:
+            self.assertIs(get_cached_tushare_client("tok-a"), old)
+            self.assertIs(get_cached_tushare_client("tok-b"), new)
+        self.assertEqual(mock_load.call_count, 2)
+
+    def test_failed_init_returns_none_and_retries_next_call(self) -> None:
+        # 初始化失败不写缓存：下一次调用重试，而不是钉死在 None。
+        with patch(
+            "fetch_market_data.load_tushare_client", return_value=None
+        ) as mock_load:
+            self.assertIsNone(get_cached_tushare_client("tok"))
+            self.assertIsNone(get_cached_tushare_client("tok"))
+        self.assertEqual(mock_load.call_count, 2)
 
 
 if __name__ == "__main__":
