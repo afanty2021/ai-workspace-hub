@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import threading
 import unittest
 from datetime import date
 from unittest.mock import patch
@@ -138,11 +139,7 @@ class BatchFetchTests(unittest.TestCase):
             def quotes(self, symbol):
                 return snapshots
 
-            def bars(self, symbol, frequency, offset):
-                return bars_frames[symbol]
-
         with (
-            patch.object(mootdx_source, "_MOOTDX_LOCK"),
             patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
             patch.object(
                 mootdx_source, "_mootdx_call",
@@ -155,6 +152,28 @@ class BatchFetchTests(unittest.TestCase):
         self.assertEqual(quotes[0]["tradeDate"], "2026-11-02")
         self.assertEqual(quotes[0]["source"], "mootdx")
 
+    def test_requests_beyond_80_are_chunked(self) -> None:
+        # 通达信服务器对单次快照请求只回前 80 行、尾部静默丢弃（pytdx 不截断），
+        # 客户端必须分块：100 只应拆成 80 + 20 两次调用并全部拿到。
+        calls: list[list[str]] = []
+
+        class ChunkedStub:
+            def quotes(self, symbol):
+                calls.append(list(symbol))
+                return _StubSnapshotFrame(
+                    [{"code": c, "price": 1.0, "last_close": 1.0, "vol": 1} for c in symbol]
+                )
+
+        tickers = [f"{600000 + i}.SH" for i in range(100)]
+        with (
+            patch.object(mootdx_source, "_get_mootdx_client", return_value=ChunkedStub()),
+            patch.object(mootdx_source, "_bars_trade_date", return_value="2026-11-02"),
+        ):
+            quotes = fetch_mootdx_quotes(tickers)
+
+        self.assertEqual([len(b) for b in calls], [80, 20])
+        self.assertEqual(len(quotes), 100)
+
     def test_snapshot_missing_one_code_skips_only_that_ticker(self) -> None:
         snapshots = _StubSnapshotFrame(
             [{"code": "600276", "price": 48.77, "last_close": 48.46, "vol": 1}]
@@ -164,10 +183,7 @@ class BatchFetchTests(unittest.TestCase):
             def quotes(self, symbol):
                 return snapshots
 
-        with (
-            patch.object(mootdx_source, "_MOOTDX_LOCK"),
-            patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
-        ):
+        with patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()):
             quotes = fetch_mootdx_quotes(["600276.SH", "002545.SZ"])
 
         # 002545 不在快照里：只降级该票，不影响 600276。
@@ -178,23 +194,25 @@ class BatchFetchTests(unittest.TestCase):
             def quotes(self, symbol):
                 return _StubSnapshotFrame([])
 
-        with (
-            patch.object(mootdx_source, "_MOOTDX_LOCK"),
-            patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
-        ):
+        with patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()):
             self.assertEqual(fetch_mootdx_quotes(["600276.SH"]), [])
+
+
+class LockContractTests(unittest.TestCase):
+    def test_lock_is_reentrant(self) -> None:
+        # 批量路径持锁后，逐票的 bars 交易日经 _mootdx_call 会再次拿同一把锁——
+        # 普通 Lock 在这里自死锁（实测踩过）。锁类型必须是可重入的，且全部测试
+        # 不 mock 该锁，RLock 被改回 Lock 时这里当场红。
+        self.assertIsInstance(mootdx_source._MOOTDX_LOCK, type(threading.RLock()))
 
 
 class UnavailableContractTests(unittest.TestCase):
     def test_client_failure_propagates_for_caller_to_degrade(self) -> None:
         # 契约：mootdx 不可用时 fetch_mootdx_quotes 抛异常，由
         # fetch_market_data 的批量 wrap / 降级链 try 负责降级，模块内部不吞。
-        with (
-            patch.object(mootdx_source, "_MOOTDX_LOCK"),
-            patch.object(
-                mootdx_source, "_get_mootdx_client",
-                side_effect=RuntimeError("mootdx 通达信服务器不可用"),
-            ),
+        with patch.object(
+            mootdx_source, "_get_mootdx_client",
+            side_effect=RuntimeError("mootdx 通达信服务器不可用"),
         ):
             with self.assertRaises(RuntimeError):
                 fetch_mootdx_quotes(["600276.SH"])

@@ -174,9 +174,15 @@ class SinaQuoteTests(unittest.TestCase):
 
 
 class MootdxOutageDegradationTests(unittest.TestCase):
-    """mootdx 全网不可用时 build_snapshot 必须优雅降级，不得让整份日报 fail。"""
+    """mootdx 全网不可用时 build_snapshot 必须优雅降级，不得让整份日报 fail。
 
-    def test_mootdx_batch_failure_falls_to_tushare_without_crashing(self) -> None:
+    mock 边界：批量与按票 mootdx 全部抛错（模拟负缓存快速失败），
+    链内 tushare 用 dummy client + patch 掉单票请求——这样 missing 票
+    会真实穿过 fallback 链（mootdx 按票重试 → tushare），而不是被
+    批量层 mock 提前截走。
+    """
+
+    def test_mootdx_batch_failure_falls_through_chain_to_tushare(self) -> None:
         watchlist = [
             {
                 "ticker": "600276.SH",
@@ -196,10 +202,19 @@ class MootdxOutageDegradationTests(unittest.TestCase):
         with (
             patch(
                 "fetch_market_data.fetch_mootdx_quotes",
-                side_effect=RuntimeError("mootdx 通达信服务器不可用（模拟）"),
+                side_effect=RuntimeError("mootdx 通达信服务器不可用（模拟批量）"),
+            ),
+            # 按票重试同样快速失败——patch 掉防止真实联网
+            patch(
+                "fetch_market_data.fetch_mootdx_quote",
+                side_effect=RuntimeError("mootdx 通达信服务器不可用（模拟按票）"),
             ),
             patch("fetch_market_data.fetch_fmp_quotes", return_value=[]),
-            patch("fetch_market_data.fetch_tushare_quotes", return_value=[tushare_raw]),
+            # 主源层 tushare 本来就空（CN 票路由给了 mootdx）；返回 [] 保真
+            patch("fetch_market_data.fetch_tushare_quotes", return_value=[]),
+            # 链内 tushare：dummy client + 单票请求 patch
+            patch("fetch_market_data.get_cached_tushare_client", return_value=object()),
+            patch("fetch_market_data.fetch_tushare_quote", return_value=tushare_raw),
         ):
             snapshot = build_snapshot(
                 watchlist=watchlist,
@@ -214,7 +229,7 @@ class MootdxOutageDegradationTests(unittest.TestCase):
         self.assertEqual(snapshot["meta"]["quotes"]["state"], "ok")
         self.assertEqual(snapshot["meta"]["quotes"]["missing_tickers"], [])
         self.assertEqual(len(snapshot["quotes"]), 1)
-        # 按票重试 mootdx 也会快速失败（负缓存），最终由 tushare 接住。
+        # 票真实穿过 fallback 链后由 tushare 接住。
         self.assertEqual(snapshot["quotes"][0]["source"], "tushare")
         self.assertEqual(snapshot["quotes"][0]["tradeDate"], "2026-10-30")
 

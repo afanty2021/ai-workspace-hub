@@ -148,16 +148,17 @@ def _tdx_client_works(client) -> bool:
 
 @contextlib.contextmanager
 def _preserve_mootdx_bestip():
-    """探测期间保护 mootdx 的持久化服务器配置，退出时按需还原。
+    """探测期间保护 mootdx 的 BESTIP 内存状态，退出时按需还原。
 
-    `StdQuotes.__init__` 会把每次建 client 用的 server 写进 mootdx 配置文件的
-    BESTIP——逐台探测等于把用户原本配好的服务器一路覆写，还会连累同一台机器
-    上其它用 mootdx 的程序。必须先 `setup()` 再快照：新进程里读到的是模块默认
-    空值，用户持久化的值要等 setup() 才读进来。
+    ⚠️ 0.11.7 的 `config.set()` 只改**内存** dict、不落盘（已核对 config.py），
+    所以探测不存在跨进程污染——但 `setup()` 会把用户持久化的 config.json 读进
+    内存，而 `_get_mootdx_client` 末尾的裸 factory 兜底正是靠 `config.get('BESTIP')`
+    读这份内存值。逐台探测会把它覆写成最后一台**失败的**服务器，兜底路径就废了：
+    必须先 `setup()` 再快照，探测失败时还原，裸 factory 读到的才是用户原本的配置。
 
     用法：`with _preserve_mootdx_bestip() as keep:` —— 选出可用服务器时调
     `keep()` 表示"这次的覆写是我们想要的，别还原"；不调就在退出时还原。
-    （移植自 TradingAgents-astock #90 修复。）
+    （移植自 TradingAgents-astock #90 修复；威胁模型按 0.11.7 源码更正。）
     """
     saved = None
     try:
@@ -213,8 +214,8 @@ def _get_mootdx_client():
             f"（原始错误: {exc}）"
         ) from exc
 
-    # 探测会覆写 mootdx 的持久化配置——包在这里，只有真选出可用服务器时才 keep()，
-    # 其余每条退出路径（含异常）都自动还原。
+    # 探测会覆写 BESTIP 的内存值（兜底裸 factory 要读它）——包在这里，只有真选出
+    # 可用服务器时才 keep()，其余每条退出路径（含异常）都自动还原。
     with _preserve_mootdx_bestip() as keep_bestip:
         # TCP 预筛并发跑：几十台里多数"连都连不上"，串行每台要等满超时。
         # 预筛纯粹是等 IO，并发不改变选取语义——下面仍按原顺序逐台做真实取数验证。
@@ -328,11 +329,17 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+# 通达信单次快照请求的服务器端上限：pytdx 客户端不截断（stock_len 原样打包），
+# 但服务器对超量请求只返回前 80 行、尾部静默丢弃（2026-11-02 实测 85 只请求
+# 恰好回 80 行）。客户端必须自己分块，否则尾部票会静默缺数。
+_TDX_MAX_BATCH = 80
+
+
 def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
     """批量取沪深 A 股/ETF 实时快照（主源路径）。
 
-    一次 `quotes()` 批量拉全部代码（pytdx 单次上限 80 只），再逐票拉一根日线
-    定交易日（停牌个股的交易日各自正确）。整体持锁串行，21 只票约 1 秒。
+    `quotes()` 按 `_TDX_MAX_BATCH` 分块拉取，再逐票拉一根日线定交易日
+    （停牌个股的交易日各自正确）。整体持锁串行，21 只票约 1 秒。
     单票失败只降级那一票，不影响其它票。
     """
     codes = [t for t in tickers if is_mootdx_ticker(t)]
@@ -342,15 +349,24 @@ def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
     quotes: list[dict[str, Any]] = []
     with _MOOTDX_LOCK:
         client = _get_mootdx_client()
-        try:
-            snapshots = client.quotes(symbol=[c.split(".")[0] for c in codes])
-        except Exception:
-            reset_mootdx_client()
-            raise
-        if snapshots is None or snapshots.empty:
-            log(f"Warning: mootdx quotes returned no data for {len(codes)} ticker(s)")
+        by_code: dict[str, dict[str, Any]] = {}
+        batches = [
+            codes[i : i + _TDX_MAX_BATCH] for i in range(0, len(codes), _TDX_MAX_BATCH)
+        ]
+        for batch in batches:
+            try:
+                snapshots = client.quotes(symbol=[c.split(".")[0] for c in batch])
+            except Exception:
+                reset_mootdx_client()
+                raise
+            if snapshots is None or snapshots.empty:
+                log(f"Warning: mootdx quotes returned no data for {len(batch)} ticker(s)")
+                continue
+            by_code.update(
+                {str(row["code"]): row for _, row in snapshots.iterrows()}
+            )
+        if not by_code:
             return []
-        by_code = {str(row["code"]): row for _, row in snapshots.iterrows()}
 
         for ticker in codes:
             code = ticker.split(".")[0]
