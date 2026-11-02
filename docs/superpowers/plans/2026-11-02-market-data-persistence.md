@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-02-market-data-persistence-design.md`（v0.3，已批准）。执行者必须同时读 spec——本计划只写「怎么做」，「为什么/口径」在 spec。
 - 修订：v2（2026-11-02 第二轮评审后落档，7 Critical/8 Important/15 Minor 全实证修订：交易日闸门改 canary 文件（钩子行 source 无法区分写者）、财务 GP 兜底改 run 级 config.set、财务目录预建 + Financial 正确导入路径、epoch 期望值与互斥测试修正、查询视图按需创建 + ignore_errors + 板块路由、csv/新闻边界加固、git add 显式化）
-- 修订：v3（2026-11-02 复查后落档，1 Critical + 3 阻塞级 + 6 Minor 全实证修订：**N1 交易日闸门 canary 文件改 `data/.state/` per-scope 完成标记**（`--scope sectors` 会写脏 canary → 11.7 全量初始化静默短路 + cron fail>0 同日补跑失效；标记写入条件 `not tickers and fail==0 and latest 已知`）；Task 3 测试预置补父目录 mkdir；Task 6 重复 kwargs 改 dict 覆盖；p_list F841；GP 兜底持 `_MOOTDX_LOCK` + 双通道全灭干净报错 + gp_fallback≠None 主路径补测；`--scope sectors --tickers` argparse 拒绝；11.7/11.8 计时口径随标记方案重写；spec §5.2 同步标记语义（v0.3）；`tail_date` 随闸门方案一并移除）
+- 修订：v3（2026-11-02 复查后落档，1 Critical + 3 阻塞级 + 6 Minor 全实证修订：**N1 交易日闸门 canary 文件改 `data/.state/` per-scope 完成标记**（`--scope sectors` 会写脏 canary → 11.7 全量初始化静默短路 + cron fail>0 同日补跑失效；标记写入条件 `not tickers and fail==0 and latest 已知`）；Task 3 测试预置补父目录 mkdir；Task 6 重复 kwargs 改 dict 覆盖；p_list F841；GP 兜底持 `_MOOTDX_LOCK` + 双通道全灭干净报错 + gp_fallback≠None 主路径补测；`--scope sectors --tickers` argparse 拒绝；11.7/11.8 计时口径随标记方案重写；spec §5.2 同步标记语义（v0.3）；`tail_date` 随闸门方案一并移除）；N4 e2e 修正见 Task 8 注记
 
 ## Global Constraints
 
@@ -2341,6 +2341,8 @@ Run: `$PY -m pytest tests/test_query_market.py -v`
 Expected: FAIL（`No module named 'query_market'`）
 
 - [ ] **Step 8.4: 实现**
+
+> 注：e2e N4 修正（commit 8de008b）——duckdb 2.0 下 union_by_name 对数千文件逐文件 schema 并集探测会 OOM，实际落地为 glob 串 + 去 union + 保留存在性预检与 ignore_errors；下块为 v3 定稿原文留档。
 
 ```python
 """DuckDB 查询层（spec §5.6）——四个具名视图，唯一 import duckdb 的组件。

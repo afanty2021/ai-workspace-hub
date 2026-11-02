@@ -44,9 +44,10 @@ def ensure_view(con, data_root: Path, view: str) -> None:
     ① 显式文件列表 ~7500 条时建视图直接 OOM；② 换 glob 串后仍 OOM——真凶是
     union_by_name 对每个文件做 schema 并集探测，DuckDB 2.0 在数千文件规模下
     缓冲爆内存（实测 38 GiB，SET threads=1 无效）；去掉后同数据集 0.5s 建完。
-    代价：视图 schema 取自 glob 首文件，同目录新增字段若不在首文件会被静默忽略
-    ——四个视图目录各由唯一写者模块固定键集（spec §4 字段字典），新增字段须全
-    目录同步。存在性预检保留（I1）：目录空仍 raise RuntimeError 而非 IO Error。
+    代价：视图 schema 取自采样窗口内的文件样本（duckdb 2.0 实际对有限多文件
+    采样嗅探，非「首文件」定义），同目录异构键不在采样窗口会被静默忽略——
+    四个视图目录各由唯一写者模块固定键集（spec §4 字段字典），新增字段须全目
+    录同步。存在性预检保留（I1）：目录空仍 raise RuntimeError 而非 IO Error。
     ignore_errors=true 容忍 torn 尾行（M11，跳过语义）不变。
     """
     files = sorted(data_root.glob(_VIEW_PATTERNS[view]))

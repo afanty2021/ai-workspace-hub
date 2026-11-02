@@ -90,7 +90,7 @@
 - 命令：`time ... update_market_series.py --scope all --backfill 800`
 - 结果：**5 分 10 秒**（5:10.33 total）；stocks `{'ok': 7483, 'skip': 21, 'fail': 0}`（待更新 7504 只，前缀白名单实测数）；EXIT=0
 - 计时口径：sectors 已在 11.2 完成当日初始化且有自己的标记，本次实际执行 **stocks 部分（7504 只 × 800 bars）**；sectors 段为闸门零调用——日志确有 **「交易日闸门（sectors）：服务器最新 2026-11-02 ≤ 上轮批量 2026-11-02，整轮跳过」**（per-scope 隔离正确）
-- 21 skip = 11.1 三票 + 日报钩子已写过当日行的 watchlist 票；落盘 7459 个 series 文件（ok 7483 与文件数差 ≈ 45 只长期停牌/无数据票服务器返回空 bars，计数 ok 但无行可写，fail=0）
+- 21 skip = 11.1 三票 + 日报钩子已写过当日行的 watchlist 票；落盘 7459 个 series 文件。对账算式：7504(ok+skip) − 7459(文件) = **45 只 ok-but-empty 长期停牌/无数据票**（服务器返回空 bars，计数 ok 但无行可写；21 只 skip 的本就有文件，故不参与此差），fail=0
 - 干净轮结束 `last_stocks_round = 2026-11-02` 自动写入
 
 ## Step 11.8 日常增量两段计时 + 缺口审计 — 通过（N4 兑现并修复）
