@@ -133,11 +133,13 @@ class StocksUpdateTests(unittest.TestCase):
         self.assertFalse(series_file(self.root, "880301.SH").exists())  # 白名单外不建文件
 
     def test_tail_equals_latest_skips_ticket(self) -> None:
-        # 与闸门的分工：闸门管「整轮」（.state 标记）；逐票 skip 管 tickers 子集等闸门旁路路径
+        # 与闸门的分工：闸门管「整轮」（.state 标记）；逐票 skip 管 tickers 子集等闸门旁路路径。
+        # 预置行带 amount（批量写的行，写者指纹）——只有批量自己的行才允许 skip
         market = series_file(self.root, "600276.SH")
         market.parent.mkdir(parents=True, exist_ok=True)
         market.write_text(
-            '{"date": "2026-11-02", "close": 71.5, "source": "mootdx"}\n', encoding="utf-8")
+            '{"date": "2026-11-02", "close": 71.5, "amount": 8.0e7, "source": "mootdx"}\n',
+            encoding="utf-8")
         fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]),
                           bars=_bars_frame(["2026-11-02"], [71.54]))
         with patch.object(ums, "_mootdx_call", fake):
@@ -176,14 +178,16 @@ class StocksUpdateTests(unittest.TestCase):
                 ums.main(["--tickers", bad, "--scope", "stocks"])
 
     def test_batch_overwrites_snapshot_written_intraday_row(self) -> None:
-        # spec §9 端到端：钩子先写盘中价 → 批量权威覆盖为收盘价
+        # spec §9 端到端（当日时序）：交易日 16:30 前钩子已写盘中价行（amount=None），
+        # 16:30 批量同日跑不得 skip——重拉让 batch 档权威覆盖为收盘价，当日可达而非 T+1
         upsert_series_rows(
             series_file(self.root, "600276.SH"),
             [{"date": "2026-11-02", "open": None, "high": None, "low": None, "close": 70.01,
               "volume": None, "amount": None, "source": "mootdx"}], writer="snapshot")
         fake = FakeMootdx(bars=_bars_frame(["2026-11-02"], [71.54]))
         with patch.object(ums, "_mootdx_call", fake):
-            ums.run_stocks_update(self.root, tickers=["600276.SH"], latest="2026-11-03")
+            stats = ums.run_stocks_update(self.root, tickers=["600276.SH"], latest="2026-11-02")  # 同日
+        self.assertEqual(stats["ok"], 1)  # 钩子行无 amount 指纹 → 不 skip，照常拉 bars
         row = read_series_rows(series_file(self.root, "600276.SH"))[-1]
         self.assertEqual(row["close"], 71.54)   # 盘中价被权威覆盖
         self.assertEqual(row["amount"], 8.0e7)  # null 被批量补齐

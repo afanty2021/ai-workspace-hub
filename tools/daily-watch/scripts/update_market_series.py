@@ -125,7 +125,9 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
         path = series_file(data_root, normalize_cn_symbol(code, market))
         try:
             rows = read_series_rows(path)
-            if rows and latest and rows[-1]["date"] >= latest:
+            # amount 非空=批量已写（写者指纹，钩子行恒 amount=None）；同日钩子先写的票
+            # 必须重拉让 batch 档权威覆盖（spec §9 当日可达，而非 T+1 自愈）
+            if rows and latest and rows[-1]["date"] >= latest and rows[-1].get("amount") is not None:
                 stats["skip"] += 1
                 continue
             _upsert_bars(path, data_root, code, backfill, source="mootdx")

@@ -125,9 +125,13 @@ def main(argv: list[str] | None = None) -> int:
     data_root = resolve_data_root()
 
     if args.command == "append":
-        path = append_record(data_root, series=args.series, name=args.name, date=args.date,
-                             value=args.value, unit=args.unit, source=args.source,
-                             period=args.period, note=args.note, overwrite=args.overwrite)
+        try:
+            path = append_record(data_root, series=args.series, name=args.name, date=args.date,
+                                 value=args.value, unit=args.unit, source=args.source,
+                                 period=args.period, note=args.note, overwrite=args.overwrite)
+        except ValueError as exc:  # 重复 (series,date) 拒绝的干净收口：log + 退出码 1，不出 CLI traceback
+            log(f"Error: {exc}")
+            return 1
         print(path)
     elif args.command == "list":
         print(json.dumps(list_series(data_root), ensure_ascii=False, indent=1))

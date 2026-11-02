@@ -6,9 +6,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from _test_paths import REPO_ROOT  # noqa: F401
 
+import market_data_io as mio  # noqa: E402
 import save_custom_data as scd  # noqa: E402
 
 
@@ -56,6 +58,23 @@ class CustomSeriesTests(unittest.TestCase):
         self.assertEqual(rows["2026-10-01"]["value"], 9.0)   # 撞已有跳过，没被改
         self.assertEqual(rows["2026-09-01"]["period"], "2026-09")
         self.assertNotIn("junk", rows["2026-09-01"])         # 其余列忽略
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_duplicate_append_cli_returns_1_not_traceback(self) -> None:
+        # 与 update_finance_snapshots 同款干净收口：ValueError → log + 退出码 1，不出 CLI traceback
+        argv = ["append", "--series", "x", "--name", "X", "--date", "2026-11-01",
+                "--value", "1.0", "--unit", "件", "--source", "s"]
+        with patch.object(mio, "resolve_data_root", return_value=self.root):
+            self.assertEqual(scd.main(argv), 0)                    # 首次 append 成功
+            self.assertEqual(scd.main(argv), 1)                    # 重复 append 被拒：干净退出 1
 
 
 if __name__ == "__main__":
