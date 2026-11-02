@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,7 @@ import pandas as pd
 from _test_paths import REPO_ROOT  # noqa: F401
 
 import update_market_series as ums  # noqa: E402
-from market_data_io import read_series_rows, sector_series_file, series_file, upsert_series_rows  # noqa: E402, F401 — sector_series_file 留给 Task 4 sectors 用例
+from market_data_io import read_series_rows, sector_series_file, series_file, upsert_series_rows  # noqa: E402
 
 
 def _bars_frame(dates: list[str], closes: list[float], **extra: dict) -> pd.DataFrame:
@@ -163,6 +164,11 @@ class StocksUpdateTests(unittest.TestCase):
         self.assertEqual(stats["ok"], 1)
         self.assertIn("bars:600276:off800", fake.calls)  # --backfill 透传到 bars offset
 
+    def test_tickers_with_sectors_scope_rejected(self) -> None:
+        # 板块是枚举制清单无子集路径，--tickers 配 --scope sectors 在 argparse 层拒绝
+        with self.assertRaises(SystemExit):
+            ums.main(["--scope", "sectors", "--tickers", "600276.SH"])
+
     def test_invalid_ticker_argument_rejected(self) -> None:
         # M3：无后缀/海外票入参在 argparse 层拒绝（600276 会被拼成错市场的 .SZ）
         for bad in ("600276", "^SOX", "00700.HK"):
@@ -200,6 +206,85 @@ class StocksUpdateTests(unittest.TestCase):
             second = ums.run_stocks_update(self.root, latest="2026-11-02")
         self.assertEqual(second, {"ok": 1, "skip": 1, "fail": 0})
         self.assertEqual(ums.last_round_date(self.root, "stocks"), "2026-11-02")  # 补跑干净才写标记
+
+
+class SectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _stocks_sh(self, rows: list[tuple[str, str]]) -> pd.DataFrame:
+        return _stocks_frame(rows)
+
+    def test_build_sector_list_filters_ranges_and_sorts(self) -> None:
+        df = self._stocks_sh([("888880", "新标准券"), ("880324", "概念A"), ("880301", "行业A"),
+                              ("880300", "下边界"), ("880099", "风格统计"), ("881270", "二级A"),
+                              ("881999", "二级Z"), ("882001", "超上界"), ("600276", "个股混入")])
+        got = ums.build_sector_list(df)
+        codes = [x["code"] for x in got]
+        self.assertEqual(codes, ["880300", "880301", "880324", "881270", "881999"])  # 边界含+过滤+排序
+        self.assertEqual(got[0]["category"], "行业/概念")
+        self.assertEqual(got[3]["category"], "二级行业")
+
+    def test_first_run_writes_sector_list(self) -> None:
+        # C7：首跑分支必须落盘，否则清单永远不存在、冻结/补录全是死代码
+        df = self._stocks_sh([("880301", "行业A"), ("880099", "被过滤")])
+        merged, added = ums.load_or_merge_sector_list(self.root, df)
+        self.assertEqual([x["code"] for x in merged], ["880301"])
+        on_disk = json.loads((self.root / "sector" / "sector-list.json").read_text(encoding="utf-8"))
+        self.assertEqual(on_disk, merged)  # 落盘成功
+        self.assertEqual([x["code"] for x in added], ["880301"])
+
+    def test_merge_keeps_frozen_and_picks_up_new(self) -> None:
+        (self.root / "sector").mkdir(parents=True)
+        (self.root / "sector" / "sector-list.json").write_text(
+            json.dumps([{"code": "880301", "name": "行业A", "category": "行业/概念"},
+                        {"code": "880999", "name": "已消失", "category": "行业/概念"}], ensure_ascii=False),
+            encoding="utf-8")
+        df = self._stocks_sh([("880301", "行业A改名"), ("880324", "新概念")])
+        merged, added = ums.load_or_merge_sector_list(self.root, df)
+        codes = [x["code"] for x in merged]
+        self.assertIn("880999", codes)  # 消失项保留（文件冻结，不删）
+        self.assertEqual([x["code"] for x in added], ["880324"])
+        by_code = {x["code"]: x for x in merged}
+        self.assertEqual(by_code["880301"]["name"], "行业A")  # 已登记项不覆盖
+
+    def test_sectors_update_upserts_index_bars_with_counts(self) -> None:
+        (self.root / "sector").mkdir(parents=True)
+        df = self._stocks_sh([("880301", "行业A")])
+        with patch.object(ums, "load_or_merge_sector_list", return_value=(
+                [df.iloc[0].to_dict() | {"category": "行业/概念"}], [])):
+            index_df = _bars_frame(["2026-11-02"], [3300.0], up_count=[16], down_count=[15])
+            fake = FakeMootdx(stocks=df, index_bars=index_df)  # stocks 必须给：清单前的枚举调用
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_sectors_update(self.root, latest="2026-11-03")
+        self.assertEqual(stats, {"ok": 1, "skip": 0, "fail": 0})
+        row = read_series_rows(sector_series_file(self.root, "880301"))[-1]
+        self.assertEqual(row["source"], "mootdx-index")
+        self.assertEqual(row["up_count"], 16)
+        self.assertEqual(row["down_count"], 15)
+
+    def test_sectors_gate_reads_own_marker_not_stocks(self) -> None:
+        # N1 核心：stocks 完成标记不得挡 sectors——canary 方案的病根就是 scopes 共享一个标志位
+        ums.write_round_marker(self.root, "stocks", "2026-11-03")
+        df = self._stocks_sh([("880301", "行业A")])
+        index_df = _bars_frame(["2026-11-03"], [3300.0], up_count=[16], down_count=[15])
+        fake = FakeMootdx(stocks=df, index_bars=index_df)
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_sectors_update(self.root, latest="2026-11-03")
+        self.assertEqual(stats, {"ok": 1, "skip": 0, "fail": 0})  # stocks 标记在，sectors 照跑
+        self.assertEqual(ums.last_round_date(self.root, "sectors"), "2026-11-03")  # 干净轮写自己的标记
+
+    def test_sectors_gate_short_circuits_on_own_marker(self) -> None:
+        ums.write_round_marker(self.root, "sectors", "2026-11-03")
+        fake = FakeMootdx(stocks=_stocks_frame([("880301", "行业A")]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_sectors_update(self.root, latest="2026-11-03")
+        self.assertEqual(stats, {"ok": 0, "skip": 0, "fail": 0})  # 整轮零调用
+        self.assertFalse(fake.calls)  # 连清单枚举的 stocks 调用都没有（闸门在枚举之前）
 
 
 if __name__ == "__main__":

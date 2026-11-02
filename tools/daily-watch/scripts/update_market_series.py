@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -19,7 +20,7 @@ from market_data_io import (
     is_cn_series_symbol,
     normalize_cn_symbol,
     read_series_rows,
-    sector_series_file,  # noqa: F401 — Task 4 sectors 接入后使用
+    sector_series_file,
     series_file,
     series_lock,
     upsert_series_rows,
@@ -138,6 +139,62 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
     return stats
 
 
+def build_sector_list(stocks_df: pd.DataFrame) -> list[dict[str, str]]:
+    """SH 枚举 → 880300-881999 白名单 + 显式 sort（服务器返回未排序，spec §12）。"""
+    out = []
+    for code, name in zip(stocks_df["code"].astype(str), stocks_df["name"].astype(str)):
+        if code.startswith("88") and 880300 <= int(code) <= 881999:
+            out.append({"code": code, "name": name,
+                        "category": "二级行业" if code.startswith("881") else "行业/概念"})
+    return sorted(out, key=lambda x: x["code"])
+
+
+def load_or_merge_sector_list(data_root: Path, stocks_df: pd.DataFrame) -> tuple[list[dict], list[dict]]:
+    """清单缺失→生成；已存在→合并（新增补录、消失保留=文件冻结，spec §5.2）。"""
+    fresh = build_sector_list(stocks_df)
+    list_path = data_root / "sector" / "sector-list.json"
+    if not list_path.exists():
+        atomic_write_text(list_path, json.dumps(fresh, ensure_ascii=False, indent=1))  # 首跑必须落盘
+        return fresh, list(fresh)
+    existing = json.loads(list_path.read_text(encoding="utf-8"))
+    known = {x["code"] for x in existing}
+    added = [x for x in fresh if x["code"] not in known]
+    gone = known - {x["code"] for x in fresh}
+    if gone:
+        log(f"板块清单消失 {len(gone)} 项（文件冻结不删）: {sorted(gone)[:5]}...")
+    merged = existing + added  # 已登记项保留原 name/category，不覆盖
+    atomic_write_text(list_path, json.dumps(merged, ensure_ascii=False, indent=1))
+    return merged, added
+
+
+def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None) -> dict:
+    stats = {"ok": 0, "skip": 0, "fail": 0}
+    latest = latest or fetch_server_latest_trade_date()
+    last_round = last_round_date(data_root, "sectors")  # per-scope 标记：stocks 完成与否不影响本闸门（N1）
+    if latest and last_round and latest <= last_round:
+        log(f"交易日闸门（sectors）：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
+        return stats  # 非交易日零服务器调用（spec §9 补注）
+    stocks_df = _mootdx_call("stocks", market=1)
+    merged, _added = load_or_merge_sector_list(data_root, stocks_df)
+    for item in merged:
+        code = item["code"]
+        path = sector_series_file(data_root, code)
+        try:
+            rows = read_series_rows(path)
+            if rows and latest and rows[-1]["date"] >= latest:
+                stats["skip"] += 1
+                continue
+            _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
+            stats["ok"] += 1
+        except Exception as exc:  # noqa: BLE001
+            stats["fail"] += 1
+            log(f"Warning: 板块 {code} 更新失败: {exc}")
+    log(f"sectors 汇总: {stats}")
+    if latest is not None and stats["fail"] == 0:
+        write_round_marker(data_root, "sectors", latest)
+    return stats
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="盘后批量更新全市场/板块时序（spec §5.2）")
     parser.add_argument("--scope", choices=["stocks", "sectors", "all"], default="all")
@@ -159,8 +216,13 @@ def main(argv: list[str] | None = None) -> int:
     from market_data_io import resolve_data_root
 
     data_root = resolve_data_root()
-    stats = run_stocks_update(data_root, backfill=args.backfill, tickers=tickers)
-    # sectors 在 Task 4 接入：--scope sectors/all 时 run_sectors_update(...)
+    stats = {"ok": 0, "skip": 0, "fail": 0}
+    if args.scope in ("stocks", "all"):
+        stats = run_stocks_update(data_root, backfill=args.backfill, tickers=tickers)
+    if args.scope in ("sectors", "all"):
+        sec = run_sectors_update(data_root, backfill=args.backfill)
+        for key in stats:
+            stats[key] += sec[key]
     return 1 if stats["fail"] else 0
 
 
