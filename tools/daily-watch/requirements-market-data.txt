@@ -1,0 +1,2 @@
+# 查询层唯一额外依赖（spec §7）；批量更新脚本不 import duckdb
+duckdb>=1.0
