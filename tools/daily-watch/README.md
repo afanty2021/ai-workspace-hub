@@ -398,9 +398,11 @@ python3 tools/daily-watch/scripts/check_setup.py
 - A 股 volume=手、amount=元，**amount 仅批量路径有值**（日报钩子无此字段）；海外票自启用日累积、缺字段 null；板块 volume 量纲与个股不同，原样保留。
 - 文件名即主键：A 股 `{6位}.SH/.SZ`（枚举一律 normalize 后落盘）、海外票 watchlist 原样（`^SOX`/`NVDA`/`000660.KS`）、板块裸 6 位。
 - 多写者规则：批量=权威写者（同日按字段覆盖），日报钩子=快照级（只补 null 绝不覆盖非空）；跨进程 `data/.locks/` 目录锁，拿不到即跳过。
+- 同日先跑日报再跑批量：watchlist 票的当日行会被批量收盘价权威覆盖（批量按 amount 非空识别自己的行，日报钩子行恒 amount=null）。
 - schema 演进只加字段不改语义；daily/finance 行带 schema_version，series/custom 逐行有意不带。
 - 板块指数为通达信自编指数（非交易所/申万口径），引用需标 TDX。
 - 存储满配约 1GB（market 3 年 ~650MB + finance 148 期 ~300MB + sector ~120MB）；退市票文件冻结不删、单调慢涨；文件无校验和，单文件损坏的恢复手段 = 该票 `--backfill` 重拉。
+- DuckDB 视图对坏行置 NULL（ignore_errors）：max(date) 类聚合不受影响，count(*) 会把 torn 行计入。
 
 ### CLI 示例
 
