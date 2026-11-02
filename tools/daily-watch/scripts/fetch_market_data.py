@@ -23,6 +23,8 @@ from workspace_paths import (
     resolve_watchlist_path,
 )
 
+from mootdx_source import fetch_mootdx_quote, fetch_mootdx_quotes, is_mootdx_ticker
+
 # Windows 控制台可能默认 cp1252/GBK，统一 UTF-8 输出避免中文触发 UnicodeEncodeError
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -79,6 +81,7 @@ def load_env(env_path: Path) -> dict[str, str]:
         "FINNHUB_API_KEY": usable_env("FINNHUB_API_KEY"),
         "EOD_API_KEY": usable_env("EOD_API_KEY"),
         "ENABLE_YFINANCE": os.environ.get("ENABLE_YFINANCE", "").strip(),
+        "DISABLE_MOOTDX": os.environ.get("DISABLE_MOOTDX", "").strip(),
     }
 
 
@@ -228,6 +231,25 @@ def load_tushare_client(token: str) -> Any | None:
         return None
 
 
+_TUSHARE_CLIENT_CACHE: dict[str, Any] = {}
+_TUSHARE_CLIENT_LOCK = Lock()
+
+
+def get_cached_tushare_client(token: str) -> Any | None:
+    """按 token 缓存 tushare client，降级链逐票调用时不再重复初始化。"""
+    if not token:
+        return None
+    with _TUSHARE_CLIENT_LOCK:
+        cached_token = _TUSHARE_CLIENT_CACHE.get("token")
+        if cached_token != token or "client" not in _TUSHARE_CLIENT_CACHE:
+            client = load_tushare_client(token)
+            if client is None:
+                return None
+            _TUSHARE_CLIENT_CACHE["token"] = token
+            _TUSHARE_CLIENT_CACHE["client"] = client
+        return _TUSHARE_CLIENT_CACHE["client"]
+
+
 def fetch_tushare_quote(client: Any, ticker: str) -> dict[str, Any] | None:
     end_date = date.today()
     # 14-day window (aligned with fetch_tushare_profile's daily_basic window)
@@ -294,13 +316,21 @@ def fetch_tushare_quotes(
 
 
 # --- Fallback data sources ---
-# Used when FMP doesn't return a ticker (rate-limited, symbol not covered, etc.).
-# Order per ticker: Nasdaq (US stocks, no key) -> Finnhub -> EOD
+# Used when the primary source doesn't return a ticker (rate-limited, symbol
+# not covered, source down, etc.). Primary per market: mootdx (CN stocks+ETF,
+# keyless TCP, see mootdx_source.py), tushare (CN/HK), FMP (US/others).
+# Order per ticker here: Nasdaq (US stocks, no key) -> Finnhub -> EOD
 #   -> Nasdaq index API / FRED / Eastmoney global / Sina global (mapped
 #   global+macro tickers, no key)
-#   -> Eastmoney/Tencent/Sina (CN A-share + ETF, no key) -> yfinance.
+#   -> Tushare (CN/HK; demoted from primary after mootdx) -> Eastmoney/Tencent/
+#   Sina (CN A-share + ETF, no key) -> yfinance.
 
 EOD_MARKET_SUFFIX = {"HK": "HK", "KR": "KO", "FI": "HE"}
+
+def mootdx_enabled(env: dict[str, str]) -> bool:
+    """DISABLE_MOOTDX=1/true/yes/on 时整体停用 mootdx（默认启用，无 Key）。"""
+    return env.get("DISABLE_MOOTDX", "").strip().lower() not in ("1", "true", "yes", "on")
+
 
 # Market suffixes that may safely be stripped from a ticker before querying a
 # fallback source. Share-class suffixes (BRK.B, BF.B, ...) are NOT in this set:
@@ -923,6 +953,29 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str]) -> dict[str,
     if quote:
         return quote
 
+    # Mootdx per-ticker retry ahead of tushare: recovers individual misses from
+    # the batch path. When mootdx is unavailable this fails fast (negative
+    # cache) and the chain continues down. Honors DISABLE_MOOTDX.
+    if mootdx_enabled(env):
+        try:
+            quote = fetch_mootdx_quote(ticker, market)
+            if quote:
+                return quote
+        except Exception as exc:  # noqa: BLE001
+            log(f"Warning: mootdx fallback failed for {ticker}: {exc}")
+
+    # Tushare first among keyless-and-scraper fallbacks (demoted from primary
+    # when mootdx took over): official EOD with pre_close, still more
+    # authoritative than the HTTP scrapers below. HK tickers only ever reach
+    # CN sources via this gate.
+    tushare_token = env.get("TUSHARE_TOKEN", "").strip()
+    if tushare_token and (ticker.endswith(CN_SUFFIXES) or ticker.endswith(HK_SUFFIX)):
+        client = get_cached_tushare_client(tushare_token)
+        if client is not None:
+            quote = fetch_tushare_quote(client, ticker)
+            if quote:
+                return quote
+
     # Keyless A-share fallbacks (also cover ETFs tushare `daily` misses).
     # The _cn_quote_symbol gate inside each fetcher returns None for non-CN.
     quote = fetch_eastmoney_quote(ticker, market)
@@ -1311,16 +1364,28 @@ def build_snapshot(
         for item in watchlist
         if not item["ticker"].endswith(CN_SUFFIXES) and not item["ticker"].endswith(HK_SUFFIX)
     ]
+    # A 股主源是 mootdx（TCP 无 Key，实时，覆盖 ETF）；tushare 降为首备用，
+    # 只在主源路径没覆盖到时出手（.HK 票 mootdx 不服务，仍走 tushare 主源）。
+    use_mootdx = mootdx_enabled(env)
+    mootdx_tickers = (
+        [item["ticker"] for item in watchlist if is_mootdx_ticker(item["ticker"])]
+        if use_mootdx
+        else []
+    )
     tushare_tickers = [
         item["ticker"]
         for item in watchlist
-        if item["ticker"].endswith(CN_SUFFIXES) or item["ticker"].endswith(HK_SUFFIX)
+        if (item["ticker"].endswith(CN_SUFFIXES) or item["ticker"].endswith(HK_SUFFIX))
+        and item["ticker"] not in mootdx_tickers
     ]
 
     earnings_status: dict[str, Any] = {"state": "disabled"}
     quotes: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         quote_future = executor.submit(fetch_fmp_quotes, fmp_tickers, api_key, max_workers)
+        mootdx_future = (
+            executor.submit(fetch_mootdx_quotes, mootdx_tickers) if mootdx_tickers else None
+        )
         tushare_future = executor.submit(
             fetch_tushare_quotes, tushare_tickers, tushare_token, max_workers
         )
@@ -1331,10 +1396,23 @@ def build_snapshot(
         )
 
         fmp_quotes = quote_future.result()
+        # mootdx 全网不可用时（TCP 7709 被网络拦截等）这里会抛 RuntimeError——
+        # 必须降级为空列表，让 CN 票落入 fallback 链（tushare→东财→…），
+        # 而不是让整份日报 fail（对比 tushare 路径自身就是逐票 catch 的）。
+        try:
+            mootdx_quotes = mootdx_future.result() if mootdx_future else []
+        except Exception as exc:  # noqa: BLE001
+            log(f"Warning: mootdx primary batch failed; CN tickers go to fallback chain: {exc}")
+            mootdx_quotes = []
         tushare_quotes = tushare_future.result()
         earnings = earnings_future.result() if earnings_future else []
 
     for raw in fmp_quotes:
+        symbol = str(raw.get("symbol", "")).strip().upper()
+        if symbol in watchlist_map:
+            quotes.append(build_quote_record(raw, watchlist_map[symbol]))
+
+    for raw in mootdx_quotes:
         symbol = str(raw.get("symbol", "")).strip().upper()
         if symbol in watchlist_map:
             quotes.append(build_quote_record(raw, watchlist_map[symbol]))

@@ -1,0 +1,4 @@
+# Optional keyless A-share/ETF quote source (TDX protocol over TCP 7709).
+# Used by tools/daily-watch/scripts/mootdx_source.py; demotes tushare to
+# first fallback. Disable at runtime with DISABLE_MOOTDX=1.
+mootdx>=0.11.7

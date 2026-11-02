@@ -14,7 +14,9 @@ from _test_paths import REPO_ROOT  # noqa: F401 (also sets up sys.path)
 
 from fetch_market_data import (  # noqa: E402
     _cn_quote_symbol,
+    DEFAULT_THRESHOLDS,
     build_quote_record,
+    build_snapshot,
     fetch_eastmoney_quote,
     fetch_fallback_quote,
     fetch_sina_quote,
@@ -171,6 +173,52 @@ class SinaQuoteTests(unittest.TestCase):
         mock_get.assert_called_once()
 
 
+class MootdxOutageDegradationTests(unittest.TestCase):
+    """mootdx 全网不可用时 build_snapshot 必须优雅降级，不得让整份日报 fail。"""
+
+    def test_mootdx_batch_failure_falls_to_tushare_without_crashing(self) -> None:
+        watchlist = [
+            {
+                "ticker": "600276.SH",
+                "name": "恒瑞医药",
+                "market": "CN",
+                "market_cap": "Large",
+                "category": "医药",
+            }
+        ]
+        tushare_raw = {
+            "symbol": "600276.SH",
+            "price": 48.46,
+            "changesPercentage": 0.0,
+            "tradeDate": "20261030",
+            "source": "tushare",
+        }
+        with (
+            patch(
+                "fetch_market_data.fetch_mootdx_quotes",
+                side_effect=RuntimeError("mootdx 通达信服务器不可用（模拟）"),
+            ),
+            patch("fetch_market_data.fetch_fmp_quotes", return_value=[]),
+            patch("fetch_market_data.fetch_tushare_quotes", return_value=[tushare_raw]),
+        ):
+            snapshot = build_snapshot(
+                watchlist=watchlist,
+                api_key="",
+                tushare_token="dummy-token",
+                env={"TUSHARE_TOKEN": "dummy-token", "DISABLE_MOOTDX": ""},
+                thresholds=DEFAULT_THRESHOLDS,
+                max_workers=2,
+                include_earnings=False,
+            )
+
+        self.assertEqual(snapshot["meta"]["quotes"]["state"], "ok")
+        self.assertEqual(snapshot["meta"]["quotes"]["missing_tickers"], [])
+        self.assertEqual(len(snapshot["quotes"]), 1)
+        # 按票重试 mootdx 也会快速失败（负缓存），最终由 tushare 接住。
+        self.assertEqual(snapshot["quotes"][0]["source"], "tushare")
+        self.assertEqual(snapshot["quotes"][0]["tradeDate"], "2026-10-30")
+
+
 class TradeDateNormalizationTests(unittest.TestCase):
     def test_yyyymmdd_becomes_iso_in_quote_record(self) -> None:
         entry = {"ticker": "600276.SH", "name": "", "market": "CN", "market_cap": "", "category": ""}
@@ -185,8 +233,11 @@ class TradeDateNormalizationTests(unittest.TestCase):
 
 
 class FallbackChainOrderTests(unittest.TestCase):
+    @patch("fetch_market_data.fetch_mootdx_quote", return_value=None)
     @patch("fetch_market_data.requests.get")
-    def test_cn_ticker_falls_through_eastmoney_to_tencent(self, mock_get: MagicMock) -> None:
+    def test_cn_ticker_falls_through_eastmoney_to_tencent(self, mock_get: MagicMock, _mock_mootdx: MagicMock) -> None:
+        # mootdx 升主源后，降级链里 CN 票先按票重试 mootdx（这里模拟未命中），
+        # 再 tushare（无 token 跳过）→ 东财 → 腾讯。本测试锁定东财挂时腾讯兜底。
         def dispatch(url: str, **_kwargs: object) -> MagicMock:
             if "push2.eastmoney.com" in url:
                 broken = MagicMock()
@@ -203,6 +254,54 @@ class FallbackChainOrderTests(unittest.TestCase):
         self.assertIsNotNone(quote)
         assert quote is not None
         self.assertEqual(quote["source"], "tencent")
+
+    @patch("fetch_market_data.requests.get")
+    def test_cn_ticker_tries_mootdx_before_cn_fallbacks(self, mock_get: MagicMock) -> None:
+        # mootdx 按票重试命中时，链条就地停住：任何 HTTP 端点都不该被碰。
+        with patch(
+            "fetch_market_data.fetch_mootdx_quote",
+            return_value={"symbol": "600276.SH", "price": 48.0, "source": "mootdx"},
+        ):
+            quote = fetch_fallback_quote(
+                {"ticker": "600276.SH", "market": "CN"},
+                {"FINNHUB_API_KEY": "", "EOD_API_KEY": "", "ENABLE_YFINANCE": ""},
+            )
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "mootdx")
+        mock_get.assert_not_called()
+
+    @patch("fetch_market_data.requests.get")
+    def test_disable_mootdx_env_skips_the_mootdx_retry(self, mock_get: MagicMock) -> None:
+        # DISABLE_MOOTDX=1 时按票重试必须被跳过（连调用都不发生），直接落 tushare
+        # （无 token）→ 东财。
+        def dispatch(url: str, **_kwargs: object) -> MagicMock:
+            assert "push2.eastmoney.com" in url
+            response = MagicMock()
+            response.raise_for_status.return_value = None
+            response.json.return_value = {"data": {"f43": 48.36, "f60": 45.55}}
+            return response
+
+        mock_get.side_effect = dispatch
+        with patch(
+            "fetch_market_data.fetch_mootdx_quote",
+            side_effect=AssertionError("mootdx must not be called when disabled"),
+        ) as mock_mootdx:
+            quote = fetch_fallback_quote(
+                {"ticker": "600276.SH", "market": "CN"},
+                {
+                    "FINNHUB_API_KEY": "",
+                    "EOD_API_KEY": "",
+                    "ENABLE_YFINANCE": "",
+                    "DISABLE_MOOTDX": "1",
+                },
+            )
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "eastmoney")
+        mock_mootdx.assert_not_called()
 
     @patch("fetch_market_data.requests.get")
     def test_us_ticker_never_touches_cn_endpoints(self, mock_get: MagicMock) -> None:
