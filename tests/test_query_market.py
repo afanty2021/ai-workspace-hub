@@ -99,6 +99,18 @@ class QueryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.qm.ensure_view(self.con, empty, "finance")
 
+    def test_view_sql_glob_and_no_union(self) -> None:
+        # N4（e2e 实测定案）：~7500 文件时 union_by_name 建视图 OOM（38 GiB），显式
+        # 文件列表同样 OOM——视图 SQL 必须是单条 glob 串且不带 union_by_name，
+        # 防止后续为异构键集悄悄加回（异构需求应由写者纪律保证同构，见 spec §4）。
+        self.qm.ensure_view(self.con, self.root, "market_quotes")
+        sql = self.con.execute(
+            "SELECT sql FROM duckdb_views() WHERE view_name = 'market_quotes'").fetchone()[0]
+        self.assertIn("read_json_auto('", sql)      # glob 串而非显式列表
+        self.assertIn("*.jsonl'", sql)
+        self.assertNotIn("union_by_name", sql)      # 数千文件 schema 并集探测是 OOM 真凶
+        self.assertIn("ignore_errors", sql)         # M11 torn 尾行容忍仍在
+
     def test_torn_tail_tolerated(self) -> None:
         # M11：read_json_auto 需 ignore_errors=true 才容忍 torn 尾行（默认坏行报错）
         market_file = self.root / "market" / "series" / "600276.SH.jsonl"

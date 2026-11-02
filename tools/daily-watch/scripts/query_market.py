@@ -40,20 +40,23 @@ def ensure_view(con, data_root: Path, view: str) -> None:
     """按需建视图（I1）：目录还没有数据文件就 raise RuntimeError——DuckDB 对空 glob
     直接 IO Error，e2e 早期（finance/ 未生成时查行情）会当场崩。
 
-    传显式文件列表而非 glob 串；ignore_errors=true 容忍 torn 尾行（M11：DuckDB
-    默认对坏行报错，靠该参数跳过；原子写已把概率压到最低）。
-    ⚠️ 已知验点（N4）：全量后 market_quotes 的显式列表 ~7000 文件（~0.5MB SQL
-    字面量），DuckDB 该规模的解析未实证——11.8 首次全量查询是真实检验；若失败/
-    超慢，退回「glob 串 + 保留存在性预检」方案并补 commit。
+    传 glob 串且不开 union_by_name（N4 e2e 实测定案，两个坑都踩过）：
+    ① 显式文件列表 ~7500 条时建视图直接 OOM；② 换 glob 串后仍 OOM——真凶是
+    union_by_name 对每个文件做 schema 并集探测，DuckDB 2.0 在数千文件规模下
+    缓冲爆内存（实测 38 GiB，SET threads=1 无效）；去掉后同数据集 0.5s 建完。
+    代价：视图 schema 取自 glob 首文件，同目录新增字段若不在首文件会被静默忽略
+    ——四个视图目录各由唯一写者模块固定键集（spec §4 字段字典），新增字段须全
+    目录同步。存在性预检保留（I1）：目录空仍 raise RuntimeError 而非 IO Error。
+    ignore_errors=true 容忍 torn 尾行（M11，跳过语义）不变。
     """
     files = sorted(data_root.glob(_VIEW_PATTERNS[view]))
     if not files:
         raise RuntimeError(
             f"{view} 无数据文件（{data_root / _VIEW_PATTERNS[view]}）——先跑对应的 update/append 脚本")
-    listing = ", ".join(f"'{f.resolve()}'" for f in files)
+    pattern = (data_root / _VIEW_PATTERNS[view]).resolve().as_posix()
     con.execute(
         f"CREATE OR REPLACE VIEW {view} AS "
-        f"SELECT * FROM read_json_auto([{listing}], union_by_name=true, filename=true, ignore_errors=true)")
+        f"SELECT * FROM read_json_auto('{pattern}', filename=true, ignore_errors=true)")
 
 
 def _view_for(ticker: str) -> str:
