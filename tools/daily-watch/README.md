@@ -39,7 +39,13 @@ python3 -m pip install -r tools/daily-watch/requirements.txt
 
 包含 `requests`、`python-dotenv`、`pyyaml`。
 
-A 股数据需要额外装 tushare：
+A 股主源 mootdx（通达信 TCP，无 Key，覆盖股票 + ETF）需要额外安装：
+
+```bash
+python3 -m pip install -r tools/daily-watch/requirements-mootdx.txt
+```
+
+可选备用源 tushare（EOD 权威昨收，港股日线依赖它）：
 
 ```bash
 python3 -m pip install -r tools/daily-watch/requirements-tushare.txt
@@ -59,6 +65,7 @@ tools/daily-watch/
 │   ├── check_setup.py        # 环境检查 + 初始化
 │   ├── generate_daily_report.py  # 生成日报（主入口）
 │   ├── fetch_market_data.py  # 行情拉取 + 股票 profile
+│   ├── mootdx_source.py      # A 股主源（mootdx 客户端管理，被 fetch_market_data 引用）
 │   ├── fetch_macro_data.py   # 宏观数据（VIX/SPY/QQQ/GLD/WTI/BTC）
 │   ├── sync_hypothesis.py    # 假设状态同步
 │   ├── trade_stats.py        # 交易统计
@@ -194,7 +201,7 @@ focus_areas:
 | Tier | 监控热度 | `HOT`（重点）/ `WARM`（跟踪）/ `COLD`（基准） |
 | Hypothesis | 关联假设 | 对应 `hypothesis/` 下的假设 ID，如 `H1`、`H2` |
 
-**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 tushare（A 股），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。后缀必须大写。
+**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。后缀必须大写。
 
 ## 输出示例
 
@@ -250,7 +257,8 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 - **美股**：自动 fallback 到 Nasdaq 无 Key 源，能拿到基础行情（最新价、涨跌幅）
 - **宏观数据**：需要 FMP key，没有则宏观表格全部显示 `N/A`
-- **A 股 / 港股**：需要 tushare token，没有则对应股票无数据
+- **A 股 + ETF**：mootdx 无 Key 实时覆盖（需装 `requirements-mootdx.txt`）；未装或缺装时按 tushare（需 token）→ 东财/腾讯/新浪（无 Key）降级
+- **港股**：需要 tushare token，没有则对应股票无数据
 - **财报日历**：需要 FMP key，没有则财报章节为空
 - **报告骨架**：无论有没有 key，报告文件都会生成，缺失的数据位显示 `N/A` 或 `[待补充]`
 
@@ -260,12 +268,13 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 | 数据源 | 市场 | 费用 | 必要性 | env key |
 |--------|------|------|--------|---------|
+| mootdx | A 股 + ETF（.SH/.SZ） | 无 Key；TCP 7709 直连通达信 | **A 股主源**（实时快照；需装 `requirements-mootdx.txt`，`DISABLE_MOOTDX=1` 停用） | 无 |
 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | 免费 250 次/日 / 付费 | 可选（财报、宏观等功能需要） | `FMP_API_KEY` |
-| tushare | A 股（.SH/.SZ）、港股（.HK） | 120 积分非复权日线当前 0 元；其他看权限 | A 股/港股需要 | `TUSHARE_TOKEN` |
+| tushare | A 股（.SH/.SZ）、港股（.HK） | 120 积分非复权日线当前 0 元；其他看权限 | A 股首备用（EOD）；港股需要 | `TUSHARE_TOKEN` |
 | Nasdaq | 美股基础行情 | 无 Key | 自动 fallback（FMP 未返回时） | 无 |
 | Finnhub | 美股 | 免费账户 / 付费 | 可选 fallback | `FINNHUB_API_KEY` |
 | EODHD | 港股、韩国、芬兰等最近 EOD | 免费 20 次/日 / 付费 | 可选 fallback；不是实时价 | `EOD_API_KEY` |
-| 东方财富 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（tushare 未返回时；ETF 行情的主要来源） | 无 |
+| 东方财富 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（mootdx/tushare 未返回时） | 无 |
 | 腾讯 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（东财之后） | 无 |
 | 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
@@ -276,7 +285,7 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
-**Fallback 顺序**（单只股票 FMP 未返回时）：Nasdaq → Finnhub → EOD → Nasdaq 指数 / FRED / 东财环球 / 新浪环球（映射制）→ 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
+**取数顺序**：A 股主源是 mootdx（批量实时快照，服务器逐台真实取数验证，全网不可用时记 5 分钟负缓存快速失败）。单只票主源未返回时按链降级：Nasdaq → Finnhub → EOD → Nasdaq 指数 / FRED / 东财环球 / 新浪环球（映射制）→ mootdx（按票重试）→ tushare → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（mootdx / Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
 
 **海外与宏观 ticker 口径**：watchlist 统一写 Yahoo 风格逻辑 ticker（`^IXIC`、`^TNX`、`DX-Y.NYB`、`XAUUSD=X`、`HG=F`、`000660.KS`），脚本内映射表转换为各源的代码（如 COMP/SOX、DGS10、DINIW、hf_XAU、hf_CAD、东财 `177.000660`）；yfinance 恢复可用时同一 ticker 直接复用。
 
@@ -301,6 +310,9 @@ TUSHARE_TOKEN=your_tushare_token
 FINNHUB_API_KEY=
 EOD_API_KEY=
 ENABLE_YFINANCE=
+
+# 可选：设为 1 整体停用 mootdx（A 股回落 tushare → 东财 → 腾讯 → 新浪）
+DISABLE_MOOTDX=
 ```
 
 值为空或以 `your_` 开头的 key 会被自动跳过，不会触发 API 调用。
@@ -340,7 +352,7 @@ python tools/daily-watch/scripts/check_setup.py --init
 按以下顺序排查：
 
 1. **Ticker 格式**：A 股必须带后缀（`601857.SH` 不是 `601857`），港股必须带 `.HK`（`0700.HK` 不是 `700`），后缀必须大写
-2. **数据源**：A 股 / 港股需要 tushare token；纯美股无 key 时 Nasdaq 源能覆盖大部分
+2. **数据源**：A 股需要 mootdx 依赖（`requirements-mootdx.txt`），未装则依次降级 tushare token（A 股/港股）→ 东财/腾讯/新浪；纯美股无 key 时 Nasdaq 源能覆盖大部分
 3. **非交易时间**：脚本取最近 5-14 个自然日内的数据，周末和长假也能拿到最近一个交易日的数据
 4. **FMP 限流与覆盖**：免费 Basic 当前有 250 次/天限制，且不是免费全球全功能；股票池太大或请求高级端点时会缺数据
 

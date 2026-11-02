@@ -48,24 +48,11 @@ A 股主源是 mootdx（通达信 TCP 7709 直连，实时快照，覆盖 ETF）
 python3 -m pip install -r tools/daily-watch/requirements-mootdx.txt
 ```
 
- mootdx 首次取数会逐台验证通达信服务器（TCP 通不等于协议通），全部失败时记 5 分钟负缓存并自动降级 tushare / 东财 / 腾讯 / 新浪，不会让日报失败。`DISABLE_MOOTDX=1` 写入环境可整体停用。
+mootdx 首次取数会逐台验证通达信服务器（TCP 通不等于协议通），全部失败时记 5 分钟负缓存并自动降级 tushare / 东财 / 腾讯 / 新浪，不会让日报失败。`DISABLE_MOOTDX=1` 写入环境可整体停用。
+
+通达信协议走 TCP 7709 **明文传输、无加密**，且数据非交易所官方授权口径——行情仅供个人研究参考。
 
 可选增强：接入 Tushare 作为首备用（EOD 权威昨收、港股日线也靠它）：
-
-1. 在 [Tushare](https://tushare.pro/register) 注册、补全资料并在个人中心取得 token。
-2. 安装额外依赖：
-
-```bash
-python3 -m pip install -r tools/daily-watch/requirements-tushare.txt
-```
-
-3. 在 `config/daily-watchlist.env` 填写：
-
-```dotenv
-TUSHARE_TOKEN=你的_token
-```
-
-4. 股票代码使用 `601857.SH` / `000001.SZ`，再运行检查：
 
 1. 在 [Tushare](https://tushare.pro/register) 注册、补全资料并在个人中心取得 token。
 2. 安装额外依赖：

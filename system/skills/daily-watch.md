@@ -25,6 +25,11 @@
 Agent 首次使用时检查上述条件，缺什么补什么。
 免费与低成本数据源的选择、安装命令和授权边界统一读取 `DATA-SOURCES.md`，不要凭旧印象承诺额度。
 
+> **文档同步硬规则**：改动 `tools/daily-watch/` 的代码、数据源顺序或依赖时，必须同步四处，一次不落——
+> ① `tools/daily-watch/README.md`（工具自带说明：数据源表、Fallback 顺序、零 Key 矩阵、环境变量）；
+> ② `DATA-SOURCES.md`；③ 本 skill 的「数据源优先级」；④ `AGENTS.md` + `CLAUDE.md` 数据源表（含 `system/templates/` 同名模板）。
+> 已两次因只改入口文档漏掉其余处返工（2026-10-31 模板、2026-11-02 工具 README），此处即 checklist。
+
 ## 核心流程（dw-today）
 
 1. 读取 `config/daily-watchlist.yaml` + `config/daily-watchlist-watchlist.md`
