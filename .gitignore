@@ -43,6 +43,7 @@ inbox/sample-ai-workspace.md
 # 从 system/templates/ 重建）
 .zcode/
 output/*
+data/
 wiki/raw/*
 wiki/sources/*
 wiki/concepts/*

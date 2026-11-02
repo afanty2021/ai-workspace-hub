@@ -156,6 +156,7 @@ ai-workspace-hub/
 │
 ├── inbox/                          # 输入
 ├── output/                         # 输出（research/ screen/ pod2wiki/ daily-watch/）
+├── data/                           # 市场数据持久化（gitignore）
 ├── hypothesis/                     # 假设追踪与复盘
 ├── evidence/                       # 独立证据账本
 ├── portfolio/                      # 交易记录

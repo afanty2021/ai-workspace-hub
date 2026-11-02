@@ -376,3 +376,42 @@ python3 tools/daily-watch/scripts/check_setup.py
 ```
 
 输出会逐项标注 `[OK]` / `[FAIL]` / `[WARN]`，包括 FMP key 连通性测试和 tushare token 验证。
+
+## 本地持久化（市场数据层）
+
+设计 spec：`docs/superpowers/specs/2026-11-02-market-data-persistence-design.md`（v0.2）。目录 `data/` 整目录 gitignore。
+
+### 目录与字段字典
+
+    data/
+    ├── market/daily/YYYY-MM-DD.json   # 日报快照：{schema_version, fetched_at, payload(原样)}
+    ├── market/series/{TICKER}.jsonl   # 逐票日线：date/open/high/low/close/volume/amount/source
+    ├── sector/series/{CODE}.jsonl     # 板块指数：上行的字段 + up_count/down_count
+    ├── finance/gpcw-YYYY-MM-DD.jsonl  # 按报告期全市场财务快照（含北交所 353 行，series 层不含）
+    ├── finance/_meta.json             # 各期 zip hash 台账（零下载探测）
+    ├── custom/{slug}.jsonl + registry.json  # 自定义数值序列（date=记录日, period=所属期）
+    ├── news/YYYY/MM/DD-{slug}.md      # 新闻原文（frontmatter 含 dedup=URL 规范化 md5）
+    └── .state/                        # 批量完成标记 last_stocks_round/last_sectors_round（交易日闸门读它，与数据文件解耦）
+
+口径铁律：
+- **不复权原始价**，除权跳空原样保留；复权在查询层按需算。
+- A 股 volume=手、amount=元，**amount 仅批量路径有值**（日报钩子无此字段）；海外票自启用日累积、缺字段 null；板块 volume 量纲与个股不同，原样保留。
+- 文件名即主键：A 股 `{6位}.SH/.SZ`（枚举一律 normalize 后落盘）、海外票 watchlist 原样（`^SOX`/`NVDA`/`000660.KS`）、板块裸 6 位。
+- 多写者规则：批量=权威写者（同日按字段覆盖），日报钩子=快照级（只补 null 绝不覆盖非空）；跨进程 `data/.locks/` 目录锁，拿不到即跳过。
+- schema 演进只加字段不改语义；daily/finance 行带 schema_version，series/custom 逐行有意不带。
+- 板块指数为通达信自编指数（非交易所/申万口径），引用需标 TDX。
+- 存储满配约 1GB（market 3 年 ~650MB + finance 148 期 ~300MB + sector ~120MB）；退市票文件冻结不删、单调慢涨；文件无校验和，单文件损坏的恢复手段 = 该票 `--backfill` 重拉。
+
+### CLI 示例
+
+    # 盘后批量（定时任务每日 16:30 自动跑的就是这两条）
+    python tools/daily-watch/scripts/update_market_series.py --scope all
+    python tools/daily-watch/scripts/update_finance_snapshots.py
+    # 首次部署：全量初始化（3 年回补的唯一路径）
+    python tools/daily-watch/scripts/update_market_series.py --scope all --backfill 800
+    # 查询
+    python tools/daily-watch/scripts/query_market.py quote --ticker 600276.SH
+    python tools/daily-watch/scripts/query_market.py finance --ticker 300476 --last 4
+    python tools/daily-watch/scripts/query_market.py sector --top 20
+    # 缺口审计：找 tail 落后超过 7 天的票（cron 停摆自检）
+    python tools/daily-watch/scripts/query_market.py sql --sql "SELECT regexp_extract(filename, '([0-9]{6}\\.[A-Z]{2})\\.jsonl$', 1) AS ticker, max(date) AS last_date FROM market_quotes GROUP BY filename HAVING max(date) < current_date - INTERVAL 7 DAY"

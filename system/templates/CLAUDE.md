@@ -30,7 +30,7 @@
 | 知识复盘 / 提炼 / 加载规则 | `system/skills/knowledge-lifecycle.md` + `knowledge_lifecycle.py` | exploration 验证 → pattern → rule；按场景选择性加载 |
 | 快速筛选 | `system/skills/screen.md` | `output/screen/` |
 | 播客摄入 | `system/skills/podcast.md` | `wiki/sources/` + `wiki/raw/podcasts/` + `output/pod2wiki/` |
-| 日报监控 | `system/skills/daily-watch.md`（接线细节见 `system/integrations/daily-watchlist.md`） | `output/daily-watch/` + `evidence/` + 假设引用 |
+| 日报监控 | `system/skills/daily-watch.md`（接线细节见 `system/integrations/daily-watchlist.md`） | `output/daily-watch/` + `data/`（持久化钩子）+ `evidence/` + 假设引用 |
 | 管理股票池 | `system/skills/daily-watch-import.md` | `config/daily-watchlist-watchlist.md` |
 | 假设操作 | `system/skills/daily-watch-ht.md` | `hypothesis/` + `portfolio/` |
 | 假设复盘 | `system/skills/hypothesis-review.md` + 相关研究和日报 | `hypothesis/` → 确认后更新 `wiki/explorations/` |
@@ -103,7 +103,7 @@ Claude 应该创建一篇 `wiki/sources/YYYY-MM-DD-first-note.md`，并在 `work
 | 数据源 | 市场 | env key | 费用 |
 |--------|------|---------|------|
 | Nasdaq | 美股基础行情 | 无 | 无 Key 自动降级源 |
-| mootdx | A 股 + ETF 实时行情（主源） | 无（`DISABLE_MOOTDX=1` 停用） | 无 Key，TCP 7709 直连通达信；装 `tools/daily-watch/requirements-mootdx.txt` 后自动使用 |
+| mootdx | A 股 + ETF 实时行情（主源）；财务快照（gpcw，148 期至 1988）；板块指数（880/881 段，通达信自编口径） | 无（`DISABLE_MOOTDX=1` 停用） | 无 Key，TCP 7709 直连通达信；装 `tools/daily-watch/requirements-mootdx.txt` 后自动使用 |
 | 东方财富 / 腾讯 / 新浪 | A 股 + ETF 降级行情 | 无 | 无 Key 自动降级源，mootdx/tushare 未返回时依次尝试 |
 | Nasdaq 指数 API / FRED / 东财环球 / 新浪环球 | 全球指数 + 宏观 + 韩股（纳指 / 费半 / 美十债 / 美元指数 / 伦敦金 / 伦铜 / 海力士） | 无 | 无 Key 映射制降级源，按 ticker 映射命中 |
 | tushare | A 股 + 港股 | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线（EOD）；其他接口看权限；mootdx 之后的首备用 |

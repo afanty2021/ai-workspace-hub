@@ -24,6 +24,7 @@
 | `hypothesis/` | 假设、证据引用和复盘 |
 | `evidence/` | 独立证据账本，保存来源、方向和审核状态 |
 | `output/daily-watch/` | 日报输出 |
+| `data/` | 市场数据持久化（gitignore 运行时生成；spec：docs/superpowers/specs/） |
 | `portfolio/` | 交易记录 |
 | `config/` | 用户配置文件（不入 git） |
 | `tools/` | 内置工具代码 |
