@@ -1,0 +1,206 @@
+"""update_market_series 单测（mock _mootdx_call，不联网）。"""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
+
+from _test_paths import REPO_ROOT  # noqa: F401
+
+import update_market_series as ums  # noqa: E402
+from market_data_io import read_series_rows, sector_series_file, series_file, upsert_series_rows  # noqa: E402, F401 — sector_series_file 留给 Task 4 sectors 用例
+
+
+def _bars_frame(dates: list[str], closes: list[float], **extra: dict) -> pd.DataFrame:
+    data = {"open": [c - 1 for c in closes], "high": [c + 1 for c in closes],
+            "low": [c - 2 for c in closes], "close": closes,
+            "volume": [100.0] * len(dates), "amount": [8.0e7] * len(dates)}
+    data.update(extra)
+    return pd.DataFrame(data, index=pd.to_datetime(dates))
+
+
+def _stocks_frame(rows: list[tuple[str, str]]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["code", "name"])
+
+
+class FakeMootdx:
+    """按 method 分发的 _mootdx_call 替身。用法：FakeMootdx(stocks=..., bars=..., index_bars=...)。"""
+
+    def __init__(self, *, stocks=None, bars=None, index_bars=None) -> None:
+        self.calls: list[str] = []
+        self._stocks = stocks
+        self._bars = bars
+        self._index_bars = index_bars
+
+    def __call__(self, method: str, **kwargs):
+        self.calls.append(
+            f"{method}:{kwargs.get('symbol', kwargs.get('market', ''))}:off{kwargs.get('offset')}")
+        table = {"stocks": self._stocks, "bars": self._bars, "index_bars": self._index_bars}[method]
+        if table is None:
+            raise RuntimeError(f"unexpected call {method}")
+        if method == "bars" and callable(table):
+            return table(kwargs.get("symbol"))
+        return table
+
+
+class GateTests(unittest.TestCase):
+    def test_canary_reads_last_index_bar(self) -> None:
+        fake = FakeMootdx(index_bars=_bars_frame(["2026-11-02"], [3300.0]))
+        with patch.object(ums, "_mootdx_call", fake):
+            self.assertEqual(ums.fetch_server_latest_trade_date(), "2026-11-02")
+
+    def test_gate_short_circuits_whole_round(self) -> None:
+        # N1：闸门只认 data/.state/ 完成标记（批量写者独占的旁路状态），
+        # 数据文件有当日行也不触发（那可能是钩子写的）
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ums.write_round_marker(root, "stocks", "2026-11-02")
+            market = series_file(root, "600276.SH")
+            market.parent.mkdir(parents=True, exist_ok=True)
+            market.write_text('{"date": "2026-11-02", "close": 71.5, "source": "mootdx"}\n',
+                              encoding="utf-8")
+            fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]))
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_stocks_update(root, latest="2026-11-02")
+            self.assertEqual(stats, {"ok": 0, "skip": 0, "fail": 0})  # 整轮零调用
+            self.assertFalse(any(c.startswith("stocks:") for c in fake.calls))
+
+    def test_gate_ignores_hook_written_market_files(self) -> None:
+        # I7：只有日报钩子写过的 market 文件（16:30 批量未跑、无标记）不得让闸门短路
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            market = series_file(root, "600276.SH")
+            market.parent.mkdir(parents=True, exist_ok=True)
+            market.write_text('{"date": "2026-11-02", "close": 71.5, "source": "mootdx"}\n',
+                              encoding="utf-8")
+            fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]),
+                              bars=_bars_frame(["2026-11-02"], [71.54]))
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_stocks_update(root, latest="2026-11-03")  # 服务器已有 11-03，本地钩子只写到 11-02
+            self.assertEqual(stats, {"ok": 1, "skip": 0, "fail": 0})  # 批量照常执行
+
+    def test_marker_written_only_for_clean_full_round(self) -> None:
+        # N1 补充点①：tickers 抽查轮与 fail>0 轮都不得写标记——前者会挡住 11.7
+        # 全量初始化，后者会让 cron 同日补跑被闸门吃掉。三轮日期递进，保证
+        # 失败轮不被「tail==latest 逐票 skip」挡住而真打到 bars。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake = FakeMootdx(stocks=_stocks_frame([("600276", "a")]),
+                              bars=_bars_frame(["2026-11-03"], [71.54]))
+            with patch.object(ums, "_mootdx_call", fake):
+                ums.run_stocks_update(root, tickers=["600276.SH"], latest="2026-11-03")
+            self.assertIsNone(ums.last_round_date(root, "stocks"))  # tickers 轮：无标记
+
+            def boom(symbol: str):
+                raise RuntimeError("socket dead")
+
+            with patch.object(ums, "_mootdx_call",
+                              FakeMootdx(stocks=_stocks_frame([("600276", "a")]), bars=boom)):
+                stats = ums.run_stocks_update(root, latest="2026-11-04")  # 服务器前进一日 → 票不被逐票 skip 挡住
+            self.assertEqual(stats, {"ok": 0, "skip": 0, "fail": 1})
+            self.assertIsNone(ums.last_round_date(root, "stocks"))  # fail>0 轮：无标记
+
+            with patch.object(ums, "_mootdx_call", fake):
+                ums.run_stocks_update(root, latest="2026-11-04")
+            self.assertEqual(ums.last_round_date(root, "stocks"), "2026-11-04")  # 干净全量轮：写标记
+
+
+class StocksUpdateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_enumerate_filter_normalize_upsert(self) -> None:
+        stocks = _stocks_frame([("600276", "恒瑞医药"), ("300476", "胜宏科技"),
+                                ("880301", "板块占位"), ("204001", "回购"), ("430047", "北交所")])
+        fake = FakeMootdx(stocks=stocks, bars=_bars_frame(["2026-11-01", "2026-11-02"], [70.0, 71.54]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, latest="2026-11-02")
+        self.assertEqual(stats, {"ok": 2, "skip": 0, "fail": 0})
+        rows = read_series_rows(series_file(self.root, "600276.SH"))
+        self.assertEqual([r["date"] for r in rows], ["2026-11-01", "2026-11-02"])
+        self.assertEqual(rows[-1]["source"], "mootdx")
+        self.assertEqual(rows[-1]["amount"], 8.0e7)
+        self.assertTrue(series_file(self.root, "300476.SZ").exists())
+        self.assertFalse(series_file(self.root, "880301.SH").exists())  # 白名单外不建文件
+
+    def test_tail_equals_latest_skips_ticket(self) -> None:
+        # 与闸门的分工：闸门管「整轮」（.state 标记）；逐票 skip 管 tickers 子集等闸门旁路路径
+        market = series_file(self.root, "600276.SH")
+        market.parent.mkdir(parents=True, exist_ok=True)
+        market.write_text(
+            '{"date": "2026-11-02", "close": 71.5, "source": "mootdx"}\n', encoding="utf-8")
+        fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]),
+                          bars=_bars_frame(["2026-11-02"], [71.54]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, tickers=["600276.SH"], latest="2026-11-02")
+        self.assertEqual(stats["skip"], 1)
+        self.assertFalse(any(c.startswith("bars:") for c in fake.calls))  # 没打服务器
+
+    def test_single_failure_counted_others_continue(self) -> None:
+        def bars_by_symbol(symbol: str):
+            if symbol == "600276":
+                raise RuntimeError("socket dead")
+            return _bars_frame(["2026-11-02"], [71.54])
+
+        fake = FakeMootdx(stocks=_stocks_frame([("600276", "a"), ("300476", "b")]), bars=bars_by_symbol)
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, latest="2026-11-02")
+        self.assertEqual(stats, {"ok": 1, "skip": 0, "fail": 1})
+        self.assertTrue(series_file(self.root, "300476.SZ").exists())
+
+    def test_tickers_subset_overrides_enumeration(self) -> None:
+        fake = FakeMootdx(bars=_bars_frame(["2026-11-02"], [71.54]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, backfill=800, tickers=["600276.SH"], latest="2026-11-03")
+        self.assertEqual(stats["ok"], 1)
+        self.assertIn("bars:600276:off800", fake.calls)  # --backfill 透传到 bars offset
+
+    def test_invalid_ticker_argument_rejected(self) -> None:
+        # M3：无后缀/海外票入参在 argparse 层拒绝（600276 会被拼成错市场的 .SZ）
+        for bad in ("600276", "^SOX", "00700.HK"):
+            with self.assertRaises(SystemExit, msg=bad):
+                ums.main(["--tickers", bad, "--scope", "stocks"])
+
+    def test_batch_overwrites_snapshot_written_intraday_row(self) -> None:
+        # spec §9 端到端：钩子先写盘中价 → 批量权威覆盖为收盘价
+        upsert_series_rows(
+            series_file(self.root, "600276.SH"),
+            [{"date": "2026-11-02", "open": None, "high": None, "low": None, "close": 70.01,
+              "volume": None, "amount": None, "source": "mootdx"}], writer="snapshot")
+        fake = FakeMootdx(bars=_bars_frame(["2026-11-02"], [71.54]))
+        with patch.object(ums, "_mootdx_call", fake):
+            ums.run_stocks_update(self.root, tickers=["600276.SH"], latest="2026-11-03")
+        row = read_series_rows(series_file(self.root, "600276.SH"))[-1]
+        self.assertEqual(row["close"], 71.54)   # 盘中价被权威覆盖
+        self.assertEqual(row["amount"], 8.0e7)  # null 被批量补齐
+
+    def test_rerun_resumes_after_partial_failure(self) -> None:
+        # spec §9 断点续传：首跑一票失败，重跑只补失败票、已成功票 skip
+        stocks = _stocks_frame([("600276", "a"), ("300476", "b")])
+
+        def bars_by_symbol(symbol: str):
+            if symbol == "600276":
+                raise RuntimeError("socket dead")
+            return _bars_frame(["2026-11-02"], [71.54])
+
+        with patch.object(ums, "_mootdx_call", FakeMootdx(stocks=stocks, bars=bars_by_symbol)):
+            first = ums.run_stocks_update(self.root, latest="2026-11-02")
+        self.assertEqual(first, {"ok": 1, "skip": 0, "fail": 1})
+        self.assertIsNone(ums.last_round_date(self.root, "stocks"))  # fail>0 不写标记（N1），同日补跑不被挡
+        with patch.object(ums, "_mootdx_call",
+                          FakeMootdx(stocks=stocks, bars=_bars_frame(["2026-11-02"], [71.54]))):
+            second = ums.run_stocks_update(self.root, latest="2026-11-02")
+        self.assertEqual(second, {"ok": 1, "skip": 1, "fail": 0})
+        self.assertEqual(ums.last_round_date(self.root, "stocks"), "2026-11-02")  # 补跑干净才写标记
+
+
+if __name__ == "__main__":
+    unittest.main()
