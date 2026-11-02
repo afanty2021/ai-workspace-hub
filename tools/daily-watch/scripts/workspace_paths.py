@@ -149,3 +149,11 @@ def resolve_hypothesis_config_path(config_dir: Path) -> Path:
     return find_existing_path(
         config_dir, HYPOTHESIS_CONFIG_CANDIDATES
     ) or preferred_path(config_dir, HYPOTHESIS_CONFIG_CANDIDATES)
+
+
+MARKET_DATA_DIRNAME = "data"
+
+
+def resolve_market_data_dir(workspace_root: Path) -> Path:
+    """市场数据持久化目录（运行时数据，整目录 gitignore）。"""
+    return workspace_root / MARKET_DATA_DIRNAME
