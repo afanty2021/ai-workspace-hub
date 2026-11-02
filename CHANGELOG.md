@@ -9,6 +9,9 @@
 
 ### 新增
 
+### 新增
+
+- daily-watch 接入 mootdx（通达信 TCP 7709）并升为 A 股主源：无 Key 实时快照 + 日线，覆盖沪深股票与 ETF（tushare `daily` 不含基金），tushare 降为首备用，降级链变为 mootdx 按票重试 → tushare → 东财/腾讯/新浪；`DISABLE_MOOTDX=1` 可整体停用。客户端管理参考 TradingAgents-astock：候选服务器（实测精选表 + mootdx HQ_HOSTS）经 TCP 预筛与逐台真实取数验证后选用，探测期间保护 mootdx 持久化 BESTIP 配置，全网不可用时记 5 分钟负缓存快速失败并优雅降级（缺数据落备用链，整份日报不受影响）；适配本仓库线程池场景，以可重入锁串行化 pytdx 单 socket。`vol` 量纲实测为手（与 tushare/腾讯一致），昨收用交易所官方 `last_close`（除权日口径正确）。配套单元测试覆盖 ticker 门禁、字段映射、批量装配、降级链新序与 mootdx 全挂降级。
 - daily-watch 新增全球指数与宏观无 Key 行情源，覆盖纳指（^IXIC）、费城半导体指数（^SOX）、美十债收益率（^TNX → FRED DGS10 官方序列）、美元指数（DX-Y.NYB → 新浪 DINIW）、伦敦金（XAUUSD=X → 新浪 hf_XAU）与伦铜（HG=F → 东财 109.LCPT 主源 / 新浪 hf_CAD 备用，LME 三月铜），并经东财韩股市场（177）接通 SK 海力士（000660.KS → 177.000660，当前唯一无 Key 的 KRX 通路）。watchlist 统一写 Yahoo 风格逻辑 ticker，脚本内映射表转换为各源代码，yfinance 恢复可用时同一 ticker 自动成为备源；海外/宏观/韩股行情不再依赖 yfinance 可用性。东财环球映射按完整 ticker 匹配（KR 000660 与 A 股 000660.SZ 同码防碰撞），全球 fetcher 交易日按 UTC 归一，配套单元测试覆盖字段解析、非映射拒绝、同码防误路由和链路路由。
 - daily-watch 新增东方财富、腾讯、新浪三个无 Key 的 A 股备用行情源，在 tushare 未返回时依次尝试（东财 → 腾讯 → 新浪）；同时覆盖 tushare `daily` 接口取不到的场内 ETF，使全 A 股股票池在零 key 时也能拿到完整行情。字段映射与量纲（成交量统一为手）与既有源对齐，配套单元测试覆盖正常解析、非 CN 拒绝和链路顺序。
 - 仓库契约测试只校验 active-context / friction-log 的静态说明段：这两个文件是设计上的追加式工作日志，在本仓库原地使用 Hub 时必然积累真实条目，逐字节比对模板与使用方式冲突。

@@ -103,9 +103,10 @@ Codex 应该创建一篇 `wiki/sources/YYYY-MM-DD-first-note.md`，并在 `works
 | 数据源 | 市场 | env key | 费用 |
 |--------|------|---------|------|
 | Nasdaq | 美股基础行情 | 无 | 无 Key 自动降级源 |
-| 东方财富 / 腾讯 / 新浪 | A 股 + ETF 备用行情 | 无 | 无 Key 自动降级源，tushare 未返回时依次尝试 |
+| mootdx | A 股 + ETF 实时行情（主源） | 无（`DISABLE_MOOTDX=1` 停用） | 无 Key，TCP 7709 直连通达信；装 `tools/daily-watch/requirements-mootdx.txt` 后自动使用 |
+| 东方财富 / 腾讯 / 新浪 | A 股 + ETF 降级行情 | 无 | 无 Key 自动降级源，mootdx/tushare 未返回时依次尝试 |
 | Nasdaq 指数 API / FRED / 东财环球 / 新浪环球 | 全球指数 + 宏观 + 韩股（纳指 / 费半 / 美十债 / 美元指数 / 伦敦金 / 伦铜 / 海力士） | 无 | 无 Key 映射制降级源，按 ticker 映射命中 |
-| tushare | A 股 | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线；其他接口看权限 |
+| tushare | A 股 + 港股 | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线（EOD）；其他接口看权限；mootdx 之后的首备用 |
 | FMP | 美股 EOD/profile 起步；扩展市场看套餐 | `FMP_API_KEY` | 免费 Basic 当前 250 次/日 |
 | Finnhub | 美股备用 | `FINNHUB_API_KEY` | 免费账户端点可用，额度以官方为准 |
 | EODHD | HK/KR/FI 最近 EOD 备用 | `EOD_API_KEY` | 免费账户当前 20 次/日；不是实时价 |
@@ -114,6 +115,7 @@ Codex 应该创建一篇 `wiki/sources/YYYY-MM-DD-first-note.md`，并在 `works
 
 获取方式：
 - 完整选择与验证：`DATA-SOURCES.md`
+- mootdx：https://github.com/mootdx/mootdx
 - Longbridge：https://open.longbridge.com/zh-CN/skill/
 - tushare：https://tushare.pro/register
 - FMP：https://site.financialmodelingprep.com/developer/docs/pricing

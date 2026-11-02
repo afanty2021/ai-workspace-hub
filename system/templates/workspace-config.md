@@ -194,13 +194,22 @@
 - note: 不是 `tools/daily-watch/` 的内置数据源
 - 安装方式: https://open.longbridge.com/zh-CN/skill/
 
-### tushare（A 股行情 / 财务）
+### mootdx（A 股 + ETF 实时行情，主源）
+
+- status: `enabled-no-key`
+- env_key: none（`DISABLE_MOOTDX=1` 整体停用）
+- markets: CN (.SH/.SZ，股票 + ETF)
+- used_by: `daily-watch`
+- transport: 通达信 TCP 7709 直连，实时快照 + 日线；服务器逐台真实取数验证，全网不可用时记 5 分钟负缓存并自动降级 tushare / 东财 / 腾讯 / 新浪
+- dependency: `tools/daily-watch/requirements-mootdx.txt`
+
+### tushare（A 股行情 / 财务，首备用）
 
 - status: `available-unconfigured`
 - env_key: `TUSHARE_TOKEN`
 - markets: CN (.SH/.SZ), HK (.HK)
 - used_by: `daily-watch`, `screen`, `research`
-- pricing: 当前 120 积分档可取非复权日线；其他接口看积分或单独权限
+- pricing: 当前 120 积分档可取非复权日线；其他接口看积分或单独权限；daily-watch 里降为 mootdx 之后的首备用
 - 获取方式: https://tushare.pro/register
 
 ### fmp（可选：EOD / profile / 财报 / 宏观）

@@ -10,6 +10,7 @@
 ## 前置条件
 
 1. 安装依赖：`python3 -m pip install -r tools/daily-watch/requirements.txt`
+   - A 股主源 mootdx 另装：`python3 -m pip install -r tools/daily-watch/requirements-mootdx.txt`（无 Key，TCP 7709 直连通达信；不装则 A 股直接走 tushare/东财降级链）
    - 使用 tushare 时另装：`python3 -m pip install -r tools/daily-watch/requirements-tushare.txt`
    - 需要 Python 3.10+。先运行 `python3 --version`；如果低于 3.10，改用 `python3.10` / `python3.11` / `python3.12`，或引导用户安装新版 Python
    - 如果环境只有 `python` 且版本 ≥3.10，把命令里的 `python3` 替换成 `python`
@@ -42,11 +43,14 @@ Agent 首次使用时检查上述条件，缺什么补什么。
 
 | 优先级 | 数据源 | 市场 | env key | 费用 | 获取 |
 |--------|--------|------|---------|------|------|
-| 1 | tushare | A 股 (.SH/.SZ) | `TUSHARE_TOKEN` | 120 积分非复权日线当前 0 元；其他看权限 | [注册](https://tushare.pro/register) |
-| 2 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | `FMP_API_KEY` | 免费 250 次/日 / 付费 | [Pricing](https://site.financialmodelingprep.com/developer/docs/pricing) |
-| 3+ | Nasdaq / Finnhub / EODHD / yfinance | 各自覆盖 | 无 Key 或各自 key | 自动 fallback | `DATA-SOURCES.md` |
+| 1 | mootdx | A 股 + ETF (.SH/.SZ) | 无（`DISABLE_MOOTDX=1` 停用） | 免费，TCP 7709 直连通达信，实时快照 | [项目](https://github.com/mootdx/mootdx) |
+| 2 | tushare | A 股 (.SH/.SZ) + HK | `TUSHARE_TOKEN` | 120 积分非复权日线当前 0 元（EOD）；其他看权限 | [注册](https://tushare.pro/register) |
+| 3 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | `FMP_API_KEY` | 免费 250 次/日 / 付费 | [Pricing](https://site.financialmodelingprep.com/developer/docs/pricing) |
+| 4+ | Nasdaq / Finnhub / EODHD / 东财 / 腾讯 / 新浪 / yfinance | 各自覆盖 | 无 Key 或各自 key | 自动 fallback | `DATA-SOURCES.md` |
 
-无任何 key → 美股基础行情先尝试 Nasdaq，其余缺口在报告骨架中标 `[待补充]`，agent 用 websearch 补充。
+mootdx 未命中或缺装 → A 股在降级链里先试 tushare（首备用），再东财/腾讯/新浪。mootdx 服务器全网不可用时记 5 分钟负缓存快速失败，不影响整份日报生成。
+
+无任何 key 且未装 mootdx → 美股基础行情先尝试 Nasdaq，其余缺口在报告骨架中标 `[待补充]`，agent 用 websearch 补充。
 
 Longbridge Skill/CLI 是独立 Agent 扩展，不是 `tools/daily-watch/` 的内置数据源。需要时可用于 Agent 的临时查询，但不要把它写成日报脚本已接入。
 

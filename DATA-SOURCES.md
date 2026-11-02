@@ -1,6 +1,6 @@
 # 免费数据源接入指南
 
-> 最近核对：2026-09-30。免费额度和接口权限会变化，接入前请以各服务商官方页面为准。
+> 最近核对：2026-11-02。免费额度和接口权限会变化，接入前请以各服务商官方页面为准。
 
 `daily-watch` 和 `podcast` 已随 Hub 安装，不需要再安装独立项目。下面只是在启用自动行情、自动标签或播客摘要时，选择数据源和安装可选依赖。
 
@@ -11,8 +11,9 @@
 | 美股基础行情 | Nasdaq 无 Key 降级源 | 免费、无需注册；只提供基础行情，稳定性不作承诺 | 安装基础依赖后直接运行，脚本会自动使用 |
 | 美股备用行情 | Finnhub | 注册后取得 API key；免费端点和额度以官方当前账户为准 | 把 key 写入 `FINNHUB_API_KEY` |
 | 个人研究的多市场备用行情 | yfinance | 无 Key；非官方 Yahoo 接口，只适合个人研究/教育用途 | 安装 `yfinance`，再设置 `ENABLE_YFINANCE=1` |
-| A 股日线 | Tushare | 官方当前规则下，120 积分档的非复权日线价格为 0 元；更完整数据需要更多积分或单独权限 | 注册、补全资料、取得 token，并安装 tushare 依赖 |
-| A 股 + ETF 备用行情 | 东方财富 / 腾讯 / 新浪 | 免费、无 Key、零配置；非官方公开接口，稳定性与时效不作承诺，tushare 未返回时依次尝试 | 无需任何操作，脚本自动使用 |
+| A 股 + ETF 实时行情（主源） | mootdx（通达信 TCP） | 免费、无 Key、实时快照 + 日线，覆盖沪深股票和 ETF；依赖 TCP 7709 出网，被公司网络/防火墙拦截时自动降级 | 安装 `requirements-mootdx.txt` 后自动使用；`DISABLE_MOOTDX=1` 可整体停用 |
+| A 股日线 / 港股日线（首备用） | Tushare | 官方当前规则下，120 积分档的非复权日线价格为 0 元；更完整数据需要更多积分或单独权限；EOD 盘后才更新当日 | 注册、补全资料、取得 token，并安装 tushare 依赖 |
+| A 股 + ETF 降级行情 | 东方财富 / 腾讯 / 新浪 | 免费、无 Key、零配置；非官方公开接口，稳定性与时效不作承诺，mootdx 和 tushare 都未返回时依次尝试 | 无需任何操作，脚本自动使用 |
 | 全球指数 / 宏观 / 韩股（纳指、费半、美十债、美元指数、伦敦金、伦铜、海力士） | Nasdaq 指数 API / FRED / 东财环球 / 新浪环球 | 免费、无 Key、零配置；按 watchlist ticker（^IXIC、^SOX、^TNX、DX-Y.NYB、XAUUSD=X、HG=F、000660.KS）映射自动命中；^TNX 走 FRED 官方序列（T+1），韩股走东财 177 市场 | 无需任何操作，脚本自动使用 |
 | 港股 / 韩国 / 芬兰小股票池 EOD 备用 | EODHD | 免费账户当前为 20 次调用/日，可取任意 ticker 过去一年 EOD 历史；不是实时行情 | 把 key 写入 `EOD_API_KEY` |
 | 美股 EOD / profile 测试 | FMP Basic | 免费 Basic 当前为 250 次调用/日；全球覆盖和高级数据属于更高套餐 | 把 key 写入 `FMP_API_KEY` |
@@ -39,7 +40,32 @@ python3 tools/daily-watch/scripts/generate_daily_report.py
 
 个股基础行情会先尝试 FMP（如果配置），缺失时自动走 Nasdaq。宏观、财报日历等仍可能因为没有 FMP key 而显示 `N/A`。
 
-### 2. A 股：接入 Tushare
+### 2. A 股：mootdx 零 Key 主源 + Tushare 备用
+
+A 股主源是 mootdx（通达信 TCP 7709 直连，实时快照，覆盖 ETF），无 Key 零配置，只需装依赖：
+
+```bash
+python3 -m pip install -r tools/daily-watch/requirements-mootdx.txt
+```
+
+ mootdx 首次取数会逐台验证通达信服务器（TCP 通不等于协议通），全部失败时记 5 分钟负缓存并自动降级 tushare / 东财 / 腾讯 / 新浪，不会让日报失败。`DISABLE_MOOTDX=1` 写入环境可整体停用。
+
+可选增强：接入 Tushare 作为首备用（EOD 权威昨收、港股日线也靠它）：
+
+1. 在 [Tushare](https://tushare.pro/register) 注册、补全资料并在个人中心取得 token。
+2. 安装额外依赖：
+
+```bash
+python3 -m pip install -r tools/daily-watch/requirements-tushare.txt
+```
+
+3. 在 `config/daily-watchlist.env` 填写：
+
+```dotenv
+TUSHARE_TOKEN=你的_token
+```
+
+4. 股票代码使用 `601857.SH` / `000001.SZ`，再运行检查：
 
 1. 在 [Tushare](https://tushare.pro/register) 注册、补全资料并在个人中心取得 token。
 2. 安装额外依赖：
@@ -94,6 +120,7 @@ Windows 用户把 `python3` 换成 `python` 或 `py -3`。
 
 ## 官方入口
 
+- [mootdx 项目与文档](https://github.com/mootdx/mootdx)
 - [FMP Pricing](https://site.financialmodelingprep.com/developer/docs/pricing)
 - [Tushare 积分与权限](https://tushare.pro/document/1?doc_id=290)
 - [Finnhub API Docs](https://finnhub.io/docs/api)
