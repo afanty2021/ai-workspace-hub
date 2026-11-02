@@ -85,6 +85,16 @@ def run_json_script(workspace_root: Path, script_name: str) -> dict[str, Any]:
         raise RuntimeError(f"{script_name} did not produce valid JSON: {exc}") from exc
 
 
+def _persist_market_data_hook(market_data: dict[str, Any]) -> None:
+    """持久化钩子（spec §3：失败永不阻塞日报，只 log warning）。"""
+    try:
+        import persist_market_data
+
+        persist_market_data.run_persist_hook(market_data)
+    except Exception as exc:  # noqa: BLE001
+        log(f"Warning: persist hook failed (report continues): {exc}")
+
+
 def format_pct(value: Any) -> str:
     if value is None:
         return "N/A"
@@ -930,6 +940,7 @@ def main() -> int:
     template_text = load_template(resolve_template_path(workspace_root))
 
     market_data = run_json_script(workspace_root, "fetch_market_data.py")
+    _persist_market_data_hook(market_data)
     macro_data = (
         run_json_script(workspace_root, "fetch_macro_data.py")
         if modules["macro"]
