@@ -439,6 +439,30 @@ class IndicesTests(unittest.TestCase):
             stats = ums.run_indices_update(self.root, latest="2026-11-04")
         self.assertEqual(stats, {"ok": len(ums._CORE_INDICES) - 1, "skip": 1, "fail": 0})
 
+    def test_indices_lock_conflict_counts_skip_and_blocks_marker(self) -> None:
+        # 评审 Minor4：indices 的锁冲突路径与 stocks/sectors 同款（复制代码须测试钉漂移）
+        @contextmanager
+        def fake_lock(data_root, name, *, timeout_s=1.0):
+            yield False
+
+        with patch.object(ums, "series_lock", fake_lock):
+            fake = FakeMootdx(index_bars=_bars_frame(["2026-11-03"], [3300.0]))
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_indices_update(self.root, latest="2026-11-04")
+        self.assertEqual(stats, {"ok": 0, "skip": len(ums._CORE_INDICES), "fail": 0})
+        self.assertIsNone(ums.last_round_date(self.root, "indices"))  # 锁冲突轮不写标记
+
+    def test_indices_single_failure_counted_marker_blocked(self) -> None:
+        def flaky(method: str, **kwargs):
+            if method == "index_bars" and kwargs.get("symbol") == "000001":
+                raise RuntimeError("socket dead")
+            return _bars_frame(["2026-11-03"], [3300.0])
+
+        with patch.object(ums, "_mootdx_call", flaky):
+            stats = ums.run_indices_update(self.root, latest="2026-11-04")
+        self.assertEqual(stats, {"ok": len(ums._CORE_INDICES) - 1, "skip": 0, "fail": 1})
+        self.assertIsNone(ums.last_round_date(self.root, "indices"))  # fail>0 不写标记
+
 
 if __name__ == "__main__":
     unittest.main()

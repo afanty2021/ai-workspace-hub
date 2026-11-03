@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from _test_paths import REPO_ROOT  # noqa: F401
 
@@ -87,6 +90,17 @@ class QueryTests(unittest.TestCase):
         got = self.qm.query_quote(self.con, self.root, "000001")
         self.assertEqual(got["close"], 3599.685)  # 上证指数 fixture 尾行
         self.assertEqual(self.qm.query_quote(self.con, self.root, "399006")["close"], 2655.5)
+
+    def test_quote_bare_unknown_code_hints_suffix(self) -> None:
+        # 评审 Minor5：裸深市个股码（000651 格力）落 index 视图查无 → null 退出 0 但
+        # stderr 提示带后缀重试，不静默
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), \
+                patch("market_data_io.resolve_data_root", return_value=self.root):
+            rc = self.qm.main(["quote", "--ticker", "000651"])
+        self.assertEqual(rc, 0)
+        self.assertIn("000651.SZ", stderr.getvalue())  # 提示里给出带后缀的正确姿势
+        self.assertIn("index_series", stderr.getvalue())
 
     def test_finance_orders_across_periods(self) -> None:
         rows = self.qm.query_finance(self.con, self.root, "300476", last=4)

@@ -171,6 +171,11 @@ def main(argv: list[str] | None = None) -> int:
     con = duckdb.connect(":memory:")
     if args.command == "quote":
         out = query_quote(con, data_root, args.ticker)
+        if out is None and re.fullmatch(r"\d{6}", args.ticker):
+            # 裸码歧义 UX（评审 Minor5）：000651 裸码落 index 视图查无、000001 撞上证
+            # 指数——null 时提示带后缀重试，不替用户猜市场
+            log(f"Warning: 裸 6 位码 {args.ticker} 在 {_view_for(args.ticker)} 视图无数据文件——"
+                f"若是个股请带市场后缀重试（如 000651.SZ；000001 裸码=上证指数，平安银行用 000001.SZ）")
     elif args.command == "range":
         out = query_range(con, data_root, args.ticker, args.start, args.end)
     elif args.command == "finance":

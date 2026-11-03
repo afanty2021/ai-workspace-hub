@@ -83,7 +83,7 @@ def bars_to_rows(df: pd.DataFrame, *, source: str) -> list[dict[str, Any]]:
         row = {"date": pd.Timestamp(ts).date().isoformat(), "open": num("open"), "high": num("high"),
                "low": num("low"), "close": num("close"), "volume": num("volume"),
                "amount": num("amount"), "source": source}
-        if "up_count" in rec:  # index_bars 板块行（spec §4.2）
+        if "up_count" in rec:  # index_bars 行：板块与交易所指数都返回涨跌家数（spec §4.2）
             row["up_count"] = int(rec["up_count"]) if rec["up_count"] is not None else None
             row["down_count"] = int(rec["down_count"]) if rec["down_count"] is not None else None
         rows.append(row)
