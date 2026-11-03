@@ -8,8 +8,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,28 @@ from market_data_io import (
 from mootdx_source import log
 
 
+def _fetched_day(snapshot: dict[str, Any]) -> str | None:
+    """payload 自带 fetched_at（fetch_market_data 输出 UTC ISO）的日期段；非法/缺失返回 None。"""
+    fetched = (snapshot.get("meta") or {}).get("fetched_at")
+    if not isinstance(fetched, str):
+        return None
+    head = fetched[:10]
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", head):
+        try:
+            date.fromisoformat(head)  # 形状对也要过日历（02-31 之类）
+            return head
+        except ValueError:
+            return None
+    return None
+
+
 def save_daily_snapshot(snapshot: dict[str, Any], data_root: Path, today: str | None = None) -> Path:
-    """完整 payload 原样嵌套落盘（spec §4.1）；同日覆盖重写。today 可注入（测试用）。"""
-    day = today or datetime.now().strftime("%Y-%m-%d")
+    """完整 payload 原样嵌套落盘（spec §4.1）；同日覆盖重写。today 可注入（测试用）。
+
+    文件名日期优先取 payload 的 meta.fetched_at（复查 Minor③）：回填旧日期快照写旧
+    日期文件——旧行为用墙钟命名，会把旧 payload 静默重写进当日快照；解析不出才退墙钟。
+    """
+    day = today or _fetched_day(snapshot) or datetime.now().strftime("%Y-%m-%d")
     out = data_root / "market" / "daily" / f"{day}.json"
     wrapper = {
         "schema_version": 1,
@@ -90,11 +110,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--snapshot-file", required=True, help="fetch_market_data.py > x.json 的重定向产物")
     args = parser.parse_args(argv)
     snapshot = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
+    if not isinstance(snapshot, dict):
+        parser.error(f"--snapshot-file 顶层必须是 JSON 对象（得到 {type(snapshot).__name__}）")
     # 两种入参都接受（spec §5.1 CLI 手工补跑用）：fetch 原始输出（顶层 quotes 直接在）与
     # data/market/daily/ 落盘的 wrapper（顶层 payload）。直传 wrapper 不解包会零行追加、
     # 且把 wrapper 再包一层重写当日快照（静默数据损坏路径，friction-log 修根）
     if isinstance(snapshot.get("payload"), dict):
         snapshot = snapshot["payload"]
+    if not isinstance(snapshot.get("quotes"), list):
+        # 复查 Minor⑤：垃圾 JSON（传错文件）旧行为静默落盘快照+退出 0
+        parser.error(f"--snapshot-file 顶层缺 quotes 数组（keys: {sorted(snapshot)}）"
+                     "——既不是 fetch 输出也不是 daily wrapper")
     run_persist_hook(snapshot)
     return 0
 
