@@ -121,7 +121,8 @@ def _upsert_bars(path: Path, data_root: Path, code: str, backfill: int, *, sourc
 
 
 def run_stocks_update(data_root: Path, *, backfill: int = 30,
-                      tickers: list[str] | None = None, latest: str | None = None) -> dict:
+                      tickers: list[str] | None = None, latest: str | None = None,
+                      force: bool = False) -> dict:
     stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "stocks")
@@ -139,7 +140,10 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
             rows = read_series_rows(path)
             # amount 非空=批量已写（写者指纹，钩子行恒 amount=None）；同日钩子先写的票
             # 必须重拉让 batch 档权威覆盖（spec §9 当日可达，而非 T+1 自愈）
-            if rows and latest and rows[-1]["date"] >= latest and rows[-1].get("amount") is not None:
+            # force=True（--force）跳过本判定：历史补全/修复用——尾行已最新的票
+            # 按 skip 语义本来就该跳，但那样 backfill>增量 的重拉永远无法下发
+            if (rows and latest and rows[-1]["date"] >= latest
+                    and rows[-1].get("amount") is not None and not force):
                 stats["skip"] += 1
                 continue
             outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx")
@@ -232,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backfill", type=int, default=30,
                         help="增量 bars 数；800=回补约 3.3 年（服务器单次上限）")
     parser.add_argument("--tickers", help="逗号分隔子集，调试用（如 600276.SH,300476.SZ）")
+    parser.add_argument("--force", action="store_true",
+                        help="忽略逐票 skip 判定强制重拉（--backfill 800 补历史用；tickers 路径不写完成标记，不影响闸门）")
     args = parser.parse_args(argv)
     if args.tickers:  # 入参格式在动 data_root 之前就校验（M3：裸代码会被拼到错市场）
         tickers = []
@@ -249,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     data_root = resolve_data_root()
     stats = {"ok": 0, "skip": 0, "fail": 0}
     if args.scope in ("stocks", "all"):
-        stats = run_stocks_update(data_root, backfill=args.backfill, tickers=tickers)
+        stats = run_stocks_update(data_root, backfill=args.backfill, tickers=tickers,
+                                  force=args.force)
     if args.scope in ("sectors", "all"):
         sec = run_sectors_update(data_root, backfill=args.backfill)
         for key in stats:

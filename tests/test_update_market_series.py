@@ -157,6 +157,23 @@ class StocksUpdateTests(unittest.TestCase):
         self.assertEqual(stats["skip"], 1)
         self.assertFalse(any(c.startswith("bars:") for c in fake.calls))  # 没打服务器
 
+    def test_force_bypasses_per_ticket_skip(self) -> None:
+        # --force 修根（friction：尾行已最新的票挡住 backfill=800 历史回补，
+        # 同病灶第 2 次——第 1 次是钩子行 skip，由 amount 指纹修；这次本来就最新）
+        market = series_file(self.root, "600276.SH")
+        market.parent.mkdir(parents=True, exist_ok=True)
+        market.write_text(
+            '{"date": "2026-11-02", "close": 71.5, "amount": 8.0e7, "source": "mootdx"}\n',
+            encoding="utf-8")
+        fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]),
+                          bars=_bars_frame(["2023-07-13", "2026-11-02"], [60.0, 71.54]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, backfill=800, tickers=["600276.SH"],
+                                          latest="2026-11-02", force=True)
+        self.assertEqual(stats["ok"], 1)
+        self.assertIn("bars:600276:off800", fake.calls)
+        self.assertEqual(len(read_series_rows(market)), 2)  # 800 根历史回补后按日期归并
+
     def test_single_failure_counted_others_continue(self) -> None:
         def bars_by_symbol(symbol: str):
             if symbol == "600276":
