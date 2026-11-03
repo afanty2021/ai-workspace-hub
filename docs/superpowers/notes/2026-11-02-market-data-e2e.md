@@ -83,6 +83,7 @@
 - 真流程：报告生成 `output/daily-watch/2026-11/2026-11-03.md`（exit 0）；`data/market/daily/2026-11-03.json` 快照落盘；watchlist series 追加（`data/market/series/` 含 000630.SZ、002415.SZ、513130.SH 等）
 - `chmod 000 data/market/daily` 后重跑：stderr 出现 **`Warning: 持久化钩子失败（不阻塞日报）: [Errno 13] Permission denied ...`**，日报仍生成、exit 0；chmod 755 恢复后目录完好
 - 附带观察：海外票（NVDA/^IXIC 等）tradeDate 美式格式不可解析时「只进快照不进 series」，属设计内降级
+- **口径注记（2026-11-03 追加）**：本条「属设计内降级」定性已失效——C1 根修（parse_trade_date 扩 8 格式）后 NVDA/^IXIC 等 Nasdaq 美式 tradeDate 可正常进 series（11-03 已回填 11-02 行）；「不可解析只进快照」仍是未知格式的兜底行为，但不再是已知常态
 
 ## Step 11.7 首次全量初始化计时 — 通过（3 年回补目标兑现）
 

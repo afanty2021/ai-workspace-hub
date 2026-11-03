@@ -236,7 +236,7 @@ markdown 文件 = frontmatter + 原文全文。frontmatter：`url / title / fetc
 | 模块 | 用例 |
 |---|---|
 | persist_market_data | 快照写入/同日覆盖；series 追加幂等；钩子路径合并只补 null；tradeDate 空/非 ISO 跳过 series（负样本）；「钩子盘中价 → 批量收盘权威覆盖」端到端 |
-| update_market_series | 交易日闸门整轮短路；tail==最新日跳过；缺行补齐；回补早于 tail 的日期按序插入（非纯 append）；新票建文件；中途失败重跑续传；前缀白名单过滤（含 88/债券/B股/LOF 口径负样本）；枚举乱序 sort；--backfill 透传 offset；torn 尾行容忍 |
+| update_market_series | 交易日闸门整轮短路；tail==最新日且 tail 行 amount 非空才跳过（amount 空=日报钩子写的当日行，重拉让批量权威覆盖）；缺行补齐；回补早于 tail 的日期按序插入（非纯 append）；新票建文件；中途失败重跑续传；前缀白名单过滤（含 88/债券/B股/LOF 口径负样本）；枚举乱序 sort；--backfill 透传 offset；torn 尾行容忍 |
 | sector | 段位白名单（880099/880299 排除、880300/881999 边界含、888880 排除）；清单自动生成与补录；index_bars 行映射含 up/down_count |
 | update_finance_snapshots | 占位文件（filesize≤1MB）过滤；hash 未变全跳过零下载；变化→整期重写+meta 更新；重复列名 fixture 的位置映射（构造含两列同名的 DataFrame） |
 | save_custom_data | append+registry 首写注册；同 (series,date) 拒绝与 --overwrite；csv-import 列映射；period 可选 |

@@ -384,13 +384,15 @@ python3 tools/daily-watch/scripts/check_setup.py
 ### 目录与字段字典
 
     data/
-    ├── market/daily/YYYY-MM-DD.json   # 日报快照：{schema_version, fetched_at, payload(原样)}
+    ├── market/daily/YYYY-MM-DD.json   # 日报快照：{schema_version, fetched_at, payload(原样)}；文件名日期=payload 的 fetched_at 日期段（UTC，回填旧快照写旧日期），缺失才退墙钟（本地时区）
     ├── market/series/{TICKER}.jsonl   # 逐票日线：date/open/high/low/close/volume/amount/source
     ├── sector/series/{CODE}.jsonl     # 板块指数：上行的字段 + up_count/down_count
     ├── finance/gpcw-YYYY-MM-DD.jsonl  # 按报告期全市场财务快照（含北交所 353 行，series 层不含）
     ├── finance/_meta.json             # 各期 zip hash 台账（零下载探测）
+    ├── finance/_raw/*.zip             # gpcw zip 下载缓存；不自动清理，148 期累计 ~700MB，是存储估算外的隐性占用
     ├── custom/{slug}.jsonl + registry.json  # 自定义数值序列（date=记录日, period=所属期）
     ├── news/YYYY/MM/DD-{slug}.md      # 新闻原文（frontmatter 含 dedup=URL 规范化 md5）
+    ├── .locks/                        # 跨进程目录锁（O_CREAT|O_EXCL 非阻塞，600s 陈旧接管）
     └── .state/                        # 批量完成标记 last_stocks_round/last_sectors_round（交易日闸门读它，与数据文件解耦）
 
 口径铁律：
