@@ -1,8 +1,9 @@
 """日报持久化钩子（spec §5.1）：快照原样落盘 + watchlist series 快照级追加。
 
 钩子=快照级写者：同日只补 null、绝不覆盖非空（spec §5.2 写者身份表）。
-nasdaq 源行须过「美股 session 已收盘」闸门（_us_session_closed）：盘前/盘中
-报价只进快照不进 series（friction 2026-11-03 第 2 次修根）。
+实时报价源（nasdaq/fmp/finnhub/yfinance）行须过「美股 session 已收盘」闸门
+（_us_session_closed）：盘前/盘中报价只进快照不进 series（friction 2026-11-03
+第 2 次修根；第五轮评审 I-1 把 fmp/finnhub/yfinance 并入受闸集合）。
 """
 
 from __future__ import annotations
@@ -62,21 +63,26 @@ def save_daily_snapshot(snapshot: dict[str, Any], data_root: Path, today: str | 
 
 _ET = ZoneInfo("America/New_York")  # 与 market_data_io._ET 同源（美股日期口径一致）
 _US_REG_CLOSE_ET = dt_time(16, 0)   # 美股常规收盘；半日提前收盘不细分——当晚少写一行，次日 asOf<今天 自然补上
+# 盘前可产出「当日戳+实时价」的源（第五轮评审 I-1）。nasdaq 是浏览器头抓取型端点、
+# 失败即降级，下一环（fmp/quote 配 key 即成美股主源、finnhub /quote、yfinance 最新
+# bar）顶上即事故复发。eod/fred 收盘口径、sina/eastmoney 现价口径（日期=抓取日，
+# 自洽）、CN 侧批量权威覆盖——均不过闸。非美股票经四源抓取最坏延一天，永不丢行。
+_US_REALTIME_SOURCES = frozenset({"nasdaq", "fmp", "finnhub", "yfinance"})
 
 
 def _us_session_closed(row_day: str, source: str | None, now_et: datetime) -> bool:
-    """nasdaq 源的 series 行闸门：asOf 日的美股 session 已收盘才可信为该日收盘价。
+    """实时报价源的 series 行闸门：asOf 日的美股 session 已收盘才可信为该日收盘价。
 
     两个已发生的错写形态（2026-11-03 坐实）：①盘前抓取——价格=上一收盘、
     asOf=当日 → 周五价被写成 11-02 行（^SOX 10,687.62 vs 真实周一收盘
     10,328.33，险些漏判 H1 破线）；②个股盘前指示价（NVDA 有盘前交易）被写成
     当日收盘行。规则：asOf < 今天(ET) → 写（昨收及更早——指数 asOf 天然是最后
     交易日，隔天抓取恰好正确落行）；asOf == 今天且 ET ≥ 16:00 → 写（刚收盘）；
-    asOf == 今天且未收盘、asOf > 今天（时钟错乱）→ 不写。其余源不过此门：CN 侧
+    asOf == 今天且未收盘、asOf > 今天（时钟错乱）→ 不写。豁免源不过此门：CN 侧
     由批量权威写者覆盖，eod/fred 本就是收盘口径，sina/eastmoney 是连续市场
     现价口径（日期=抓取日，自洽）。
     """
-    if source != "nasdaq":
+    if source not in _US_REALTIME_SOURCES:
         return True
     try:
         day = date.fromisoformat(row_day)
@@ -114,7 +120,7 @@ def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path,
                                 now_et: datetime | None = None) -> int:
     """watchlist 全部票快照级 upsert（幂等可重入）；返回写入行数。
 
-    now_et 可注入（测试用）；nasdaq 源行过「session 已收盘」闸门（_us_session_closed），
+    now_et 可注入（测试用）；实时报价源行过「session 已收盘」闸门（_us_session_closed），
     盘前/盘中报价只进快照不进 series。
     """
     clock = now_et or datetime.now(_ET)
@@ -127,7 +133,7 @@ def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path,
                 log(f"Warning: {ticker} tradeDate 不可解析，只进快照不进 series: {quote.get('tradeDate')!r}")
             continue
         if not _us_session_closed(row["date"], quote.get("source"), clock):
-            log(f"Warning: {ticker} nasdaq 盘前/盘中报价（asOf {quote.get('tradeDate')!r}），"
+            log(f"Warning: {ticker} {quote.get('source')} 盘前/盘中报价（asOf {quote.get('tradeDate')!r}），"
                 "只进快照不进 series——ET 16:00 收盘后的抓取才可信为当日收盘")
             continue
         path = series_file(data_root, ticker)

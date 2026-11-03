@@ -110,11 +110,13 @@ class SeriesAppendTests(unittest.TestCase):
 
 
 class UsSessionGateTests(unittest.TestCase):
-    """friction 2026-11-03 第 2 次修根：nasdaq 盘前/盘中报价只进快照不进 series。
+    """friction 2026-11-03 第 2 次修根：实时源盘前/盘中报价只进快照不进 series。
 
     两个已发生的事故形态都要被挡：①盘前抓取价格=上一收盘、asOf=当日（周五价
     10,687.62 被写成 11-02 行，险些漏判 SOX 破线）；②个股盘前指示价（NVDA 有
-    盘前交易）被写成当日收盘行。
+    盘前交易）被写成当日收盘行。第五轮评审 I-1：受闸集合=四个实时报价源
+    （nasdaq/fmp/finnhub/yfinance）——nasdaq 是浏览器头抓取型端点，一挂降级链
+    下一环顶上就是同构事故复发。
     """
 
     def setUp(self) -> None:
@@ -175,8 +177,41 @@ class UsSessionGateTests(unittest.TestCase):
                                             now_et=self._et(2026, 11, 3, 17, 0))
         self.assertEqual(n, 0)
 
-    def test_non_nasdaq_sources_not_gated(self) -> None:
-        # 其余源不过此门：CN 由批量权威写者覆盖，eod/fred 收盘口径，sina/eastmoney
+    def test_realtime_fallback_sources_gated(self) -> None:
+        # 第五轮评审 I-1：fmp/finnhub/yfinance 同为实时报价端点（nasdaq 挂掉后
+        # 降级链上的同构入口），当日未收盘一律拦——拦的是「今日戳+盘前价」形态
+        for src in ("fmp", "finnhub", "yfinance"):
+            with self.subTest(source=src):
+                q = _quote(f"X-{src}", tradeDate="2026-11-03", source=src)
+                n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                                    now_et=self._et(2026, 11, 3, 5, 26))
+                self.assertEqual(n, 0)
+                self.assertFalse(series_file(self.root, f"X-{src}").exists())
+
+    def test_realtime_fallback_sources_past_date_written(self) -> None:
+        # 三源隔天自愈同 nasdaq：asOf<今天 → 放行（收盘价已定，正确落行）
+        for src in ("fmp", "finnhub", "yfinance"):
+            with self.subTest(source=src):
+                q = _quote(f"X-{src}", tradeDate="2026-11-02", source=src)
+                n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                                    now_et=self._et(2026, 11, 3, 5, 26))
+                self.assertEqual(n, 1)
+
+    def test_close_boundary_1559_vs_1600(self) -> None:
+        # 收盘边界逐分钉死（第五轮 M-B）：15:59 拒、16:00 收；EDT 夏令时同口径
+        # （ZoneInfo 保证 7 月仍是挂钟 16:00）
+        for (y, m, d) in ((2026, 11, 3), (2026, 7, 13)):
+            with self.subTest(date=f"{y:04d}-{m:02d}-{d:02d}"):
+                q = _quote("NVDA", tradeDate=f"{y:04d}-{m:02d}-{d:02d}", source="nasdaq", price=203.0)
+                n_pre = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                                        now_et=self._et(y, m, d, 15, 59))
+                self.assertEqual(n_pre, 0)
+                n_post = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                                         now_et=self._et(y, m, d, 16, 0))
+                self.assertEqual(n_post, 1)
+
+    def test_exempt_sources_not_gated(self) -> None:
+        # 豁免源不过此门：CN 由批量权威写者覆盖，eod/fred 收盘口径，sina/eastmoney
         # 现价口径自洽——asOf=今日+任意时钟都写
         for src in ("mootdx", "sina", "eod", "fred", "eastmoney"):
             with self.subTest(source=src):
