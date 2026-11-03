@@ -33,6 +33,7 @@ _CN_PREFIX_WHITELIST: dict[int, tuple[str, ...]] = {
 # ── 段位→市场/目录 路由口径（唯一定义处；取数侧与查询侧只引用，不另起一份）──
 # 个股/ETF：上面的前缀白名单 → market/series/（.SH/.SZ 后缀记法）。
 # 88 段（880300-881999）= TDX 板块指数 → sector/series/（裸 6 位码）。
+#   区间数值由 update_market_series.build_sector_list 执行；扩段须两处同改。
 # 000/399 段 = 交易所核心指数 → index/series/（裸 6 位码）。取数侧 mootdx
 #   index_bars 的 market 路由：symbol[:2] in ('00','88','99') → SH、其余 → SZ
 #   ——000xxx→SH、399xxx→SZ 恰好都对；北证50 899050（89 前缀）落 SZ，而 BSE

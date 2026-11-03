@@ -210,16 +210,22 @@ _CORE_INDICES = [  # 交易所核心指数（2026-11-03 用户拍板加入，spe
 ]
 
 
+_LIST_ROUND_LABELS = {"sectors": "板块", "indices": "指数"}  # scope→日志措辞 1:1
+
+
 def _run_list_round(data_root: Path, scope: str, items: list[dict], *, backfill: int,
                     latest: str | None, force: bool,
-                    path_of: Callable[[Path, str], Path], label: str) -> dict:
+                    path_of: Callable[[Path, str], Path]) -> dict:
     """清单制 scope（sectors/indices）共用的一轮更新——第三次复制时按评审建议提取。
 
     skip/empty/locked/fail 分类与完成标记条件（I2）在此唯一定义：empty 不阻止
     标记（空返回=无数据票天天有，e2e 实测 ~45 只），锁冲突阻止（那批票当日确实
     没写，写标记会被闸门整轮短路掩盖）。stocks 不走这里：多 amount 写者指纹
     逐票 skip 与 tickers 子集路径，标记条件另有 not tickers（run_stocks_update）。
+    日志措辞按 scope 从 _LIST_ROUND_LABELS 取（第四轮 Minor3）——label 曾是独立
+    参数，scope/label 错配只错日志措辞且测试不拦，映射进函数让错配不可能发生。
     """
+    label = _LIST_ROUND_LABELS[scope]
     stats = {"ok": 0, "skip": 0, "fail": 0}
     lock_conflict = False
     for item in items:
@@ -262,7 +268,7 @@ def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | Non
         return {"ok": 0, "skip": 0, "fail": 0}
     return _run_list_round(data_root, "indices", _CORE_INDICES, backfill=backfill,
                            latest=latest, force=force,
-                           path_of=index_series_file, label="指数")
+                           path_of=index_series_file)
 
 
 def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
@@ -276,7 +282,7 @@ def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | Non
     merged, _added = load_or_merge_sector_list(data_root, stocks_df)
     return _run_list_round(data_root, "sectors", merged, backfill=backfill,
                            latest=latest, force=force,
-                           path_of=sector_series_file, label="板块")
+                           path_of=sector_series_file)
 
 
 def main(argv: list[str] | None = None) -> int:

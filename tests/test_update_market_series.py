@@ -370,13 +370,16 @@ class SectorTests(unittest.TestCase):
         self.assertFalse(fake.calls)  # 连清单枚举的 stocks 调用都没有（闸门在枚举之前）
 
     def test_sectors_lock_conflict_counts_skip_and_blocks_marker(self) -> None:
-        # I2 sectors 调用点同款：锁冲突 → skip 不 ok，当轮 sectors 标记不写
+        # I2 sectors 调用点同款：锁冲突 → skip 不 ok，当轮 sectors 标记不写。
+        # 第四轮 Minor1：顺手断言 Warning 全文——stats/标记/数据全对但 label 传错
+        # 的内部不一致只有日志措辞能暴露，mock log 把措辞钉成永久回归网
         @contextmanager
         def fake_lock(data_root, name, *, timeout_s=1.0):
             yield False
 
+        logs: list[str] = []
         df = self._stocks_sh([("880301", "行业A")])
-        with patch.object(ums, "series_lock", fake_lock):
+        with patch.object(ums, "log", logs.append), patch.object(ums, "series_lock", fake_lock):
             with patch.object(ums, "load_or_merge_sector_list", return_value=(
                     [{"code": "880301", "name": "行业A", "category": "行业/概念"}], [])):
                 index_df = _bars_frame(["2026-11-02"], [3300.0], up_count=[16], down_count=[15])
@@ -385,6 +388,46 @@ class SectorTests(unittest.TestCase):
                     stats = ums.run_sectors_update(self.root, latest="2026-11-03")
         self.assertEqual(stats, {"ok": 0, "skip": 1, "fail": 0})
         self.assertIsNone(ums.last_round_date(self.root, "sectors"))
+        self.assertIn("Warning: 板块 880301 锁被其它进程持有，本次未更新——完成标记不写", logs)
+
+    def test_sectors_tail_latest_skips(self) -> None:
+        # 第四轮 Minor2：sectors 逐票 skip 专项（对齐 stocks/indices 两侧）——
+        # 尾行==latest 的板块不打服务器，其余照常拉
+        items = [{"code": "880301", "name": "行业A", "category": "行业/概念"},
+                 {"code": "880324", "name": "概念B", "category": "行业/概念"}]
+        sector_series_file(self.root, "880301").parent.mkdir(parents=True)
+        sector_series_file(self.root, "880301").write_text(
+            '{"date": "2026-11-03", "close": 3300.0, "source": "mootdx-index"}\n', encoding="utf-8")
+        # stocks 必须给：run_sectors_update 在清单合并前有枚举调用（load_or_merge 已 mock 仍会调用）
+        fake = FakeMootdx(stocks=_stocks_frame([("880301", "行业A")]),
+                          index_bars=_bars_frame(["2026-11-03"], [3300.0]))
+        with patch.object(ums, "load_or_merge_sector_list", return_value=(items, [])):
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_sectors_update(self.root, latest="2026-11-03")
+        self.assertEqual(stats, {"ok": 1, "skip": 1, "fail": 0})
+        self.assertNotIn("index_bars:880301:off30", fake.calls)  # 尾行已最新：零服务器调用
+        self.assertIn("index_bars:880324:off30", fake.calls)     # 其余板块照常
+
+    def test_sectors_single_failure_counted_marker_blocked(self) -> None:
+        # 第四轮 Minor2：sectors fail>0 阻标记专项（对齐 stocks/indices 两侧）；
+        # 顺带断言 fail Warning 全文（Minor1 的第二条模板，sectors 侧）
+        items = [{"code": "880301", "name": "行业A", "category": "行业/概念"},
+                 {"code": "880324", "name": "概念B", "category": "行业/概念"}]
+
+        def flaky(method: str, **kwargs):
+            if method == "index_bars" and kwargs.get("symbol") == "880301":
+                raise RuntimeError("socket dead")
+            return _bars_frame(["2026-11-03"], [3300.0])
+
+        logs: list[str] = []
+        with patch.object(ums, "log", logs.append):
+            with patch.object(ums, "load_or_merge_sector_list", return_value=(items, [])):
+                with patch.object(ums, "_mootdx_call", flaky):
+                    stats = ums.run_sectors_update(self.root, latest="2026-11-03")
+        self.assertEqual(stats, {"ok": 1, "skip": 0, "fail": 1})
+        self.assertIsNone(ums.last_round_date(self.root, "sectors"))  # fail>0 不写标记
+        self.assertTrue(sector_series_file(self.root, "880324").exists())  # 其余板块照常写
+        self.assertIn("Warning: 板块 880301 更新失败: socket dead", logs)
 
 
 class IndicesTests(unittest.TestCase):
@@ -440,17 +483,21 @@ class IndicesTests(unittest.TestCase):
         self.assertEqual(stats, {"ok": len(ums._CORE_INDICES) - 1, "skip": 1, "fail": 0})
 
     def test_indices_lock_conflict_counts_skip_and_blocks_marker(self) -> None:
-        # 评审 Minor4：indices 的锁冲突路径与 stocks/sectors 同款（复制代码须测试钉漂移）
+        # 评审 Minor4：indices 的锁冲突路径与 stocks/sectors 同款（复制代码须测试钉漂移）。
+        # 第四轮 Minor1：断言 Warning 全文，措辞「指数」由 scope 映射而来
         @contextmanager
         def fake_lock(data_root, name, *, timeout_s=1.0):
             yield False
 
-        with patch.object(ums, "series_lock", fake_lock):
+        logs: list[str] = []
+        with patch.object(ums, "log", logs.append), patch.object(ums, "series_lock", fake_lock):
             fake = FakeMootdx(index_bars=_bars_frame(["2026-11-03"], [3300.0]))
             with patch.object(ums, "_mootdx_call", fake):
                 stats = ums.run_indices_update(self.root, latest="2026-11-04")
         self.assertEqual(stats, {"ok": 0, "skip": len(ums._CORE_INDICES), "fail": 0})
         self.assertIsNone(ums.last_round_date(self.root, "indices"))  # 锁冲突轮不写标记
+        self.assertIn("Warning: 指数 000001 锁被其它进程持有，本次未更新——完成标记不写", logs)
+        self.assertEqual(len([m for m in logs if "锁被其它进程持有" in m]), len(ums._CORE_INDICES))
 
     def test_indices_single_failure_counted_marker_blocked(self) -> None:
         def flaky(method: str, **kwargs):
@@ -458,10 +505,12 @@ class IndicesTests(unittest.TestCase):
                 raise RuntimeError("socket dead")
             return _bars_frame(["2026-11-03"], [3300.0])
 
-        with patch.object(ums, "_mootdx_call", flaky):
+        logs: list[str] = []
+        with patch.object(ums, "log", logs.append), patch.object(ums, "_mootdx_call", flaky):
             stats = ums.run_indices_update(self.root, latest="2026-11-04")
         self.assertEqual(stats, {"ok": len(ums._CORE_INDICES) - 1, "skip": 0, "fail": 1})
         self.assertIsNone(ums.last_round_date(self.root, "indices"))  # fail>0 不写标记
+        self.assertIn("Warning: 指数 000001 更新失败: socket dead", logs)  # 第四轮 Minor1 措辞断言
 
 
 if __name__ == "__main__":
