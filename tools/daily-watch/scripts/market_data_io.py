@@ -30,6 +30,15 @@ _CN_PREFIX_WHITELIST: dict[int, tuple[str, ...]] = {
     0: ("00", "30", "15", "16"),        # SZ：主板/创业股票 + ETF（16=LOF）
 }
 
+# ── 段位→市场/目录 路由口径（唯一定义处；取数侧与查询侧只引用，不另起一份）──
+# 个股/ETF：上面的前缀白名单 → market/series/（.SH/.SZ 后缀记法）。
+# 88 段（880300-881999）= TDX 板块指数 → sector/series/（裸 6 位码）。
+# 000/399 段 = 交易所核心指数 → index/series/（裸 6 位码）。取数侧 mootdx
+#   index_bars 的 market 路由：symbol[:2] in ('00','88','99') → SH、其余 → SZ
+#   ——000xxx→SH、399xxx→SZ 恰好都对；北证50 899050（89 前缀）落 SZ，而 BSE
+#   是 market=2 同样到不了，维持 spec 排除 BSE 口径不收（第三轮评审 I-4 定案）。
+# 查询侧 query_market._view_for 裸码路由视图，是同一口径的投影方。
+
 _ET = ZoneInfo("America/New_York")  # 海外源 epoch 的交易所时区
 _LOCK_STALE_S = 600.0  # 超过 10 分钟的锁视为崩溃残留，强制接管
 

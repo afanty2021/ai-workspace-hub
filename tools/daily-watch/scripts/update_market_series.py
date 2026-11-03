@@ -12,7 +12,7 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -53,9 +53,10 @@ def last_round_date(data_root: Path, scope: str) -> str | None:
     ② market 文件由钩子与批量共同写，钩子行 source 同为 "mootdx"（fetch 口径），
        按 source 区分写者不可行；日报先于 16:30 跑会把当日误判为「已批量」
        → 当日全市场 T+1。
-    标记与数据文件解耦，只在干净全量轮写入（见 run_stocks_update / run_sectors_update
-    尾部：not tickers and fail == 0 and latest is not None 且本轮无锁冲突——锁冲突轮
-    有票确实没写，写标记会让闸门把它掩盖成「当日已完成」）。
+    标记与数据文件解耦，只在干净全量轮写入（stocks 见 run_stocks_update、清单制
+    scope 见 _run_list_round 尾部：fail == 0 and latest is not None（stocks 另有
+    not tickers）且本轮无锁冲突——锁冲突轮有票确实没写，写标记会让闸门把它
+    掩盖成「当日已完成」）。
     """
     marker = data_root / ".state" / f"last_{scope}_round"
     if not marker.exists():
@@ -196,9 +197,8 @@ def load_or_merge_sector_list(data_root: Path, stocks_df: pd.DataFrame) -> tuple
 
 
 _CORE_INDICES = [  # 交易所核心指数（2026-11-03 用户拍板加入，spec §4.2/§5.2）
-    # mootdx index_bars 路由：00/88/99 前缀→SH，其余→SZ——上证段 000xxx→SH、
-    # 深指段 399xxx→SZ 恰好都对；北证50 899050（89 前缀）会路由 SZ，而 BSE 是
-    # market=2 同样到不了——维持 spec 排除 BSE 口径不收
+    # 段位→市场路由口径唯一定义在 market_data_io.py（_CN_PREFIX_WHITELIST 邻近
+    # 注释块）：本清单全在 000/399 交易所指数段，000xxx→SH、399xxx→SZ 恰好都对
     {"code": "000001", "name": "上证指数"},
     {"code": "000016", "name": "上证50"},
     {"code": "000300", "name": "沪深300"},
@@ -210,81 +210,73 @@ _CORE_INDICES = [  # 交易所核心指数（2026-11-03 用户拍板加入，spe
 ]
 
 
+def _run_list_round(data_root: Path, scope: str, items: list[dict], *, backfill: int,
+                    latest: str | None, force: bool,
+                    path_of: Callable[[Path, str], Path], label: str) -> dict:
+    """清单制 scope（sectors/indices）共用的一轮更新——第三次复制时按评审建议提取。
+
+    skip/empty/locked/fail 分类与完成标记条件（I2）在此唯一定义：empty 不阻止
+    标记（空返回=无数据票天天有，e2e 实测 ~45 只），锁冲突阻止（那批票当日确实
+    没写，写标记会被闸门整轮短路掩盖）。stocks 不走这里：多 amount 写者指纹
+    逐票 skip 与 tickers 子集路径，标记条件另有 not tickers（run_stocks_update）。
+    """
+    stats = {"ok": 0, "skip": 0, "fail": 0}
+    lock_conflict = False
+    for item in items:
+        code = item["code"]
+        path = path_of(data_root, code)
+        try:
+            rows = read_series_rows(path)
+            if rows and latest and rows[-1]["date"] >= latest and not force:
+                stats["skip"] += 1
+                continue
+            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
+            if outcome == "written":
+                stats["ok"] += 1
+            else:
+                stats["skip"] += 1
+                if outcome == "locked":
+                    lock_conflict = True
+                    log(f"Warning: {label} {code} 锁被其它进程持有，本次未更新——完成标记不写")
+        except Exception as exc:  # noqa: BLE001 — 单票失败不中断
+            stats["fail"] += 1
+            log(f"Warning: {label} {code} 更新失败: {exc}")
+    log(f"{scope} 汇总: {stats}")
+    if latest is not None and stats["fail"] == 0 and not lock_conflict:
+        write_round_marker(data_root, scope, latest)
+    return stats
+
+
 def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
                        force: bool = False) -> dict:
     """交易所核心指数批量（scope=indices，并入 all）：固定清单 + index_bars。
 
-    与 sectors 同款：index 目录只有批量这一个写者（钩子不碰），skip 判定只需日期
-    不需要 amount 指纹；per-scope 完成标记 last_indices_round（N1 同款隔离）。
-    force 同 stocks：绕过闸门与逐票 skip（--force 全 scope 语义一致）。
+    清单制共用轮见 _run_list_round；index 目录只有批量这一个写者（钩子不碰），
+    skip 判定只需日期不需要 amount 指纹；per-scope 完成标记 last_indices_round
+    （N1 同款隔离）。force 同 stocks：绕过闸门与逐票 skip（--force 全 scope 语义一致）。
     """
-    stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "indices")
     if latest and last_round and latest <= last_round and not force:
         log(f"交易日闸门（indices）：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
-        return stats
-    lock_conflict = False
-    for item in _CORE_INDICES:
-        code = item["code"]
-        path = index_series_file(data_root, code)
-        try:
-            rows = read_series_rows(path)
-            if rows and latest and rows[-1]["date"] >= latest and not force:
-                stats["skip"] += 1
-                continue
-            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
-            if outcome == "written":
-                stats["ok"] += 1
-            else:
-                stats["skip"] += 1
-                if outcome == "locked":
-                    lock_conflict = True
-                    log(f"Warning: 指数 {code} 锁被其它进程持有，本次未更新——完成标记不写")
-        except Exception as exc:  # noqa: BLE001
-            stats["fail"] += 1
-            log(f"Warning: 指数 {code} 更新失败: {exc}")
-    log(f"indices 汇总: {stats}")
-    if latest is not None and stats["fail"] == 0 and not lock_conflict:
-        write_round_marker(data_root, "indices", latest)
-    return stats
+        return {"ok": 0, "skip": 0, "fail": 0}
+    return _run_list_round(data_root, "indices", _CORE_INDICES, backfill=backfill,
+                           latest=latest, force=force,
+                           path_of=index_series_file, label="指数")
 
 
 def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
                        force: bool = False) -> dict:
-    stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "sectors")  # per-scope 标记：stocks 完成与否不影响本闸门（N1）
     if latest and last_round and latest <= last_round and not force:
         log(f"交易日闸门（sectors）：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
-        return stats  # 非交易日零服务器调用（spec §9 补注）
+        return {"ok": 0, "skip": 0, "fail": 0}  # 非交易日零服务器调用（spec §9 补注）
     stocks_df = _mootdx_call("stocks", market=1)
     merged, _added = load_or_merge_sector_list(data_root, stocks_df)
-    lock_conflict = False
-    for item in merged:
-        code = item["code"]
-        path = sector_series_file(data_root, code)
-        try:
-            rows = read_series_rows(path)
-            if rows and latest and rows[-1]["date"] >= latest and not force:
-                stats["skip"] += 1
-                continue
-            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
-            if outcome == "written":
-                stats["ok"] += 1
-            else:
-                stats["skip"] += 1
-                if outcome == "locked":
-                    lock_conflict = True
-                    log(f"Warning: 板块 {code} 锁被其它进程持有，本次未更新——完成标记不写")
-        except Exception as exc:  # noqa: BLE001
-            stats["fail"] += 1
-            log(f"Warning: 板块 {code} 更新失败: {exc}")
-    log(f"sectors 汇总: {stats}")
-    # 与 stocks 同款（I2）：empty 不阻止标记（板块空返回=无该段数据，天天有），锁冲突阻止
-    if latest is not None and stats["fail"] == 0 and not lock_conflict:
-        write_round_marker(data_root, "sectors", latest)
-    return stats
+    return _run_list_round(data_root, "sectors", merged, backfill=backfill,
+                           latest=latest, force=force,
+                           path_of=sector_series_file, label="板块")
 
 
 def main(argv: list[str] | None = None) -> int:
