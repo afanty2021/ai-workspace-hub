@@ -1,6 +1,6 @@
-# 市场数据持久化层评审记录（max 评审 + 修复波复查 + 合并后追加评审）
+# 市场数据持久化层评审记录（max 评审 + 修复波复查 + 合并后追加评审 + 重构复核）
 
-- 评审日：2026-11-03（三轮同日）
+- 评审日：2026-11-03（四轮同日）
 - 分支：`feat/market-data-persistence`，未 push 未合并
 - 第一轮 max 评审范围：`7e97b7c..c5eadcd`（15 commits，实现全量）
 - 修复波：`c5eadcd..ff32866`（5 commits）
@@ -8,7 +8,8 @@
 - 方式：第一轮三席位并行（写入核心 / 卫星模块+查询层 / spec-文档一致性）；第二轮单复核席位；协调者两轮均独立实测（测试套件 + 真实 `data/` 取证 + 活体复现）
 - 测试基线：第一轮 225 全绿 → 修复波后 238 全绿（+13，全为行为级断言）
 - 第三轮 max 评审范围：`8333c43..d8a005e`（合并 main 后追加 2 commits：`81964cb` --force 修根、`d8a005e` 交易所核心指数 v0.3c）
-- 当前状态：前两轮已闭环（处置后 249 绿、已合并 main）；第三轮 **With fixes（4 Important + 6 Minor）** 修复批次待用户拍板；当日盘中标记已安排 15:10 一次性任务清除、16:30 cron 整轮重跑
+- 第四轮 max 评审范围：`88879bc..f7b11e4`（第三轮遗留两条重构建议落地：`80e9efc` 提取 `_run_list_round` + 口径注释钉一处、`f7b11e4` 处置小节）
+- 当前状态：前三轮已闭环（第三轮 Important 4 + Minor 6 全修、两条重构建议已落地）；第四轮 **Yes（0 Critical / 0 Important / 4 Minor）**，4 Minor 已全修（见文末处置）；直提 main、未推送等点名
 
 ---
 
@@ -197,3 +198,53 @@
 - **①提取 `_run_list_round`**：sectors/indices 清单制共用轮——skip/empty/locked/fail 分类与完成标记条件（I2）唯一定义在此；stocks 不并入（多 amount 写者指纹逐票 skip 与 tickers 子集路径，标记条件另有 not tickers，docstring 注明）。两处 run_* 各瘦身为「闸门 + 清单准备 + 委托」
 - **②段位→市场口径注释钉一处**：唯一定义在 `market_data_io.py`（`_CN_PREFIX_WHITELIST` 邻近注释块，含 mootdx index_bars 00/88/99→SH 路由与 89 段不收 BSE 理由）；`update_market_series._CORE_INDICES` 与 `query_market._view_for` 两处缩成一行结论+引用
 - 行为零变化：259 测试绿、ruff 过（E/F/W ignore E501）、真实闸门冒烟三条消息与重构前逐字一致（标记 mtime 不动，零副作用）；已提交 80e9efc（重构）+ 本 docs commit（评审记录自身，commit 哈希以 git log 为准），未推送等点名
+
+---
+
+## 第四轮：max 评审（88879bc..f7b11e4，两条重构建议落地复核）
+
+- 方式：单席位 max 评审——除逐行静态比对外构建**对拍 harness**：`importlib` 并排加载 `git show 88879bc` 旧模块与新版模块，同参数各跑一遍，逐字节比对全部可观测量（完整日志消息序列、stats、标记文件内容、服务器调用序列、数据文件树）；仓库全程只读，评审后确认工作树 clean、HEAD 仍在 f7b11e4
+- 对拍场景 22 个（sectors×11、indices×10、外加 stocks 枚举异常传播）：干净全量轮、逐票 skip（尾行==latest）、空返回（部分/全部）、单票失败阻标记、锁冲突阻标记、force 绕过逐票 skip、闸门短路（零服务器调用）、闸门+force 仍真跑、全清单 skip 后标记照写、`latest=None` 不写标记、sectors 清单首写
+- `run_stocks_update` 与 `main` 机械验证字节相同（awk 提取 + diff）；`--tickers` 路径零触碰——「不并入」声称兑现
+
+### 结论：Ready to merge — Yes（0 Critical / 0 Important / 4 Minor）
+
+### 核验要点
+
+- 22 场景全部逐字节一致，比对对象含 `{scope} 汇总: {stats}`、`Warning: {label} {code} 锁被.../更新失败: {exc}` 等全部消息串
+- 两处刻意「不合并」判断正确且有据：stocks 的 amount 写者指纹逐票 skip 与 tickers 子集路径确实与清单制语义不同构，第三轮建议原文也只点名 `run_indices_update`/`run_sectors_update`；`_run_list_round` docstring 把排除理由写死，防后人错误「补全」抽象
+- 钉住的口径注释经事实核查准确：mootdx `quotes.py:263` 路由 `symbol[:2] in ('00','88','99') → SH、其余 → SZ` 逐字吻合；899050 实测经 `index_bars` 落 SZ、BSE=market 2 到不了——「不收北证50」结论复核成立
+- 建议 B 落地比原文更好且**非静默偏离**：原文是「钉一处、另一处引用」，实现钉在取数/查询两侧共同 import 的 `market_data_io.py`（第三方基座），两处下游都缩成引用——依赖方向更干净，docs 明写
+- 验证声称逐条兑现：259 passed + 3 subtests（评审员实测）、ruff 全过（`select=["E","F","W"], ignore=["E501"]` 与声称一致）、标记 mtime（15:10）早于重构提交时刻（18:16）自洽
+- docs 提交（f7b11e4）忠实描述代码提交（80e9efc），含「未推送等点名」状态
+
+### Minor（4 条，遗留缺口或权衡项、非本批引入，待拍板）
+
+1. **日志措辞零测试断言**（遗留缺口）：全套测试不捕获 log 输出；未来某 call site 传错 `label`（板块↔指数）时 stats/标记/数据全对、259 全绿，只有日志措辞错。修法：现有 sectors/indices lock_conflict 测试顺手断言两条 Warning 全文（mock `log`，与 FakeMootdx 风格一致），半小时级
+2. **sectors 缺 fail>0 阻标记与逐票 skip 专项测试**（遗留缺口）：stocks/indices 各有专项（`test_marker_written_only_for_clean_full_round` / `test_indices_single_failure_counted_marker_blocked`），sectors 两侧都缺；空返回分类同理（现仅 stocks 侧有专项）。重构后分类逻辑单点化边际风险已小（本次经对拍补验），第三个共用方补两个用例即可对齐
+3. **`scope` 与 `label` 1:1 强耦合双参数**（`update_market_series.py:213-215` 签名、`:263-265`/`:277-279` call sites）：错配只产生内部不一致消息且测试不拦（同根因于 Minor 1）。可函数内 `{"sectors": "板块", "indices": "指数"}` 映射消掉 `label` 参数；反方：显式参数更直白、call site 仅两处相邻——权衡项非必改
+4. **880300-881999 区间注释/代码各一份**（`market_data_io.py:35` 注释 + `update_market_series.py:175` `build_sector_list` 执行代码）：「唯一定义处」针对路由理由成立；数值区间若扩段需两处同改，注释补一句「区间由 build_sector_list 执行」指回即可，纳米级
+
+### Recommendations（评审员）
+
+- 补 Minor 1/2 的三四个断言，把「消息逐字一致」从一次性人工冒烟变成永久回归网——本次重构唯一没留降落伞的地方
+- 对拍 harness 思路（新旧模块并排加载、逐场景逐字节比对）值得下次「行为零变化」重构复用；比「测试全绿」强一个量级，因为测试本来就不断言消息措辞
+
+### 环境备注（与被评审代码无关）
+
+- 评审子代理 shell 内 `conda run -n Quant-3.11` 因 shell 快照 `__conda_exe` 权限问题不可用，改用 `/opt/homebrew/Caskroom/miniconda/base/envs/Quant-3.11/bin/python` 直跑同一环境（主会话不受影响）
+- 协调者任务书误写测试路径 `tools/daily-watch/tests`，实际套件在仓库根 `tests/`，评审员自行纠正
+
+### 处置记录（2026-11-03 同日，用户点名「修复所有剩余问题」，4 Minor 全修）
+
+| 项 | 落点 |
+|---|---|
+| Minor 1 日志措辞零断言 | sectors/indices lock_conflict 测试 + indices/sectors fail 测试共 4 处断言 Warning 全文（`patch.object(ums, "log", logs.append)` 与 FakeMootdx 同风格）；indices lock 测试另断言锁 Warning 条数=清单长度 |
+| Minor 2 sectors 缺专项 | 补 `test_sectors_tail_latest_skips`（尾行==latest 零服务器调用+其余照常）与 `test_sectors_single_failure_counted_marker_blocked`（fail>0 阻标记+其余照常写），对齐 stocks/indices 两侧 |
+| Minor 3 scope/label 双参数 | `label` 参数删除，`_LIST_ROUND_LABELS = {"sectors": "板块", "indices": "指数"}` 函数内映射；docstring 注明错配不可能发生的理由；两个 call site 各删一个实参 |
+| Minor 4 区间注释/代码两份 | `market_data_io.py` 88 段注释补一行「区间数值由 update_market_series.build_sector_list 执行；扩段须两处同改」 |
+
+- **断言有效性变异验证**：临时交换映射值（板块↔指数）→ 4 个措辞断言测试**全数失败**（两 scope × 两 Warning 模板都拦住），还原后 261 全绿——「永久回归网」不止是摆设
+- 测试 259 → **261 全绿**（+2 全为 sectors 专项，零摆设）；ruff（E/F/W、ignore E501）过；行为零变化（Minor 3 只改措辞来源，消息文本逐字不变）
+- 首跑曾踩 FakeMootdx 缺 `stocks` 枚举调用的坑（tail-skip 测试一次性），补齐即绿
+- 未提交未推送，等用户点名
