@@ -89,8 +89,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Persist fetch payload snapshot + watchlist series")
     parser.add_argument("--snapshot-file", required=True, help="fetch_market_data.py > x.json 的重定向产物")
     args = parser.parse_args(argv)
-    payload = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
-    run_persist_hook(payload)
+    snapshot = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
+    # 两种入参都接受（spec §5.1 CLI 手工补跑用）：fetch 原始输出（顶层 quotes 直接在）与
+    # data/market/daily/ 落盘的 wrapper（顶层 payload）。直传 wrapper 不解包会零行追加、
+    # 且把 wrapper 再包一层重写当日快照（静默数据损坏路径，friction-log 修根）
+    if isinstance(snapshot.get("payload"), dict):
+        snapshot = snapshot["payload"]
+    run_persist_hook(snapshot)
     return 0
 
 
