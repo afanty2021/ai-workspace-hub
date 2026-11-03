@@ -14,7 +14,13 @@ import pandas as pd
 from _test_paths import REPO_ROOT  # noqa: F401
 
 import update_market_series as ums  # noqa: E402
-from market_data_io import read_series_rows, sector_series_file, series_file, upsert_series_rows  # noqa: E402
+from market_data_io import (  # noqa: E402
+    index_series_file,
+    read_series_rows,
+    sector_series_file,
+    series_file,
+    upsert_series_rows,
+)
 
 
 def _bars_frame(dates: list[str], closes: list[float], **extra: dict) -> pd.DataFrame:
@@ -356,6 +362,59 @@ class SectorTests(unittest.TestCase):
                     stats = ums.run_sectors_update(self.root, latest="2026-11-03")
         self.assertEqual(stats, {"ok": 0, "skip": 1, "fail": 0})
         self.assertIsNone(ums.last_round_date(self.root, "sectors"))
+
+
+class IndicesTests(unittest.TestCase):
+    """交易所核心指数（2026-11-03 加入，scope=indices/并入 all）：固定清单 + index_bars。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_indices_update_upserts_all_core_indices(self) -> None:
+        fake = FakeMootdx(index_bars=_bars_frame(["2026-11-03"], [3300.0]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_indices_update(self.root, latest="2026-11-04")
+        self.assertEqual(stats, {"ok": len(ums._CORE_INDICES), "skip": 0, "fail": 0})
+        requested = [c for c in fake.calls if c.startswith("index_bars:")]
+        self.assertEqual(len(requested), len(ums._CORE_INDICES))  # 固定清单逐个打 index_bars
+        self.assertIn("index_bars:000001:off30", requested)   # 上证指数
+        self.assertIn("index_bars:399001:off30", requested)   # 深证成指（SZ 段）
+        row = read_series_rows(index_series_file(self.root, "000001"))[-1]
+        self.assertEqual(row["date"], "2026-11-03")
+        self.assertEqual(row["source"], "mootdx-index")
+        self.assertEqual(ums.last_round_date(self.root, "indices"), "2026-11-04")  # 干净轮写标记
+
+    def test_indices_gate_reads_own_marker_not_stocks_sectors(self) -> None:
+        # N1 同款隔离：stocks/sectors 的完成标记不得挡 indices
+        ums.write_round_marker(self.root, "stocks", "2026-11-04")
+        ums.write_round_marker(self.root, "sectors", "2026-11-04")
+        fake = FakeMootdx(index_bars=_bars_frame(["2026-11-03"], [3300.0]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_indices_update(self.root, latest="2026-11-04")
+        self.assertEqual(stats["ok"], len(ums._CORE_INDICES))  # 两个标记在，indices 照跑
+        self.assertEqual(ums.last_round_date(self.root, "indices"), "2026-11-04")
+
+    def test_indices_gate_short_circuits_on_own_marker(self) -> None:
+        ums.write_round_marker(self.root, "indices", "2026-11-04")
+        fake = FakeMootdx(index_bars=_bars_frame(["2026-11-03"], [3300.0]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_indices_update(self.root, latest="2026-11-04")
+        self.assertEqual(stats, {"ok": 0, "skip": 0, "fail": 0})
+        self.assertFalse(fake.calls)  # 非交易日/已完成日零服务器调用
+
+    def test_indices_tail_latest_skips(self) -> None:
+        index_series_file(self.root, "000001").parent.mkdir(parents=True)
+        index_series_file(self.root, "000001").write_text(
+            '{"date": "2026-11-04", "close": 3300.0, "amount": 1.0, "source": "mootdx-index"}\n',
+            encoding="utf-8")
+        fake = FakeMootdx(index_bars=_bars_frame(["2026-11-04"], [3300.0]))
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_indices_update(self.root, latest="2026-11-04")
+        self.assertEqual(stats, {"ok": len(ums._CORE_INDICES) - 1, "skip": 1, "fail": 0})
 
 
 if __name__ == "__main__":

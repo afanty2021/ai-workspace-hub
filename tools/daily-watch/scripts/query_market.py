@@ -31,6 +31,7 @@ def _require_duckdb():
 _VIEW_PATTERNS = {
     "market_quotes": "market/series/*.jsonl",
     "sector_index": "sector/series/*.jsonl",
+    "index_series": "index/series/*.jsonl",
     "finance": "finance/gpcw-*.jsonl",
     "custom_series": "custom/*.jsonl",  # registry.json 不是 .jsonl，天然排除
 }
@@ -61,8 +62,14 @@ def ensure_view(con, data_root: Path, view: str) -> None:
 
 
 def _view_for(ticker: str) -> str:
-    """裸 6 位 = 板块代码 → sector_index；其余（.SH/.SZ 后缀、海外票）→ market_quotes。"""
-    return "sector_index" if re.fullmatch(r"\d{6}", ticker) else "market_quotes"
+    """裸 6 位按段位路由：88 前缀 = TDX 板块 → sector_index；000/399 前缀 = 交易所
+    指数 → index_series；其余（.SH/.SZ 后缀、海外票、其它裸代码）→ market_quotes。"""
+    if re.fullmatch(r"\d{6}", ticker):
+        if ticker.startswith("88"):
+            return "sector_index"
+        if ticker.startswith(("000", "399")):
+            return "index_series"
+    return "market_quotes"
 
 
 def _rows(con, sql: str, params: tuple = ()) -> list[dict[str, Any]]:

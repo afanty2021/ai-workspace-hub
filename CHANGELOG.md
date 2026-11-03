@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 新增
+
+- 持久化层追加交易所核心指数（2026-11-03 用户拍板，spec v0.3c）：`update_market_series.py --scope indices`（并入 all，固定清单 8 个：上证指数/上证50/沪深300/中证500/中证1000/科创50/深证成指/创业板指），落 `data/index/series/{裸6位}.jsonl`（source=mootdx-index，`last_indices_round` per-scope 完成标记，与 stocks/sectors 闸门隔离）；query_market 加 `index_series` 视图、裸 000/399 段路由指数、88 段仍走板块；北证50 899050 不收（mootdx 按 99 前缀误路由 SH，维持排除 BSE）。同批：`--force` 跳过逐票 skip 强制重拉（历史回补场景，friction 第 2 次触发修根），17 只 watchlist 票 30 行缺口已用其回补至 800 行。
+
 ### 修复
 
 - 评审修复（2026-11-02 mootdx 接入评审）：mootdx 批量快照按服务器端单次 80 行上限分块（pytdx 客户端不截断、超量部分服务端静默丢弃，股票池超 80 只时尾部票会缺数），配分块测试；`_preserve_mootdx_bestip` 注释威胁模型按 mootdx 0.11.7 源码更正（`config.set()` 只改内存不落盘，保护对象是本进程内裸 factory 兜底读到的 BESTIP，非跨进程配置）；降级测试重构为真实穿过 fallback 链（原 mock 使 missing 为空、链路未被测到，且按票 mootdx 未 patch 存在真实联网风险）；mootdx 测试不再 mock 锁并断言可重入类型（RLock 被改回 Lock 时当场红）；补齐 `tools/daily-watch/README.md` 八处过时（数据源表、Fallback 顺序、零 Key 矩阵、目录结构、环境变量等）并修 CHANGELOG 重复标题与 DATA-SOURCES 重复段两处编辑事故；DATA-SOURCES 补通达信协议明文无加密声明；`system/skills/daily-watch.md` 新增文档同步四点 checklist（工具 README / DATA-SOURCES / skill / AGENTS+CLAUDE+模板），根治「改入口文档漏其余处」第二次返工。追加固化：锁契约测试补真实重入的限时守护线程检测（普通 Lock 回归由死锁挂起转为 5 秒内确定性失败，其余批量用例不再触发真实重入），`get_cached_tushare_client` 补缓存语义直测（空 token 不建连、同 token 复用、换 token 重建、初始化失败不缓存）；候选服务器无上限与 bars 失败 tradeDate 空串两项作为已记录取舍维持现状（取舍理由写入模块 docstring）。

@@ -4,6 +4,7 @@
 - 状态：**已批准**（2026-11-02 用户批准 v0.2；v0.3 为实施计划复查引出的闸门语义修正；实施计划 `docs/superpowers/plans/2026-11-02-market-data-persistence.md`）
 - 修订：v0.3a —— 2026-11-03 终审：逐票 skip 加 amount 写者指纹（同日钩子先写的票不跳过，§9 当日权威覆盖当日可达）
 - 修订：v0.3b —— 2026-11-03 merge 前评审：parse_trade_date 补 %b 缩写月（Nasdaq 真实格式，NVDA/指数 series 零积累根修）+ 日历校验；custom slug 白名单防写穿；_upsert_bars 空/锁返回转 skip 且锁冲突不写完成标记；URL 参数排序 dedup
+- 修订：v0.3c —— 2026-11-03 用户拍板追加：交易所核心指数（8 个，`--scope indices` 并入 all，data/index/series/ 裸 6 位码，last_indices_round per-scope 标记）；update_market_series 加 `--force`（跳过逐票 skip 强制重拉，历史回补场景）
 - 修订：v0.3 —— 2026-11-02 实施计划复查（N1/N2）：交易日闸门完成判据由「本地全体 tail 最大值」改为 `data/.state/` per-scope 完成标记（canary 板块文件会被 `--scope sectors` 单独执行写脏、market 文件混有钩子行，数据文件当标志会误判整轮已更）；§11.7/11.8 验收口径随之同步
 - 修订：v0.2 —— 2026-11-02 双轨评审（设计健全性 + 事实核查，关键数值已离线复算）后修订：写者权威规则、命名契约、原子写、列名统计修正（403+256+9）、§4.3 示例改累计口径、cron 共存预案
 - 范围：daily-watch 工具族的本地数据持久化——行情时序、新闻原文快照、财务快照、板块指数时序、自定义数值序列
@@ -76,6 +77,8 @@ data/                                   # 整目录 gitignore，不入库
 ├── sector/
 │   ├── sector-list.json                # 板块清单（枚举生成，含名称与类别）
 │   └── series/{CODE}.jsonl             # 板块指数日线
+├── index/
+│   └── series/{CODE}.jsonl             # 交易所核心指数日线（裸 6 位码，2026-11-03 加入：上证指数/深证成指/创业板指/沪深300/中证500/中证1000/上证50/科创50）
 ├── finance/
 │   ├── _meta.json                      # 各期 gpcw 文件 hash 台账
 │   └── gpcw-YYYY-MM-DD.jsonl           # 按报告期全市场财务快照
@@ -91,6 +94,8 @@ data/                                   # 整目录 gitignore，不入库
 当日 fetch_market_data 的完整 payload（quotes/movers/earnings/meta 四键）**原样嵌套**落盘 + 包装字段：`{"schema_version": 1, "fetched_at": "<ISO>", "payload": {...原始 payload 原样...}}`。**同日重跑覆盖重写**（与日报本身的重跑语义一致）。fetch 现状只写 stdout：日报钩子拿到的是 generate_daily_report 内已解析的 dict（直接传入）；`--snapshot-file` 供手工补跑，文件由 `fetch_market_data.py > x.json` 重定向生成。
 
 ### 4.2 行情时序 `data/market/series/{TICKER}.jsonl` 与板块 `data/sector/series/{CODE}.jsonl`
+
+交易所核心指数（2026-11-03 追加，v0.3c）落 `data/index/series/{裸 6 位码}.jsonl`（与个股不同目录、码型不歧义；`update_market_series.py --scope indices` 并入 all，固定清单 8 个，走同一 index_bars 通道，source 同为 `mootdx-index`，完成标记 `last_indices_round` per-scope 隔离；北证50 899050 不收——mootdx 会按 99 前缀误路由 SH，维持排除 BSE 口径）。
 
 每行一个交易日，按日期升序追加：
 

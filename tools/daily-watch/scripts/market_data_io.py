@@ -47,6 +47,15 @@ def sector_series_file(data_root: Path, code: str) -> Path:
     return data_root / "sector" / "series" / f"{code}.jsonl"
 
 
+def index_series_file(data_root: Path, code: str) -> Path:
+    """交易所核心指数（上证指数/沪深300 等，spec §4.2）：裸 6 位码，与 TDX 板块目录分开。
+
+    不并入 market/series：那里 filename=个股/ETF 主键（.SH/.SZ 后缀），混入指数行
+    会污染按目录建的 DuckDB 视图语义（N4 写端同质性教训）。
+    """
+    return data_root / "index" / "series" / f"{code}.jsonl"
+
+
 def normalize_cn_symbol(code: str, market: int) -> str:
     """裸 6 位 + tdx market（0=SZ, 1=SH）→ watchlist 标称记法（§4.2 命名契约）。"""
     return f"{code}.{'SH' if market == 1 else 'SZ'}"

@@ -387,6 +387,7 @@ python3 tools/daily-watch/scripts/check_setup.py
     ├── market/daily/YYYY-MM-DD.json   # 日报快照：{schema_version, fetched_at, payload(原样)}；文件名日期=payload 的 fetched_at 日期段（UTC，回填旧快照写旧日期），缺失才退墙钟（本地时区）
     ├── market/series/{TICKER}.jsonl   # 逐票日线：date/open/high/low/close/volume/amount/source
     ├── sector/series/{CODE}.jsonl     # 板块指数：上行的字段 + up_count/down_count
+    ├── index/series/{CODE}.jsonl      # 交易所核心指数（裸 6 位码：上证指数/深证成指/创业板指/沪深300/中证500/中证1000/上证50/科创50，--scope indices 并入 all）
     ├── finance/gpcw-YYYY-MM-DD.jsonl  # 按报告期全市场财务快照（含北交所 353 行，series 层不含）
     ├── finance/_meta.json             # 各期 zip hash 台账（零下载探测）
     ├── finance/_raw/*.zip             # gpcw zip 下载缓存；不自动清理，148 期累计 ~700MB，是存储估算外的隐性占用
@@ -402,7 +403,7 @@ python3 tools/daily-watch/scripts/check_setup.py
 - 多写者规则：批量=权威写者（同日按字段覆盖），日报钩子=快照级（只补 null 绝不覆盖非空）；跨进程 `data/.locks/` 目录锁，拿不到即跳过。
 - 同日先跑日报再跑批量：watchlist 票的当日行会被批量收盘价权威覆盖（批量按 amount 非空识别自己的行，日报钩子行恒 amount=null）。
 - schema 演进只加字段不改语义；daily/finance 行带 schema_version，series/custom 逐行有意不带。
-- 板块指数为通达信自编指数（非交易所/申万口径），引用需标 TDX。
+- 板块指数为通达信自编指数（非交易所/申万口径），引用需标 TDX；交易所核心指数（index/series/）为裸 6 位码文件名（000001=上证指数 与个股 000001.SZ 平安银行靠目录区分），source 同为 mootdx-index。
 - 存储满配约 1GB（market 3 年 ~650MB + finance 148 期 ~300MB + sector ~120MB）；退市票文件冻结不删、单调慢涨；文件无校验和，单文件损坏的恢复手段 = 该票 `--backfill` 重拉。
 - DuckDB 视图对坏行置 NULL（ignore_errors）：max(date) 类聚合不受影响，count(*) 会把 torn 行计入。
 
@@ -415,6 +416,7 @@ python3 tools/daily-watch/scripts/check_setup.py
     python tools/daily-watch/scripts/update_market_series.py --scope all --backfill 800
     # 查询
     python tools/daily-watch/scripts/query_market.py quote --ticker 600276.SH
+    python tools/daily-watch/scripts/query_market.py quote --ticker 000001   # 裸 000/399 段 → 交易所指数
     python tools/daily-watch/scripts/query_market.py finance --ticker 300476 --last 4
     python tools/daily-watch/scripts/query_market.py sector --top 20
     # 缺口审计：找 tail 落后超过 7 天的票（cron 停摆自检）

@@ -18,6 +18,7 @@ import pandas as pd
 
 from market_data_io import (
     atomic_write_text,
+    index_series_file,
     is_cn_series_symbol,
     normalize_cn_symbol,
     read_series_rows,
@@ -194,6 +195,59 @@ def load_or_merge_sector_list(data_root: Path, stocks_df: pd.DataFrame) -> tuple
     return merged, added
 
 
+_CORE_INDICES = [  # 交易所核心指数（2026-11-03 用户拍板加入，spec §4.2/§5.2）
+    # mootdx index_bars 路由：00/88/99 前缀→SH，其余→SZ——上证段 000xxx→SH、
+    # 深指段 399xxx→SZ 恰好都对；北证50 899050 会被 99 前缀误路由 SH（BSE 段），
+    # 维持 spec 排除 BSE 口径不收
+    {"code": "000001", "name": "上证指数"},
+    {"code": "000016", "name": "上证50"},
+    {"code": "000300", "name": "沪深300"},
+    {"code": "000905", "name": "中证500"},
+    {"code": "000852", "name": "中证1000"},
+    {"code": "000688", "name": "科创50"},
+    {"code": "399001", "name": "深证成指"},
+    {"code": "399006", "name": "创业板指"},
+]
+
+
+def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | None = None) -> dict:
+    """交易所核心指数批量（scope=indices，并入 all）：固定清单 + index_bars。
+
+    与 sectors 同款：index 目录只有批量这一个写者（钩子不碰），skip 判定只需日期
+    不需要 amount 指纹；per-scope 完成标记 last_indices_round（N1 同款隔离）。
+    """
+    stats = {"ok": 0, "skip": 0, "fail": 0}
+    latest = latest or fetch_server_latest_trade_date()
+    last_round = last_round_date(data_root, "indices")
+    if latest and last_round and latest <= last_round:
+        log(f"交易日闸门（indices）：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
+        return stats
+    lock_conflict = False
+    for item in _CORE_INDICES:
+        code = item["code"]
+        path = index_series_file(data_root, code)
+        try:
+            rows = read_series_rows(path)
+            if rows and latest and rows[-1]["date"] >= latest:
+                stats["skip"] += 1
+                continue
+            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
+            if outcome == "written":
+                stats["ok"] += 1
+            else:
+                stats["skip"] += 1
+                if outcome == "locked":
+                    lock_conflict = True
+                    log(f"Warning: 指数 {code} 锁被其它进程持有，本次未更新——完成标记不写")
+        except Exception as exc:  # noqa: BLE001
+            stats["fail"] += 1
+            log(f"Warning: 指数 {code} 更新失败: {exc}")
+    log(f"indices 汇总: {stats}")
+    if latest is not None and stats["fail"] == 0 and not lock_conflict:
+        write_round_marker(data_root, "indices", latest)
+    return stats
+
+
 def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None) -> dict:
     stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
@@ -231,8 +285,8 @@ def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | Non
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="盘后批量更新全市场/板块时序（spec §5.2）")
-    parser.add_argument("--scope", choices=["stocks", "sectors", "all"], default="all")
+    parser = argparse.ArgumentParser(description="盘后批量更新全市场/板块/核心指数时序（spec §5.2）")
+    parser.add_argument("--scope", choices=["stocks", "sectors", "indices", "all"], default="all")
     parser.add_argument("--backfill", type=int, default=30,
                         help="增量 bars 数；800=回补约 3.3 年（服务器单次上限）")
     parser.add_argument("--tickers", help="逗号分隔子集，调试用（如 600276.SH,300476.SZ）")
@@ -261,6 +315,10 @@ def main(argv: list[str] | None = None) -> int:
         sec = run_sectors_update(data_root, backfill=args.backfill)
         for key in stats:
             stats[key] += sec[key]
+    if args.scope in ("indices", "all"):
+        idx = run_indices_update(data_root, backfill=args.backfill)
+        for key in stats:
+            stats[key] += idx[key]
     return 1 if stats["fail"] else 0
 
 
