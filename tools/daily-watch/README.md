@@ -387,7 +387,7 @@ python3 tools/daily-watch/scripts/check_setup.py
     ├── market/daily/YYYY-MM-DD.json   # 日报快照：{schema_version, fetched_at, payload(原样)}；文件名日期=payload 的 fetched_at 日期段（UTC，回填旧快照写旧日期），缺失才退墙钟（本地时区）
     ├── market/series/{TICKER}.jsonl   # 逐票日线：date/open/high/low/close/volume/amount/source
     ├── sector/series/{CODE}.jsonl     # 板块指数：上行的字段 + up_count/down_count
-    ├── index/series/{CODE}.jsonl      # 交易所核心指数（裸 6 位码：上证指数/深证成指/创业板指/沪深300/中证500/中证1000/上证50/科创50，--scope indices 并入 all）
+    ├── index/series/{CODE}.jsonl      # 交易所核心指数（裸 6 位码：上证指数/深证成指/创业板指/沪深300/中证500/中证1000/上证50/科创50，--scope indices 并入 all；字段同板块行，含 up_count/down_count）
     ├── finance/gpcw-YYYY-MM-DD.jsonl  # 按报告期全市场财务快照（含北交所 353 行，series 层不含）
     ├── finance/_meta.json             # 各期 zip hash 台账（零下载探测）
     ├── finance/_raw/*.zip             # gpcw zip 下载缓存；不自动清理，148 期累计 ~700MB，是存储估算外的隐性占用

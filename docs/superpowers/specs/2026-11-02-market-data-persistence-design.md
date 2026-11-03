@@ -106,7 +106,7 @@ data/                                   # 整目录 gitignore，不入库
 
 - **命名契约（文件名即主键）**：TICKER 统一为 watchlist 标称记法——A 股 `{6位}.SH/.SZ`（全市场枚举与 `--tickers` 入参必须经同一 normalize 函数：market=1→`.SH`、market=0→`.SZ`，禁止裸 6 位落盘产生 `600276.jsonl` 与 `600276.SH.jsonl` 分身）、海外票原样（`^SOX`、`NVDA`、`000660.KS`）；板块 CODE 为裸 6 位（`880301`），住独立目录不与个股混。
 - **不复权原始价**（除权跳空原样保留，README 注明；复权计算留给查询层按需做）。
-- 量纲原样不换算：A 股 volume=手（mootdx 口径）、amount=元；**amount 仅批量 bars 路径有值**（日报钩子的 quote 无此字段，靠 null 合并兜底），README 注明；海外票 volume 以各源口径为准；板块行额外两字段 `"up_count": 16, "down_count": 15`。
+- 量纲原样不换算：A 股 volume=手（mootdx 口径）、amount=元；**amount 仅批量 bars 路径有值**（日报钩子的 quote 无此字段，靠 null 合并兜底），README 注明；海外票 volume 以各源口径为准；`index_bars` 行（板块与交易所指数都返回）额外两字段 `"up_count": 16, "down_count": 15`。
 - 字段可空：海外票快照行缺 open/high/low/volume 时置 null，**null 永不覆盖已有非空值**（见 5.2 upsert 合并规则）。
 - schema_version 政策：daily 快照与 finance 行带 `schema_version`；series 与 custom 逐行**有意不带**——追加层每行多付 20+ 字节不值，「只加字段不改语义」+ README 字段字典已保证兼容。README 写明这是有意的不一致。
 
