@@ -1,4 +1,4 @@
-"""盘后批量：全市场个股 + 板块指数时序（spec §5.2）。
+"""盘后批量：全市场个股 + 板块指数 + 交易所核心指数时序（spec §5.2）。
 
 交易日闸门 → canary 一次调用拿服务器最新交易日，≤ data/.state/ 该 scope 完成标记
 即整轮短路（非交易日「成本近零」靠这个成立）。批量=权威写者（三档合并的 batch 档）。
@@ -127,7 +127,7 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
     stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "stocks")
-    if latest and last_round and latest <= last_round and not tickers:
+    if latest and last_round and latest <= last_round and not tickers and not force:
         log(f"交易日闸门：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
         return stats
     if tickers:
@@ -197,8 +197,8 @@ def load_or_merge_sector_list(data_root: Path, stocks_df: pd.DataFrame) -> tuple
 
 _CORE_INDICES = [  # 交易所核心指数（2026-11-03 用户拍板加入，spec §4.2/§5.2）
     # mootdx index_bars 路由：00/88/99 前缀→SH，其余→SZ——上证段 000xxx→SH、
-    # 深指段 399xxx→SZ 恰好都对；北证50 899050 会被 99 前缀误路由 SH（BSE 段），
-    # 维持 spec 排除 BSE 口径不收
+    # 深指段 399xxx→SZ 恰好都对；北证50 899050（89 前缀）会路由 SZ，而 BSE 是
+    # market=2 同样到不了——维持 spec 排除 BSE 口径不收
     {"code": "000001", "name": "上证指数"},
     {"code": "000016", "name": "上证50"},
     {"code": "000300", "name": "沪深300"},
@@ -210,16 +210,18 @@ _CORE_INDICES = [  # 交易所核心指数（2026-11-03 用户拍板加入，spe
 ]
 
 
-def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | None = None) -> dict:
+def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
+                       force: bool = False) -> dict:
     """交易所核心指数批量（scope=indices，并入 all）：固定清单 + index_bars。
 
     与 sectors 同款：index 目录只有批量这一个写者（钩子不碰），skip 判定只需日期
     不需要 amount 指纹；per-scope 完成标记 last_indices_round（N1 同款隔离）。
+    force 同 stocks：绕过闸门与逐票 skip（--force 全 scope 语义一致）。
     """
     stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "indices")
-    if latest and last_round and latest <= last_round:
+    if latest and last_round and latest <= last_round and not force:
         log(f"交易日闸门（indices）：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
         return stats
     lock_conflict = False
@@ -228,7 +230,7 @@ def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | Non
         path = index_series_file(data_root, code)
         try:
             rows = read_series_rows(path)
-            if rows and latest and rows[-1]["date"] >= latest:
+            if rows and latest and rows[-1]["date"] >= latest and not force:
                 stats["skip"] += 1
                 continue
             outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
@@ -248,11 +250,12 @@ def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | Non
     return stats
 
 
-def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None) -> dict:
+def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
+                       force: bool = False) -> dict:
     stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "sectors")  # per-scope 标记：stocks 完成与否不影响本闸门（N1）
-    if latest and last_round and latest <= last_round:
+    if latest and last_round and latest <= last_round and not force:
         log(f"交易日闸门（sectors）：服务器最新 {latest} ≤ 上轮批量 {last_round}，整轮跳过")
         return stats  # 非交易日零服务器调用（spec §9 补注）
     stocks_df = _mootdx_call("stocks", market=1)
@@ -263,7 +266,7 @@ def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | Non
         path = sector_series_file(data_root, code)
         try:
             rows = read_series_rows(path)
-            if rows and latest and rows[-1]["date"] >= latest:
+            if rows and latest and rows[-1]["date"] >= latest and not force:
                 stats["skip"] += 1
                 continue
             outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
@@ -291,7 +294,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="增量 bars 数；800=回补约 3.3 年（服务器单次上限）")
     parser.add_argument("--tickers", help="逗号分隔子集，调试用（如 600276.SH,300476.SZ）")
     parser.add_argument("--force", action="store_true",
-                        help="忽略逐票 skip 判定强制重拉（--backfill 800 补历史用；tickers 路径不写完成标记，不影响闸门）")
+                        help="绕过闸门与逐票 skip 强制重拉（历史回补/盘中数据修正用；tickers 路径不写完成标记）。"
+                             "警告：15:00 收盘前执行会把动态 bar 当收盘写进 series 并推进完成标记，"
+                             "收盘后须再跑一次同命令 --force 修正")
     args = parser.parse_args(argv)
     if args.tickers:  # 入参格式在动 data_root 之前就校验（M3：裸代码会被拼到错市场）
         tickers = []
@@ -302,8 +307,8 @@ def main(argv: list[str] | None = None) -> int:
             tickers.append(ticker)
     else:
         tickers = None
-    if tickers and args.scope == "sectors":
-        parser.error("--tickers 只对 --scope stocks/all 有效（板块是枚举制清单，无子集路径，静默丢弃比报错更糟）")
+    if tickers and args.scope in ("sectors", "indices"):
+        parser.error(f"--tickers 只对 --scope stocks/all 有效（{args.scope} 是清单制路径，无子集，静默丢弃比报错更糟）")
     from market_data_io import resolve_data_root
 
     data_root = resolve_data_root()
@@ -312,11 +317,11 @@ def main(argv: list[str] | None = None) -> int:
         stats = run_stocks_update(data_root, backfill=args.backfill, tickers=tickers,
                                   force=args.force)
     if args.scope in ("sectors", "all"):
-        sec = run_sectors_update(data_root, backfill=args.backfill)
+        sec = run_sectors_update(data_root, backfill=args.backfill, force=args.force)
         for key in stats:
             stats[key] += sec[key]
     if args.scope in ("indices", "all"):
-        idx = run_indices_update(data_root, backfill=args.backfill)
+        idx = run_indices_update(data_root, backfill=args.backfill, force=args.force)
         for key in stats:
             stats[key] += idx[key]
     return 1 if stats["fail"] else 0

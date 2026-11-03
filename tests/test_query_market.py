@@ -31,6 +31,14 @@ def _make_tree(root: Path) -> None:
         '{"date": "2026-11-03", "close": 1000.0, "source": "mootdx-index"}\n'
         '{"date": "2026-11-04", "close": 990.0, "source": "mootdx-index"}\n',
         encoding="utf-8")
+    (root / "index" / "series").mkdir(parents=True)
+    (root / "index" / "series" / "000001.jsonl").write_text(
+        '{"date": "2026-11-03", "close": 3550.0, "amount": 4.2e11, "source": "mootdx-index"}\n'
+        '{"date": "2026-11-04", "close": 3599.685, "amount": 4.9e11, "source": "mootdx-index"}\n',
+        encoding="utf-8")
+    (root / "index" / "series" / "399006.jsonl").write_text(
+        '{"date": "2026-11-04", "close": 2655.5, "amount": 2.1e11, "source": "mootdx-index"}\n',
+        encoding="utf-8")
     (root / "finance").mkdir(parents=True)
     (root / "finance" / "gpcw-2026-09-30.jsonl").write_text(
         '{"code": "300476", "market": "SZ", "report_date": "2026-09-30", "eps_basic": 3.63, "revenue_yoy": 30.77, "file_hash": "h1", "schema_version": 1}\n',
@@ -70,6 +78,15 @@ class QueryTests(unittest.TestCase):
         got = self.qm.query_quote(self.con, self.root, "880301")
         self.assertEqual(got["close"], 3333.0)
         self.assertEqual(got["up_count"], 20)
+
+    def test_quote_routes_bare_000_399_to_index_series(self) -> None:
+        # 评审补测：裸 000/399 段 = 交易所指数 → index_series 视图（与个股 000001.SZ
+        # 平安银行靠视图区分；此前零断言，路由回归无保护）
+        self.assertEqual(self.qm._view_for("000001"), "index_series")
+        self.assertEqual(self.qm._view_for("399006"), "index_series")
+        got = self.qm.query_quote(self.con, self.root, "000001")
+        self.assertEqual(got["close"], 3599.685)  # 上证指数 fixture 尾行
+        self.assertEqual(self.qm.query_quote(self.con, self.root, "399006")["close"], 2655.5)
 
     def test_finance_orders_across_periods(self) -> None:
         rows = self.qm.query_finance(self.con, self.root, "300476", last=4)

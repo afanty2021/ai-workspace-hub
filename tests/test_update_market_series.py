@@ -70,6 +70,27 @@ class GateTests(unittest.TestCase):
         with patch.object(ums, "_mootdx_call", fake):
             self.assertEqual(ums.fetch_server_latest_trade_date(), "2026-11-02")
 
+    def test_force_bypasses_gate_on_all_scopes(self) -> None:
+        # 评审 #1/#3 补测：--force 必须三 scope 透传且绕过闸门——否则盘中误跑后
+        # 「收盘后 --scope all --force 修正」会被自家闸门挡死，补救路径不可达
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for scope in ("stocks", "sectors", "indices"):
+                ums.write_round_marker(root, scope, "2026-11-04")
+            with patch.object(ums, "load_or_merge_sector_list", return_value=(
+                    [{"code": "880301", "name": "行业A", "category": "行业/概念"}], [])):
+                fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]),
+                                  bars=_bars_frame(["2026-11-04"], [71.54]),
+                                  index_bars=_bars_frame(["2026-11-04"], [3300.0]))
+                with patch.object(ums, "_mootdx_call", fake):
+                    s = ums.run_stocks_update(root, latest="2026-11-04", force=True)
+                    sec = ums.run_sectors_update(root, latest="2026-11-04", force=True)
+                    idx = ums.run_indices_update(root, latest="2026-11-04", force=True)
+            self.assertEqual(s["ok"], 1)   # 标记=最新但 force 仍整轮真跑
+            self.assertEqual(sec["ok"], 1)
+            self.assertEqual(idx["ok"], len(ums._CORE_INDICES))
+            self.assertTrue(any(c.startswith("bars:") for c in fake.calls))  # 确实打了服务器
+
     def test_gate_short_circuits_whole_round(self) -> None:
         # N1：闸门只认 data/.state/ 完成标记（批量写者独占的旁路状态），
         # 数据文件有当日行也不触发（那可能是钩子写的）
@@ -203,6 +224,8 @@ class StocksUpdateTests(unittest.TestCase):
         # 板块是枚举制清单无子集路径，--tickers 配 --scope sectors 在 argparse 层拒绝
         with self.assertRaises(SystemExit):
             ums.main(["--scope", "sectors", "--tickers", "600276.SH"])
+        with self.assertRaises(SystemExit):  # indices 同款（清单制固定列表，无子集）
+            ums.main(["--scope", "indices", "--tickers", "600276.SH"])
 
     def test_invalid_ticker_argument_rejected(self) -> None:
         # M3：无后缀/海外票入参在 argparse 层拒绝（600276 会被拼成错市场的 .SZ）
