@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 import sys
 from datetime import datetime, timezone
@@ -44,20 +45,27 @@ def _load_rows(data_root: Path, series: str) -> list[dict[str, Any]]:
     return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
+def _validate_series(series: str) -> None:
+    # series 名直接拼进 custom/ 路径，"../" 可写穿重写行情层文件（I1，与 news 的
+    # slug 守卫同构）；append 与 csv-import 共用，校验在读 registry 之前，坏名连目录都不建
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", series):
+        raise ValueError(f"series 名只接受 [a-z0-9][a-z0-9-]*（得到 {series!r}）——防路径写穿")
+
+
 def append_record(data_root: Path, *, series: str, name: str, date: str, value: float,
                   unit: str, source: str, period: str | None = None,
                   note: str | None = None, overwrite: bool = False) -> Path:
-    # 与 save_news_snapshot 的 slug 守卫同构：series 名直接拼进 custom/ 路径，
-    # "../" 可写穿重写行情层文件；校验放在读 registry 之前，坏名连目录都不建
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", series):
-        raise ValueError(f"series 名只接受 [a-z0-9][a-z0-9-]*（得到 {series!r}）——防路径写穿")
+    _validate_series(series)
+    value = float(value)
+    if not math.isfinite(value):  # json.dumps 默认放行 NaN/inf 字面量（非标 JSON），一条毒行让 query_market 读整条 series 失败
+        raise ValueError(f"value 必须是有限数（得到 {value}）——NaN/inf 不落盘")
     registry = _load_registry(data_root)
     if series not in registry:  # 首次自动注册
         registry[series] = {"name": name, "unit": unit, "category": "", "description": "",
                             "created_at": datetime.now(timezone.utc).isoformat()}
         _save_registry(data_root, registry)
     rows = _load_rows(data_root, series)
-    record = {"date": date, "period": period, "value": float(value), "unit": unit,
+    record = {"date": date, "period": period, "value": value, "unit": unit,
               "source": source, "note": note,
               "recorded_at": datetime.now(timezone.utc).isoformat()}
     hit = [i for i, r in enumerate(rows) if r["date"] == date]
@@ -84,6 +92,7 @@ def show_series(data_root: Path, series: str, tail: int | None = None) -> list[d
 
 
 def import_csv(data_root: Path, series: str, csv_path: Path, *, overwrite: bool = False) -> dict:
+    _validate_series(series)  # 循环前整批拒绝（复查 Minor②）：坏名逐行落进 except 会被计成 skipped、退出 0，排障误导
     stats = {"imported": 0, "skipped": 0}
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         for raw in csv.DictReader(handle):
@@ -144,8 +153,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(show_series(data_root, args.series, args.tail),
                          ensure_ascii=False, indent=1))
     else:
-        print(json.dumps(import_csv(data_root, args.series, Path(args.file),
-                                    overwrite=args.overwrite), ensure_ascii=False))
+        try:
+            stats = import_csv(data_root, args.series, Path(args.file), overwrite=args.overwrite)
+        except ValueError as exc:  # 坏 series 名整批拒绝也走干净收口：退出码 1，不出 CLI traceback
+            log(f"Error: {exc}")
+            return 1
+        print(json.dumps(stats, ensure_ascii=False))
     return 0
 
 

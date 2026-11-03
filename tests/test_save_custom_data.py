@@ -57,6 +57,25 @@ class CustomSeriesTests(unittest.TestCase):
                          '{"date": "2026-11-02", "close": 71.0}\n')  # 行情文件未被碰
         self.assertFalse((self.root / "custom").exists())  # 校验在读 registry 之前，连目录都不建
 
+    def test_nan_inf_value_rejected_before_any_write(self) -> None:
+        # NaN 补靶（修错对象后的真靶点）：--value nan 经 argparse type=float 直达这里，
+        # json.dumps 默认放行非标 NaN 字面量，一条毒行让 query_market 读整条 series 失败；
+        # 校验在读 registry 之前，坏值连目录都不建（与 slug 守卫同位）
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                scd.append_record(self.root, series="x", name="X", date="2026-11-03",
+                                  value=bad, unit="件", source="s")
+        self.assertFalse((self.root / "custom").exists())
+
+    def test_import_csv_bad_series_name_rejected_whole_batch(self) -> None:
+        # Minor②：坏 series 名循环前整批拒绝——旧行为逐行落进 except ValueError 计
+        # skipped、退出 0，用户以为导入成功
+        csv = self.root / "in.csv"
+        csv.write_text("date,value,unit,source\n2026-11-03,1.0,件,s\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            scd.import_csv(self.root, "../market/series/600276.SH", csv)
+        self.assertFalse((self.root / "custom").exists())  # 校验在任何写之前
+
     def test_csv_import_maps_columns_and_skips_existing(self) -> None:
         scd.append_record(self.root, series="x", name="X", date="2026-10-01",
                           value=9.0, unit="件", source="seed")
@@ -72,6 +91,18 @@ class CustomSeriesTests(unittest.TestCase):
         self.assertEqual(rows["2026-10-01"]["value"], 9.0)   # 撞已有跳过，没被改
         self.assertEqual(rows["2026-09-01"]["period"], "2026-09")
         self.assertNotIn("junk", rows["2026-09-01"])         # 其余列忽略
+
+    def test_csv_import_overwrite_updates_existing(self) -> None:
+        # --overwrite 路径此前零覆盖：撞已有日期应整行覆盖而非 skipped
+        scd.append_record(self.root, series="x", name="X", date="2026-10-01",
+                          value=9.0, unit="件", source="seed")
+        csv = self.root / "in.csv"
+        csv.write_text("date,value,unit,source\n2026-10-01,9.5,件,s2\n", encoding="utf-8")
+        stats = scd.import_csv(self.root, "x", csv, overwrite=True)
+        self.assertEqual(stats, {"imported": 1, "skipped": 0})
+        rows = scd.show_series(self.root, "x")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["value"], 9.5)
 
 
 class CliTests(unittest.TestCase):
@@ -89,6 +120,23 @@ class CliTests(unittest.TestCase):
         with patch.object(mio, "resolve_data_root", return_value=self.root):
             self.assertEqual(scd.main(argv), 0)                    # 首次 append 成功
             self.assertEqual(scd.main(argv), 1)                    # 重复 append 被拒：干净退出 1
+
+    def test_nan_inf_cli_returns_1_no_poison_row(self) -> None:
+        # CLI 负样本：--value nan/inf 复用 main 的 ValueError 收口干净退出 1，毒行不落盘
+        for bad in ("nan", "inf"):
+            argv = ["append", "--series", "x", "--name", "X", "--date", "2026-11-03",
+                    "--value", bad, "--unit", "件", "--source", "s"]
+            with patch.object(mio, "resolve_data_root", return_value=self.root):
+                self.assertEqual(scd.main(argv), 1, msg=bad)
+        self.assertFalse((self.root / "custom" / "x.jsonl").exists())
+
+    def test_csv_import_bad_series_cli_returns_1(self) -> None:
+        # Minor② CLI 面：csv-import 坏 series 名干净退出 1，不出 traceback
+        csv = self.root / "in.csv"
+        csv.write_text("date,value,unit,source\n2026-11-03,1.0,件,s\n", encoding="utf-8")
+        argv = ["csv-import", "--series", "BAD/NAME", "--file", str(csv)]
+        with patch.object(mio, "resolve_data_root", return_value=self.root):
+            self.assertEqual(scd.main(argv), 1)
 
 
 if __name__ == "__main__":
