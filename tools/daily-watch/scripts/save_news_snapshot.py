@@ -19,8 +19,9 @@ from market_data_io import atomic_write_text
 
 def normalize_url(url: str) -> str:
     parts = urlsplit(url.strip())
-    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-              if not k.lower().startswith("utm_")]
+    # 保留参数排序后重建：同 URL 不同参数序 → 同 key（否则 md5 不同，dedup 漏判）
+    query = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                   if not k.lower().startswith("utm_"))
     path = parts.path.rstrip("/") or "/"
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, urlencode(query), ""))
 

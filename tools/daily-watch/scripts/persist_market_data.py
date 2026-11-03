@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,10 @@ def quote_to_series_row(quote: dict[str, Any]) -> dict[str, Any] | None:
 
     def num(key: str) -> float | None:
         val = quote.get(key)
-        return float(val) if val is not None else None
+        if val is None:
+            return None
+        val = float(val)
+        return val if math.isfinite(val) else None  # NaN/inf → null：非标 JSON 字面量不落盘
 
     return {
         "date": day, "open": num("open"), "high": num("dayHigh"), "low": num("dayLow"),

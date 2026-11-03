@@ -18,6 +18,10 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(snp.normalize_url(a), snp.normalize_url(b))
         self.assertNotEqual(snp.dedup_key(a), snp.dedup_key("https://example.com/other"))
 
+    def test_query_param_order_normalized(self) -> None:
+        # Minor：同 URL 不同参数序去重前先排序，否则 md5 不同 dedup 漏判
+        self.assertEqual(snp.dedup_key("x.com/a?b=2&a=1"), snp.dedup_key("x.com/a?a=1&b=2"))
+
 
 class SaveTests(unittest.TestCase):
     def setUp(self) -> None:

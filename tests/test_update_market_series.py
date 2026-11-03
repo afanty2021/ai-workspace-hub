@@ -29,6 +29,15 @@ def _stocks_frame(rows: list[tuple[str, str]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["code", "name"])
 
 
+class BarsToRowsTests(unittest.TestCase):
+    def test_nan_amount_becomes_null(self) -> None:
+        # Minor：NaN 交给 json.dumps 会落成字面量 NaN（非标 JSON，DuckDB 不认）→ 清洗为 null
+        df = _bars_frame(["2026-11-02"], [71.54], amount=[float("nan")])
+        rows = ums.bars_to_rows(df, source="mootdx")
+        self.assertIsNone(rows[0]["amount"])
+        self.assertEqual(rows[0]["close"], 71.54)
+
+
 class FakeMootdx:
     """按 method 分发的 _mootdx_call 替身。用法：FakeMootdx(stocks=..., bars=..., index_bars=...)。"""
 

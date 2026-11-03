@@ -62,6 +62,12 @@ class SeriesAppendTests(unittest.TestCase):
     def test_unparseable_tradedate_returns_none(self) -> None:
         self.assertIsNone(pmd.quote_to_series_row(_quote("^SOX", tradeDate="")))
 
+    def test_nan_inf_prices_become_null(self) -> None:
+        # Minor：与 update_market_series.bars_to_rows 同款清洗——NaN/inf 不进 JSONL
+        row = pmd.quote_to_series_row(_quote("600276.SH", price=float("nan"), volume=float("inf")))
+        self.assertIsNone(row["close"])
+        self.assertIsNone(row["volume"])
+
     def test_appends_per_ticker_and_skips_bad_dates(self) -> None:
         n = pmd.append_series_from_snapshot(
             _snapshot([_quote("600276.SH"), _quote("^SOX", tradeDate="garbage")]), self.root)

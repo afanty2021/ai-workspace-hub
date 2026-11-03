@@ -106,6 +106,17 @@ class FinanceFlowTests(unittest.TestCase):
             stats = ufs.run_finance_update(self.root, backfill="all")
         self.assertEqual(stats, {"ok": 2, "skip": 0, "fail": 0})  # 两期都处理，占位被过滤
 
+    def test_placeholder_filter_logs_dropped_filenames(self) -> None:
+        # Minor：占位过滤只打总数不够排障——被滤文件名明细也要落日志
+        with patch.object(ufs, "files_with_fallback", return_value=(self.files, None)), \
+             patch.object(ufs, "download_gpcw"), \
+             patch.object(ufs, "parse_gpcw", return_value=_fixture_df()), \
+             patch.object(ufs, "log") as fake_log:
+            ufs.run_finance_update(self.root)
+        joined = "\n".join(str(c.args[0]) for c in fake_log.call_args_list if c.args)
+        self.assertIn("占位过滤 1 期", joined)
+        self.assertIn("gpcw20261231.zip", joined)  # 被滤的是哪只空壳，名字要看得见
+
     def test_gp_fallback_pins_bestip_and_restores(self) -> None:
         # gp_fallback≠None 主路径此前零覆盖（复查）：ctx 内 GP 被钉住、退出恢复原值
         from mootdx import config as mootdx_config

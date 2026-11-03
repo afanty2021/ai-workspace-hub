@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -72,7 +73,10 @@ def bars_to_rows(df: pd.DataFrame, *, source: str) -> list[dict[str, Any]]:
     for ts, rec in zip(df.index, df.to_dict("records")):
         def num(key: str) -> float | None:
             val = rec.get(key)
-            return float(val) if val is not None else None
+            if val is None:
+                return None
+            val = float(val)
+            return val if math.isfinite(val) else None  # NaN/inf → null：json.dumps 默认放行 NaN 字面量（非标 JSON）
 
         row = {"date": pd.Timestamp(ts).date().isoformat(), "open": num("open"), "high": num("high"),
                "low": num("low"), "close": num("close"), "volume": num("volume"),
