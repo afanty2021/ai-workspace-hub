@@ -1,6 +1,8 @@
 """日报持久化钩子（spec §5.1）：快照原样落盘 + watchlist series 快照级追加。
 
 钩子=快照级写者：同日只补 null、绝不覆盖非空（spec §5.2 写者身份表）。
+nasdaq 源行须过「美股 session 已收盘」闸门（_us_session_closed）：盘前/盘中
+报价只进快照不进 series（friction 2026-11-03 第 2 次修根）。
 """
 
 from __future__ import annotations
@@ -10,9 +12,10 @@ import json
 import math
 import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from market_data_io import (
     atomic_write_text,
@@ -57,6 +60,36 @@ def save_daily_snapshot(snapshot: dict[str, Any], data_root: Path, today: str | 
     return out
 
 
+_ET = ZoneInfo("America/New_York")  # 与 market_data_io._ET 同源（美股日期口径一致）
+_US_REG_CLOSE_ET = dt_time(16, 0)   # 美股常规收盘；半日提前收盘不细分——当晚少写一行，次日 asOf<今天 自然补上
+
+
+def _us_session_closed(row_day: str, source: str | None, now_et: datetime) -> bool:
+    """nasdaq 源的 series 行闸门：asOf 日的美股 session 已收盘才可信为该日收盘价。
+
+    两个已发生的错写形态（2026-11-03 坐实）：①盘前抓取——价格=上一收盘、
+    asOf=当日 → 周五价被写成 11-02 行（^SOX 10,687.62 vs 真实周一收盘
+    10,328.33，险些漏判 H1 破线）；②个股盘前指示价（NVDA 有盘前交易）被写成
+    当日收盘行。规则：asOf < 今天(ET) → 写（昨收及更早——指数 asOf 天然是最后
+    交易日，隔天抓取恰好正确落行）；asOf == 今天且 ET ≥ 16:00 → 写（刚收盘）；
+    asOf == 今天且未收盘、asOf > 今天（时钟错乱）→ 不写。其余源不过此门：CN 侧
+    由批量权威写者覆盖，eod/fred 本就是收盘口径，sina/eastmoney 是连续市场
+    现价口径（日期=抓取日，自洽）。
+    """
+    if source != "nasdaq":
+        return True
+    try:
+        day = date.fromisoformat(row_day)
+    except ValueError:
+        return False
+    today = now_et.date()
+    if day < today:
+        return True
+    if day == today:
+        return now_et.time() >= _US_REG_CLOSE_ET
+    return False
+
+
 def quote_to_series_row(quote: dict[str, Any]) -> dict[str, Any] | None:
     """fetch quote → series 行；tradeDate 解析失败返回 None（只进快照不进 series）。"""
     day = parse_trade_date(quote.get("tradeDate"))
@@ -77,8 +110,14 @@ def quote_to_series_row(quote: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path) -> int:
-    """watchlist 全部票快照级 upsert（幂等可重入）；返回写入行数。"""
+def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path,
+                                now_et: datetime | None = None) -> int:
+    """watchlist 全部票快照级 upsert（幂等可重入）；返回写入行数。
+
+    now_et 可注入（测试用）；nasdaq 源行过「session 已收盘」闸门（_us_session_closed），
+    盘前/盘中报价只进快照不进 series。
+    """
+    clock = now_et or datetime.now(_ET)
     total = 0
     for quote in snapshot.get("quotes") or []:
         ticker = quote.get("ticker")
@@ -86,6 +125,10 @@ def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path) -> in
         if not ticker or row is None:
             if ticker:
                 log(f"Warning: {ticker} tradeDate 不可解析，只进快照不进 series: {quote.get('tradeDate')!r}")
+            continue
+        if not _us_session_closed(row["date"], quote.get("source"), clock):
+            log(f"Warning: {ticker} nasdaq 盘前/盘中报价（asOf {quote.get('tradeDate')!r}），"
+                "只进快照不进 series——ET 16:00 收盘后的抓取才可信为当日收盘")
             continue
         path = series_file(data_root, ticker)
         with series_lock(data_root, path.name) as acquired:

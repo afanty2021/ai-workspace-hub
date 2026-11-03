@@ -8,6 +8,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from _test_paths import REPO_ROOT  # noqa: F401
 
@@ -106,6 +107,83 @@ class SeriesAppendTests(unittest.TestCase):
         pmd.append_series_from_snapshot(
             _snapshot([_quote("600276.SH", price=999.0)]), self.root)  # 盘中价乱值
         self.assertEqual(read_series_rows(path)[-1]["close"], 71.54)  # 没被覆盖
+
+
+class UsSessionGateTests(unittest.TestCase):
+    """friction 2026-11-03 第 2 次修根：nasdaq 盘前/盘中报价只进快照不进 series。
+
+    两个已发生的事故形态都要被挡：①盘前抓取价格=上一收盘、asOf=当日（周五价
+    10,687.62 被写成 11-02 行，险些漏判 SOX 破线）；②个股盘前指示价（NVDA 有
+    盘前交易）被写成当日收盘行。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _et(y: int, m: int, d: int, hh: int, mm: int) -> datetime:
+        return datetime(y, m, d, hh, mm, tzinfo=ZoneInfo("America/New_York"))
+
+    def test_pre_market_prev_close_misdated_blocked(self) -> None:
+        # 形态①：周一 06:10 ET 盘前抓取，价格=周五收盘、asOf=周一（原始事故）
+        q = _quote("^SOX", tradeDate="Nov 2, 2026 6:10 AM ET", source="nasdaq", price=10687.62)
+        n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                            now_et=self._et(2026, 11, 2, 6, 11))
+        self.assertEqual(n, 0)
+        self.assertFalse(series_file(self.root, "^SOX").exists())
+
+    def test_pre_market_indicative_price_blocked(self) -> None:
+        # 形态②：个股盘前指示价，asOf=今日盘前（当日未收盘）
+        q = _quote("NVDA", tradeDate="Nov 3, 2026 5:25 AM ET", source="nasdaq", price=205.3964)
+        n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                            now_et=self._et(2026, 11, 3, 5, 26))
+        self.assertEqual(n, 0)
+        self.assertFalse(series_file(self.root, "NVDA").exists())
+
+    def test_intraday_quote_blocked(self) -> None:
+        # 盘中动态价同理（与 A 股盘中动态 bar 同构病灶）
+        q = _quote("NVDA", tradeDate="Nov 3, 2026 11:00 AM ET", source="nasdaq", price=204.0)
+        n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                            now_et=self._et(2026, 11, 3, 11, 1))
+        self.assertEqual(n, 0)
+
+    def test_past_session_date_written_next_day(self) -> None:
+        # 隔天抓取：指数 asOf=最后交易日 < 今天 → 正确落行（事故当日的正确路径：
+        # 11-03 盘前抓到 asOf 11-02 + 真实周一收盘 10,328.33）
+        q = _quote("^SOX", tradeDate="Nov 2, 2026 4:00 PM ET", source="nasdaq", price=10328.33)
+        n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                            now_et=self._et(2026, 11, 3, 5, 25))
+        self.assertEqual(n, 1)
+        rows = read_series_rows(series_file(self.root, "^SOX"))
+        self.assertEqual((rows[-1]["date"], rows[-1]["close"]), ("2026-11-02", 10328.33))
+
+    def test_same_day_after_close_written(self) -> None:
+        # 刚收盘：asOf=今天且 ET ≥ 16:00 → 写
+        q = _quote("NVDA", tradeDate="Nov 3, 2026 4:05 PM ET", source="nasdaq", price=203.1)
+        n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                            now_et=self._et(2026, 11, 3, 16, 6))
+        self.assertEqual(n, 1)
+
+    def test_future_asof_clock_skew_blocked(self) -> None:
+        # asOf > 今天：时钟错乱，宁可不写
+        q = _quote("^SOX", tradeDate="Nov 4, 2026 4:00 PM ET", source="nasdaq", price=10400.0)
+        n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                            now_et=self._et(2026, 11, 3, 17, 0))
+        self.assertEqual(n, 0)
+
+    def test_non_nasdaq_sources_not_gated(self) -> None:
+        # 其余源不过此门：CN 由批量权威写者覆盖，eod/fred 收盘口径，sina/eastmoney
+        # 现价口径自洽——asOf=今日+任意时钟都写
+        for src in ("mootdx", "sina", "eod", "fred", "eastmoney"):
+            with self.subTest(source=src):
+                q = _quote(f"X-{src}", tradeDate="2026-11-03", source=src)
+                n = pmd.append_series_from_snapshot(_snapshot([q]), self.root,
+                                                    now_et=self._et(2026, 11, 3, 5, 26))
+                self.assertEqual(n, 1)
 
 
 class HookTests(unittest.TestCase):
