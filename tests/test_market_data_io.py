@@ -53,6 +53,17 @@ class TradeDateTests(unittest.TestCase):
         self.assertEqual(mio.parse_trade_date("November 2, 2026 4:00PM ET"), "2026-11-02")
         self.assertEqual(mio.parse_trade_date("November 2, 2026"), "2026-11-02")
 
+    def test_nasdaq_abbreviated_month_real_payload(self) -> None:
+        # C1：真实 payload 逐字拷贝（data/market/daily/2026-11-03.json：NVDA 12:03、^IXIC/^SOX 12:01）。
+        # 修正前三格式全 %B 全拼月 → "Nov 2, ..." 全失配，NVDA/指数 series 零积累（只进快照）
+        self.assertEqual(mio.parse_trade_date("Nov 2, 2026 12:03 PM ET"), "2026-11-02")
+        self.assertEqual(mio.parse_trade_date("Nov 2, 2026 12:01 PM ET"), "2026-11-02")
+
+    def test_calendar_invalid_dates_return_none(self) -> None:
+        # I3：形状合法但日历上不存在的日期不得成为 date 主键
+        for bad in ("0000-00-00", "2026-11-31", "20261131"):
+            self.assertIsNone(mio.parse_trade_date(bad), bad)
+
     def test_garbage_and_empty_return_none(self) -> None:
         for bad in ("", None, "垃圾", "Nov-x"):
             self.assertIsNone(mio.parse_trade_date(bad), bad)

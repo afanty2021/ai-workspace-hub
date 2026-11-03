@@ -71,12 +71,21 @@ def parse_trade_date(value: Any) -> str | None:
     if not text:
         return None
     if re.fullmatch(r"\d{8}", text):
-        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+        try:  # 构造真日期：形状过但日历不存在（如 20261131）不得拼成 date 主键
+            return datetime(int(text[:4]), int(text[4:6]), int(text[6:])).date().isoformat()
+        except ValueError:
+            return None
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-        return text
-    # Nasdaq 英文长戳："November 2, 2026 4:00PM ET"。%B 依赖英文 locale——当前及
-    # 定时任务环境为 en_US；非英文 locale 下英文长戳退化为 None（只进快照），可接受。
-    for fmt in ("%B %d, %Y %I:%M%p ET", "%B %d, %Y %I:%M %p", "%B %d, %Y"):
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            return None
+    # Nasdaq 英文长戳：真实 payload 实测 "Nov 2, 2026 12:03 PM ET"（%b 缩写月 + PM 前空格 + ET 后缀，
+    # NVDA/^IXIC/^SOX）；%B 全拼（"November 2, 2026 4:00PM ET"，PM 前无空格）为兼容保留。
+    # strptime 要求整串消费，故「%p 前空格 × ET 有无」两维都要枚举。%B/%b 依赖英文 locale——
+    # 当前及定时任务环境为 en_US；非英文 locale 下英文长戳退化为 None（只进快照），可接受。
+    for fmt in ("%B %d, %Y %I:%M%p ET", "%B %d, %Y %I:%M %p ET", "%B %d, %Y %I:%M %p", "%B %d, %Y",
+                "%b %d, %Y %I:%M%p ET", "%b %d, %Y %I:%M %p ET", "%b %d, %Y %I:%M %p", "%b %d, %Y"):
         try:
             return datetime.strptime(text, fmt).date().isoformat()
         except ValueError:
