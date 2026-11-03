@@ -53,7 +53,8 @@ def last_round_date(data_root: Path, scope: str) -> str | None:
        按 source 区分写者不可行；日报先于 16:30 跑会把当日误判为「已批量」
        → 当日全市场 T+1。
     标记与数据文件解耦，只在干净全量轮写入（见 run_stocks_update / run_sectors_update
-    尾部：not tickers and fail == 0 and latest is not None）。
+    尾部：not tickers and fail == 0 and latest is not None 且本轮无锁冲突——锁冲突轮
+    有票确实没写，写标记会让闸门把它掩盖成「当日已完成」）。
     """
     marker = data_root / ".state" / f"last_{scope}_round"
     if not marker.exists():

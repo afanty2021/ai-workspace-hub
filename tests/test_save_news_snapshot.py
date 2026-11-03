@@ -51,6 +51,16 @@ class SaveTests(unittest.TestCase):
         self.assertEqual(status2, "skipped")
         self.assertEqual(again, path)
 
+    def test_find_existing_ignores_body_field_lines(self) -> None:
+        # 全文 MULTILINE 误命中回归：正文里出现的 dedup 行（如代码块/示例）不该
+        # 让另一条 URL 误判「已存过」而拒绝落盘——只解析首 --- 块
+        path, _ = self._save("https://example.com/a")
+        key_b = snp.dedup_key("https://example.com/b")
+        with path.open("a", encoding="utf-8") as fh:  # 往正文追加一行伪 dedup
+            fh.write(f"\ndedup: {key_b}\n")
+        self.assertIsNone(snp.find_existing(self.root, "https://example.com/b"))
+        self.assertEqual(snp.find_existing(self.root, "https://example.com/a"), path)
+
     def test_same_slug_different_url_gets_hash_suffix(self) -> None:
         self._save("https://example.com/a", slug="dup")
         path2, status = self._save("https://example.com/b", slug="dup")

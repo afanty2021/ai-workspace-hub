@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from market_data_io import atomic_write_text
+from mootdx_source import log
 
 
 def normalize_url(url: str) -> str:
@@ -31,8 +32,18 @@ def dedup_key(url: str) -> str:
 
 
 def _frontmatter_field(text: str, field: str) -> str | None:
-    match = re.search(rf"^{field}: (.+)$", text, flags=re.MULTILINE)
-    return match.group(1).strip() if match else None
+    # 只在首 --- 块（frontmatter）内找：全文 MULTILINE 会被正文里碰巧出现的
+    # 同名字段行（代码块/示例）误命中 dedup 判定
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break  # frontmatter 结束，正文不参与
+        match = re.fullmatch(rf"{field}: (.+)", line.strip())
+        if match:
+            return match.group(1).strip()
+    return None
 
 
 def find_existing(data_root: Path, url: str) -> Path | None:
@@ -85,9 +96,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", required=True, help="已抓取的原文 markdown 临时文件")
     parser.add_argument("--partial", action="store_true", help="标记不完整抓取")
     args = parser.parse_args(argv)
-    path, status = save_snapshot(resolve_data_root(), url=args.url, title=args.title,
-                                 date=args.date, slug=args.slug,
-                                 input_path=Path(args.input), partial=args.partial)
+    try:
+        path, status = save_snapshot(resolve_data_root(), url=args.url, title=args.title,
+                                     date=args.date, slug=args.slug,
+                                     input_path=Path(args.input), partial=args.partial)
+    except ValueError as exc:  # slug/date 守卫：log + 退出码 1，不出 CLI traceback（与 save_custom_data 同款收口）
+        log(f"Error: {exc}")
+        return 1
     print(f"{status}: {path}")
     return 0
 

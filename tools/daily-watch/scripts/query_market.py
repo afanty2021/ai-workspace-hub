@@ -127,7 +127,6 @@ def run_sql(con, sql: str) -> list[dict[str, Any]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    duckdb = _require_duckdb()
     from market_data_io import resolve_data_root
     from save_custom_data import show_series
 
@@ -152,10 +151,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     data_root = resolve_data_root()
 
-    if args.command == "custom":  # 不走 DuckDB，直接读文件
-        print(json.dumps(show_series(data_root, args.series, args.tail), ensure_ascii=False, indent=1))
+    if args.command == "custom":  # 不走 DuckDB，直接读文件（duckdb 未装也能用）
+        try:
+            rows = show_series(data_root, args.series, args.tail)
+        except ValueError as exc:  # 坏 JSONL 等：log + 退出码 1，不出 CLI traceback（与 save_custom_data 同款收口）
+            log(f"Error: {exc}")
+            return 1
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0
 
+    duckdb = _require_duckdb()  # 下移到 custom 早退之后：直读 JSONL 的分支不该被它挡
     con = duckdb.connect(":memory:")
     if args.command == "quote":
         out = query_quote(con, data_root, args.ticker)

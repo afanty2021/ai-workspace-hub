@@ -164,7 +164,8 @@ def run_finance_update(data_root: Path, *, backfill: int | str = 0) -> dict:
     files = [f for f in raw_files if f["filesize"] > _PLACEHOLDER_MAX_BYTES]
     dropped = [f for f in raw_files if f["filesize"] <= _PLACEHOLDER_MAX_BYTES]
     if dropped:
-        log(f"占位过滤 {len(dropped)} 期（未来期空壳）: {[f['filename'] for f in dropped][:5]}...")
+        names = [f'{f["filename"]}({f["filesize"]}B)' for f in dropped]
+        log(f"占位过滤 {len(dropped)} 期（未来期空壳，≤{_PLACEHOLDER_MAX_BYTES}B）: {names}")
     files.sort(key=lambda x: x["filename"], reverse=True)  # 最新期在前
     count = len(files) if backfill == "all" else max(int(backfill), 1)
     targets = files[:count]

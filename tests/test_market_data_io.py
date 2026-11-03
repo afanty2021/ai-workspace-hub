@@ -147,6 +147,17 @@ class AtomicAndLockTests(unittest.TestCase):
         with mio.series_lock(self.root, "t") as ok3:
             self.assertTrue(ok3)  # 陈旧锁被接管
 
+    def test_lock_released_when_body_raises(self) -> None:
+        # finally 释放路径：with 块内炸了锁也必须删——否则一个异常票会把同票的
+        # 后续写入全卡到 600s 陈旧接管才恢复
+        with self.assertRaises(RuntimeError):
+            with mio.series_lock(self.root, "t") as ok:
+                self.assertTrue(ok)
+                raise RuntimeError("boom")
+        self.assertFalse((self.root / ".locks" / "t.lock").exists())
+        with mio.series_lock(self.root, "t") as ok2:
+            self.assertTrue(ok2)  # 释放后立刻可重取
+
 
 if __name__ == "__main__":
     unittest.main()
