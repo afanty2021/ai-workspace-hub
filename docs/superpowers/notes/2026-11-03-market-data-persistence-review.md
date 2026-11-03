@@ -1,6 +1,6 @@
-# 市场数据持久化层评审记录（max 评审 + 修复波复查 + 合并后追加评审 + 重构复核）
+# 市场数据持久化层评审记录（max 评审 + 修复波复查 + 合并后追加评审 + 重构复核 + 复查收口）
 
-- 评审日：2026-11-03（四轮同日）
+- 评审日：2026-11-03（五轮同日）
 - 分支：`feat/market-data-persistence`，未 push 未合并
 - 第一轮 max 评审范围：`7e97b7c..c5eadcd`（15 commits，实现全量）
 - 修复波：`c5eadcd..ff32866`（5 commits）
@@ -9,7 +9,8 @@
 - 测试基线：第一轮 225 全绿 → 修复波后 238 全绿（+13，全为行为级断言）
 - 第三轮 max 评审范围：`8333c43..d8a005e`（合并 main 后追加 2 commits：`81964cb` --force 修根、`d8a005e` 交易所核心指数 v0.3c）
 - 第四轮 max 评审范围：`88879bc..f7b11e4`（第三轮遗留两条重构建议落地：`80e9efc` 提取 `_run_list_round` + 口径注释钉一处、`f7b11e4` 处置小节）
-- 当前状态：前三轮已闭环（第三轮 Important 4 + Minor 6 全修、两条重构建议已落地）；第四轮 **Yes（0 Critical / 0 Important / 4 Minor）**，4 Minor 已全修（见文末处置）；直提 main、未推送等点名
+- 第五轮 max 复查范围：`f7b11e4..c1656a9`（`140b935` 美股收盘闸门根修首次评审 + `086e19c` 第四轮 4 Minor 修复波对靶 + `c1656a9` docs 忠实性）
+- 当前状态：五轮全部闭环（第五轮 With fixes：I-1 受闸集合扩四源已修、M-B 边界断言已补，271 绿）；直提 main、未推送等点名
 
 ---
 
@@ -248,3 +249,38 @@
 - 测试 259 → **261 全绿**（+2 全为 sectors 专项，零摆设）；ruff（E/F/W、ignore E501）过；行为零变化（Minor 3 只改措辞来源，消息文本逐字不变）
 - 首跑曾踩 FakeMootdx 缺 `stocks` 枚举调用的坑（tail-skip 测试一次性），补齐即绿
 - 未提交未推送，等用户点名
+
+---
+
+## 第五轮：max 复查（f7b11e4..c1656a9，第四轮 Minor 修复波对靶 + 闸门根修首评）
+
+- 方式：单席位 max 复查——不信任 commit message，全部对代码实测：全套测试逐 commit 边界重跑（f7b11e4=259 / 140b935=266 / c1656a9=268 均绿）；M1 变异在 /tmp worktree 亲手重跑两轮（交换映射值**恰好 4 红**与声称逐字一致、措辞漂移变异另 2 红、还原 32 绿）；M3 等价性自建 19 场景 importlib 对拍独立复核（锚 **88879bc 基线**而非 f7b11e4——消参后必须对原始基线等价，日志/stats/标记/文件树/调用序列/异常传播逐字节一致）；真实 `data/` 只读取证；协调者随后对 I-1 亲自对靶（闸门代码 + 三源 tradeDate 口径逐行核实）坐实
+- 结论：**With fixes**——第四轮 4 Minor 全部真修、140b935 闸门/测试/数据修正全部经实测验证、c1656a9 docs 忠实；新抓 1 Important + 3 Minor
+
+### 对靶核验表（摘要）
+
+| 靶 | commit | 结论 | 证据 |
+|---|---|---|---|
+| 第四轮 M1 日志断言 | 086e19c | **真修** | 4 处 Warning 全文断言落位正确（含 label 与全部插值字段）；变异复跑恰好 4 红、措辞漂移另 2 红 |
+| 第四轮 M2 sectors 两专项 | 086e19c | **真修** | `test_sectors_tail_latest_skips` / `test_sectors_single_failure_counted_marker_blocked`，真实 fs/标记，与 indices 侧对齐 |
+| 第四轮 M3 label 消参 | 086e19c | **真修** | 19 场景对拍 vs 88879bc 逐字节一致；未知 scope 抛 KeyError（错配从静默变立刻炸，比原建议更强） |
+| 第四轮 M4 注释指回 | 086e19c | **真修** | `market_data_io.py` 88 段注释指回 `build_sector_list` 准确 |
+| 140b935 闸门语义/隔天自愈/快照仍记录/CN 隔离 | 140b935 | **真修**（豁免范围见 I-1） | 代码逐行核对 + 7 测试钉三种放行/两种拦截；磁盘活体：11-03 盘前快照 NVDA 205.3964 在快照、series 零条 11-03 行 |
+| 140b935 数据手工修正 | 140b935 | **真修** | ^SOX/^IXIC/NVDA 11-02 各恰 1 行 = 10,328.33 / 25,164.32 / 202.06；10687.62 全 series 目录不存在；无 11-01 行 |
+| c1656a9 docs 忠实性 | c1656a9 | **忠实** | 处置表与 diff 逐条吻合；第四轮档案与史实相符；变异证据与独立重跑一致 |
+
+### 发现
+
+**I-1（Important，协调者对靶坐实）**：闸门只锚 `source != "nasdaq"` 放行，但 **fmp**（配 `FMP_API_KEY` 即成全部非 CN/HK 票主源，/quote 实时端点）、**finnhub**（t=报价时刻，盘前抓取也打成当日戳）、**yfinance**（`ENABLE_YFINANCE=1` 后最新 bar）三源同为「当日戳+实时价」形态、无闸直写。暴露窗口：16:30 CST=美股盘前每天踩；nasdaq 是浏览器头抓取型端点、失败即降级下一环顶上；钩子只补 null 绝不覆盖 → 错行**永久、只能手工修**（美股侧无 --force 批量修正路径）。140b935 的豁免理由对 eod/fred/CN 成立、对这三源不成立。修法：受闸集合按源枚举扩为四源；不按 market 字段闸——^SOX/^TNX 的 Market=INDEX、24h 现货（DX-Y.NYB 等）按 ET 16:00 闸会丢行；eod/fred 收盘口径、CN 批量权威覆盖、sina/eastmoney 现价口径（日期=抓取日自洽）继续豁免；非美股票经四源抓取最坏延一天（次日 asOf<今天 放行）、永不丢行。
+
+**M-A（Minor）**：140b935 commit message 与 friction-log 写「全套 268 绿」，实测该 commit 为 266（268 属 086e19c 之后）——声称精度问题，不改历史；后续验证数字以当场实测为准。
+**M-B（Minor）**：15:59 拒/16:00 收边界对无直接钉测、7 月 EDT 无用例（ZoneInfo 机制上保证正确，风险极低）——已顺手补。
+**M-C（Minor，备查不修）**：①`persist_market_data._ET` 重复定义，靠注释声明与 `market_data_io._ET` 同源（直接 import 更能兑现「同源」）；②M1 断言 assertIn 子串语义——消息追加前后缀仍会漏（现实漂移形态已覆盖，可接受）。
+
+### 处置记录（2026-11-03 同日，协调者按评审员建议执行）
+
+- **I-1 已修**：`_US_REALTIME_SOURCES = frozenset({"nasdaq", "fmp", "finnhub", "yfinance"})`，`source not in` 判定；模块头/docstring/闸门日志措辞同步（日志带源名）；**源头枚举复核**：fetch_market_data 全部 source 字符串（CN 四源 tushare/eastmoney/tencent/sina + eod/fred + sina环球/eastmoney环球 现价口径均豁免）无第六个实时源漏网
+- **测试 +3**：`test_realtime_fallback_sources_gated`（三源同日未收盘拦+零落盘）、`test_realtime_fallback_sources_past_date_written`（三源隔天自愈放行）、`test_close_boundary_1559_vs_1600`（M-B：11 月 EST 与 7 月 EDT 双日期边界对）；`test_non_nasdaq_sources_not_gated` 更名 `test_exempt_sources_not_gated`（语义收窄）
+- 271 绿（268+3）+ 16 subtests、ruff 过；行为影响面：fmp/finnhub/yfinance 当前均未配 key/未启用，今日真实数据零变化（nasdaq 原受闸、CN 原豁免均不动）
+- M-A 不改历史、M-C 备查不修（处置如上）
+- 用户点名「提交」：代码修复已提交（commit 哈希以 git log 为准）+ 本 docs commit；未推送，等点名
