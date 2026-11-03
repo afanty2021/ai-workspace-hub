@@ -51,7 +51,7 @@ fetch_market_data.py ──► generate_daily_report.py ──► persist_market
                                 └─ agent 抓新闻原文 ──► save_news_snapshot.py ──► data/news/
 
                        ┌─ 盘后批量（ZCode 定时，每日 16:30，幂等）
-update_market_series.py --scope all ──► data/market/series/（全市场）+ data/sector/series/（板块指数）
+update_market_series.py --scope all ──► data/market/series/（全市场）+ data/sector/series/（板块指数）+ data/index/series/（交易所核心指数）
 update_finance_snapshots.py ─────────► data/finance/（hash 变化才动作）
 
                        ┌─ 人工 / 巡检 agent
@@ -95,7 +95,7 @@ data/                                   # 整目录 gitignore，不入库
 
 ### 4.2 行情时序 `data/market/series/{TICKER}.jsonl` 与板块 `data/sector/series/{CODE}.jsonl`
 
-交易所核心指数（2026-11-03 追加，v0.3c）落 `data/index/series/{裸 6 位码}.jsonl`（与个股不同目录、码型不歧义；`update_market_series.py --scope indices` 并入 all，固定清单 8 个，走同一 index_bars 通道，source 同为 `mootdx-index`，完成标记 `last_indices_round` per-scope 隔离；北证50 899050 不收——mootdx 会按 99 前缀误路由 SH，维持排除 BSE 口径）。
+交易所核心指数（2026-11-03 追加，v0.3c）落 `data/index/series/{裸 6 位码}.jsonl`（与个股不同目录、码型不歧义；`update_market_series.py --scope indices` 并入 all，固定清单 8 个，走同一 index_bars 通道，source 同为 `mootdx-index`，完成标记 `last_indices_round` per-scope 隔离；北证50 899050 不收——mootdx 按 89 前缀路由 SZ 而 BSE 是 market=2，同样到不了，维持排除 BSE 口径）。
 
 每行一个交易日，按日期升序追加：
 
@@ -177,7 +177,7 @@ markdown 文件 = frontmatter + 原文全文。frontmatter：`url / title / fetc
 
 ### 5.2 `update_market_series.py`（全市场 + 板块盘后批量）
 
-- `--scope stocks|sectors|all`（默认 all）、`--backfill`（默认增量 30 bars；`--backfill 800` 回补 ~3.3 年，800 为服务器单次上限）、`--tickers`（子集，调试用，入参经同一 normalize）。
+- `--scope stocks|sectors|indices|all`（默认 all）、`--backfill`（默认增量 30 bars；`--backfill 800` 回补 ~3.3 年，800 为服务器单次上限）、`--tickers`（子集，调试用，入参经同一 normalize）、`--force`（绕过闸门与逐票 skip 强制重拉；警告：收盘前执行会把动态 bar 当收盘写并推进完成标记，收盘后须再跑一次 --force 修正）。
 - **交易日闸门（先于一切逐票调用）**：先取一只 canary（如某 880 段指数）最新 bar 的日期作为服务器最新交易日；该日期 ≤ `data/.state/last_{scope}_round` **完成标记** → 该 scope 整轮短路零调用（stocks/sectors 各自独立标记）。标记是批量写者独占的旁路状态，与数据文件解耦——数据文件由钩子与批量共同写、行内容无法区分写者；canary 板块文件本身也会被 `--scope sectors` 单独执行写脏，拿任一数据文件当完成标志，局部执行就会被误判成「整轮已更」（全市场初始化静默短路的病根）。标记只在**全量枚举 + fail==0 + 服务器日期已知**的干净轮写入：tickers 抽查轮不写（否则挡住后续全量初始化），fail>0 轮不写（否则失败后的同日补跑被自己挡住）。非交易日「成本近零」靠这个成立——逐票判断 tail 做不到，那仍是 ~7000 次往返。
 - stocks：`get_security_list(market=0/1)` 枚举 → **前缀白名单过滤**（SH：60/68 股票、51/56/58 ETF；SZ：00/30 股票、15/16 ETF；显式排除 88/89 段、1x/20x 债券回购、4/8/9 段北交所与 B 股。LOF 口径两市场**有意不对称**：SH 50 段排除、SZ 16 段保留，README 注明取舍）→ 枚举结果 normalize（market=1→`.SH`、0→`.SZ`，见 4.2 命名契约）→ 逐票 `bars(frequency=9, offset=N)` 增量 upsert。实际数量以过滤日志为准（预期 ~6000±500）。
 - sectors：清单文件缺失时先枚举 `market=1` 的 88 前缀 → **段位白名单 880300 ≤ code ≤ 881999**（排除风格统计段与 888880 占位）**并显式 sort**（服务器返回未按代码排序，888880 会排在 880301 之前）生成 `sector-list.json`（code/name/category；category 按 8803xx-8809xx≈行业+概念、881xxx≈二级行业粗分）→ 逐个 `index_bars` upsert（含 up_count/down_count）。清单里消失的代码文件冻结，新出现的自动补录。
@@ -206,7 +206,7 @@ markdown 文件 = frontmatter + 原文全文。frontmatter：`url / title / fetc
 - `finance --ticker 300476 [--last 4]`（跨期文件 glob 后按 code 过滤）；
 - `sector [--top 20]`（按最后一日涨跌幅排板块榜）；
 - `custom --series X [--tail N]`；
-- `sql --sql "SELECT ..."`：暴露**四个具名视图** `market_quotes` / `sector_index` / `finance` / `custom_series`（各对各自目录 glob read_json_auto），不做跨组单 glob（schema 异构混不了）；示例查询（含「找 tail 落后 >N 日的票」缺口审计）写 README。
+- `sql --sql "SELECT ..."`：暴露**五个具名视图** `market_quotes` / `sector_index` / `index_series` / `finance` / `custom_series`（各对各自目录 glob read_json_auto），不做跨组单 glob（schema 异构混不了）；示例查询（含「找 tail 落后 >N 日的票」缺口审计）写 README。
 - 规模预期：~7000 文件 / ~450 万行 / ~700MB，read_json_auto 全扫 Apple Silicon 秒级，个人交互够用，README 记预期延迟；parquet 物化等加速列为非目标。坏行容忍：read_json_auto 容忍 torn 尾行跳过（原子写把概率压到最低，查询层不因单行崩）。
 - duckdb 缺失时报错并指向 `requirements-market-data.txt`，不降级。
 
@@ -241,12 +241,12 @@ markdown 文件 = frontmatter + 原文全文。frontmatter：`url / title / fetc
 | 模块 | 用例 |
 |---|---|
 | persist_market_data | 快照写入/同日覆盖；series 追加幂等；钩子路径合并只补 null；tradeDate 空/非 ISO 跳过 series（负样本）；「钩子盘中价 → 批量收盘权威覆盖」端到端 |
-| update_market_series | 交易日闸门整轮短路；tail==最新日且 tail 行 amount 非空才跳过（amount 空=日报钩子写的当日行，重拉让批量权威覆盖）；缺行补齐；回补早于 tail 的日期按序插入（非纯 append）；新票建文件；中途失败重跑续传；前缀白名单过滤（含 88/债券/B股/LOF 口径负样本）；枚举乱序 sort；--backfill 透传 offset；torn 尾行容忍 |
+| update_market_series | 交易日闸门整轮短路；tail==最新日且 tail 行 amount 非空才跳过（amount 空=日报钩子写的当日行，重拉让批量权威覆盖）；缺行补齐；回补早于 tail 的日期按序插入（非纯 append）；新票建文件；中途失败重跑续传；前缀白名单过滤（含 88/债券/B股/LOF 口径负样本）；枚举乱序 sort；--backfill 透传 offset；torn 尾行容忍；indices：固定清单逐个 index_bars + per-scope 标记隔离 + --force 三 scope 绕闸门（stocks/sectors/indices） |
 | sector | 段位白名单（880099/880299 排除、880300/881999 边界含、888880 排除）；清单自动生成与补录；index_bars 行映射含 up/down_count |
 | update_finance_snapshots | 占位文件（filesize≤1MB）过滤；hash 未变全跳过零下载；变化→整期重写+meta 更新；重复列名 fixture 的位置映射（构造含两列同名的 DataFrame） |
 | save_custom_data | append+registry 首写注册；同 (series,date) 拒绝与 --overwrite；csv-import 列映射；period 可选 |
 | save_news_snapshot | URL 规范化 dedup；partial 标记 |
-| query_market | fixture 目录树上的 glob 查询、finance 跨期过滤、sector top 榜（duckdb 未装时 skip 标记） |
+| query_market | fixture 目录树上的 glob 查询、裸代码段位路由（88→板块、000/399→指数）、finance 跨期过滤、sector top 榜（duckdb 未装时 skip 标记） |
 
 网络路径全部 mock mootdx_source / Affair；真实连通性靠 §11 的 e2e 验收覆盖。
 

@@ -414,6 +414,8 @@ python3 tools/daily-watch/scripts/check_setup.py
     python tools/daily-watch/scripts/update_finance_snapshots.py
     # 首次部署：全量初始化（3 年回补的唯一路径）
     python tools/daily-watch/scripts/update_market_series.py --scope all --backfill 800
+    # 盘中误跑过的修正（动态 bar 被当收盘写并推进了完成标记时）：收盘后 15:00 再跑
+    python tools/daily-watch/scripts/update_market_series.py --scope all --force
     # 查询
     python tools/daily-watch/scripts/query_market.py quote --ticker 600276.SH
     python tools/daily-watch/scripts/query_market.py quote --ticker 000001   # 裸 000/399 段 → 交易所指数

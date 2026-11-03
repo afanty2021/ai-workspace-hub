@@ -1,4 +1,4 @@
-"""DuckDB 查询层（spec §5.6）——四个具名视图，唯一 import duckdb 的组件。
+"""DuckDB 查询层（spec §5.6）——五个具名视图，唯一 import duckdb 的组件。
 
 规模预期：~7000 文件 / ~450 万行全扫 Apple Silicon 秒级；视图按需创建
 （ensure_view），torn 尾行靠 ignore_errors=true 跳过（原子写把概率压到最低）。
@@ -47,7 +47,7 @@ def ensure_view(con, data_root: Path, view: str) -> None:
     缓冲爆内存（实测 38 GiB，SET threads=1 无效）；去掉后同数据集 0.5s 建完。
     代价：视图 schema 取自采样窗口内的文件样本（duckdb 2.0 实际对有限多文件
     采样嗅探，非「首文件」定义），同目录异构键不在采样窗口会被静默忽略——
-    四个视图目录各由唯一写者模块固定键集（spec §4 字段字典），新增字段须全目
+    五个视图目录各由唯一写者模块固定键集（spec §4 字段字典），新增字段须全目
     录同步。存在性预检保留（I1）：目录空仍 raise RuntimeError 而非 IO Error。
     ignore_errors=true 容忍 torn 尾行（M11，跳过语义）不变。
     """

@@ -4,7 +4,7 @@
 
 ### 新增
 
-- 持久化层追加交易所核心指数（2026-11-03 用户拍板，spec v0.3c）：`update_market_series.py --scope indices`（并入 all，固定清单 8 个：上证指数/上证50/沪深300/中证500/中证1000/科创50/深证成指/创业板指），落 `data/index/series/{裸6位}.jsonl`（source=mootdx-index，`last_indices_round` per-scope 完成标记，与 stocks/sectors 闸门隔离）；query_market 加 `index_series` 视图、裸 000/399 段路由指数、88 段仍走板块；北证50 899050 不收（mootdx 按 99 前缀误路由 SH，维持排除 BSE）。同批：`--force` 跳过逐票 skip 强制重拉（历史回补场景，friction 第 2 次触发修根），17 只 watchlist 票 30 行缺口已用其回补至 800 行。
+- 持久化层追加交易所核心指数（2026-11-03 用户拍板，spec v0.3c）：`update_market_series.py --scope indices`（并入 all，固定清单 8 个：上证指数/上证50/沪深300/中证500/中证1000/科创50/深证成指/创业板指），落 `data/index/series/{裸6位}.jsonl`（source=mootdx-index，`last_indices_round` per-scope 完成标记，与 stocks/sectors 闸门隔离）；query_market 加 `index_series` 视图、裸 000/399 段路由指数、88 段仍走板块；北证50 899050 不收（mootdx 按 89 前缀路由 SZ 而 BSE 是 market=2，同样到不了，维持排除 BSE）。同批：`--force` 绕过闸门与逐票 skip 强制重拉（历史回补/盘中数据修正场景，friction 第 2 次触发修根；**盘中执行会把动态 bar 当收盘写并推进完成标记，收盘后须再跑一次 --force 修正**），17 只 watchlist 票 30 行缺口已用其回补至 800 行。
 
 ### 修复
 
