@@ -3,6 +3,7 @@
 - 日期：2026-11-02
 - 状态：**已批准**（2026-11-02 用户批准 v0.2；v0.3 为实施计划复查引出的闸门语义修正；实施计划 `docs/superpowers/plans/2026-11-02-market-data-persistence.md`）
 - 修订：v0.3a —— 2026-11-03 终审：逐票 skip 加 amount 写者指纹（同日钩子先写的票不跳过，§9 当日权威覆盖当日可达）
+- 修订：v0.3b —— 2026-11-03 merge 前评审：parse_trade_date 补 %b 缩写月（Nasdaq 真实格式，NVDA/指数 series 零积累根修）+ 日历校验；custom slug 白名单防写穿；_upsert_bars 空/锁返回转 skip 且锁冲突不写完成标记；URL 参数排序 dedup
 - 修订：v0.3 —— 2026-11-02 实施计划复查（N1/N2）：交易日闸门完成判据由「本地全体 tail 最大值」改为 `data/.state/` per-scope 完成标记（canary 板块文件会被 `--scope sectors` 单独执行写脏、market 文件混有钩子行，数据文件当标志会误判整轮已更）；§11.7/11.8 验收口径随之同步
 - 修订：v0.2 —— 2026-11-02 双轨评审（设计健全性 + 事实核查，关键数值已离线复算）后修订：写者权威规则、命名契约、原子写、列名统计修正（403+256+9）、§4.3 示例改累计口径、cron 共存预案
 - 范围：daily-watch 工具族的本地数据持久化——行情时序、新闻原文快照、财务快照、板块指数时序、自定义数值序列
@@ -175,7 +176,7 @@ markdown 文件 = frontmatter + 原文全文。frontmatter：`url / title / fetc
 - **交易日闸门（先于一切逐票调用）**：先取一只 canary（如某 880 段指数）最新 bar 的日期作为服务器最新交易日；该日期 ≤ `data/.state/last_{scope}_round` **完成标记** → 该 scope 整轮短路零调用（stocks/sectors 各自独立标记）。标记是批量写者独占的旁路状态，与数据文件解耦——数据文件由钩子与批量共同写、行内容无法区分写者；canary 板块文件本身也会被 `--scope sectors` 单独执行写脏，拿任一数据文件当完成标志，局部执行就会被误判成「整轮已更」（全市场初始化静默短路的病根）。标记只在**全量枚举 + fail==0 + 服务器日期已知**的干净轮写入：tickers 抽查轮不写（否则挡住后续全量初始化），fail>0 轮不写（否则失败后的同日补跑被自己挡住）。非交易日「成本近零」靠这个成立——逐票判断 tail 做不到，那仍是 ~7000 次往返。
 - stocks：`get_security_list(market=0/1)` 枚举 → **前缀白名单过滤**（SH：60/68 股票、51/56/58 ETF；SZ：00/30 股票、15/16 ETF；显式排除 88/89 段、1x/20x 债券回购、4/8/9 段北交所与 B 股。LOF 口径两市场**有意不对称**：SH 50 段排除、SZ 16 段保留，README 注明取舍）→ 枚举结果 normalize（market=1→`.SH`、0→`.SZ`，见 4.2 命名契约）→ 逐票 `bars(frequency=9, offset=N)` 增量 upsert。实际数量以过滤日志为准（预期 ~6000±500）。
 - sectors：清单文件缺失时先枚举 `market=1` 的 88 前缀 → **段位白名单 880300 ≤ code ≤ 881999**（排除风格统计段与 888880 占位）**并显式 sort**（服务器返回未按代码排序，888880 会排在 880301 之前）生成 `sector-list.json`（code/name/category；category 按 8803xx-8809xx≈行业+概念、881xxx≈二级行业粗分）→ 逐个 `index_bars` upsert（含 up_count/down_count）。清单里消失的代码文件冻结，新出现的自动补录。
-- 幂等与断点：**逐票处理即逐票落盘**（process-and-flush），中途失败重跑从断点继续；tail 日期 == 服务器最新交易日**且 tail 行 amount 非空** → 跳过该票（amount 空说明是日报钩子写的当日行，重拉让批量权威覆盖，见 §9）。A 股日线行 `source: "mootdx"`，板块行 `source: "mootdx-index"`。
+- 幂等与断点：**逐票处理即逐票落盘**（process-and-flush），中途失败重跑从断点继续；tail 日期 == 服务器最新交易日**且 tail 行 amount 非空** → 跳过该票（amount 空说明是日报钩子写的当日行，重拉让批量权威覆盖，见 §9）。A 股日线行 `source: "mootdx"`，板块行 `source: "mootdx-index"`。锁被其它进程持有的票计 skip 且**当轮不写完成标记**（防锁冲突票当日被标记掩盖）；服务器空返回（长期停牌/无数据票）计 skip 但不阻止标记——否则这些票天天挡闸门，非交易日零成本失效。
 - **upsert 合并规则（三档，配合开头写者身份表）**：① 新日期 → 「读全文件→合并→**按日期排序**→临时文件→rename」插入（回补早于 tail 的日期不破坏升序，不是纯 append）；② 同日行已存在、本次来自**批量路径**（权威写者）→ 按字段覆盖（含覆盖钩子先写的盘中价；`source` 字段记录最后写者可追溯）；③ 同日行已存在、本次来自**钩子路径**（快照级写者）→ 只补 null 空位，**绝不覆盖任何非空值**——既防降级源晚间重跑冲掉 mootdx 权威收盘，也防 close-only 海外行冲掉完整 OHLCV。
 - 失败语义：单票失败计数不中断，结束打印 `ok/skip/fail` 汇总，fail>0 退出码 1。
 
@@ -187,7 +188,7 @@ markdown 文件 = frontmatter + 原文全文。frontmatter：`url / title / fetc
 
 ### 5.4 `save_custom_data.py`（自定义层存储库 + CLI）
 
-- `append --series {slug} --name "显示名" --date YYYY-MM-DD [--period YYYY-MM|YYYY-Qn] --value V --unit U --source S [--note N]`：首次自动写 registry；**同 (series, date) 已存在 → 默认报错拒绝**，`--overwrite` 显式覆盖（人工数据不可静默重写，与行情层语义相反，理由：机器产物可重取、人工录入错了不可恢复）。
+- `append --series {slug} --name "显示名" --date YYYY-MM-DD [--period YYYY-MM|YYYY-Qn] --value V --unit U --source S [--note N]`：首次自动写 registry；**同 (series, date) 已存在 → 默认报错拒绝**，`--overwrite` 显式覆盖（人工数据不可静默重写，与行情层语义相反，理由：机器产物可重取、人工录入错了不可恢复）。series 名只接受 `[a-z0-9][a-z0-9-]*`（与 §5.5 slug 白名单同构——series 直接拼路径，`../` 可写穿重写行情层文件）。
 - `list` / `show --series X [--tail 20]` / `csv-import --series X --file data.csv`（列名 date/period/value/unit/source/note 映射，其余列忽略；遇已存在 (series,date) 默认**跳过并在汇总计数**，`--overwrite` 才覆盖——与 append 的拒绝语义一致，不静默、不中断整批）。
 
 ### 5.5 `save_news_snapshot.py`

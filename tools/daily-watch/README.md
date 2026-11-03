@@ -379,7 +379,7 @@ python3 tools/daily-watch/scripts/check_setup.py
 
 ## 本地持久化（市场数据层）
 
-设计 spec：`docs/superpowers/specs/2026-11-02-market-data-persistence-design.md`（v0.3）。目录 `data/` 整目录 gitignore。
+设计 spec：`docs/superpowers/specs/2026-11-02-market-data-persistence-design.md`。目录 `data/` 整目录 gitignore（spec 版本号只在 spec 头部修订区维护，指针不带版本）。
 
 ### 目录与字段字典
 
