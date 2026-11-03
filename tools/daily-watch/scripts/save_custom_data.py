@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,10 @@ def _load_rows(data_root: Path, series: str) -> list[dict[str, Any]]:
 def append_record(data_root: Path, *, series: str, name: str, date: str, value: float,
                   unit: str, source: str, period: str | None = None,
                   note: str | None = None, overwrite: bool = False) -> Path:
+    # 与 save_news_snapshot 的 slug 守卫同构：series 名直接拼进 custom/ 路径，
+    # "../" 可写穿重写行情层文件；校验放在读 registry 之前，坏名连目录都不建
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", series):
+        raise ValueError(f"series 名只接受 [a-z0-9][a-z0-9-]*（得到 {series!r}）——防路径写穿")
     registry = _load_registry(data_root)
     if series not in registry:  # 首次自动注册
         registry[series] = {"name": name, "unit": unit, "category": "", "description": "",

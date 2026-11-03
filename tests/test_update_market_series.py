@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -211,6 +212,29 @@ class StocksUpdateTests(unittest.TestCase):
         self.assertEqual(second, {"ok": 1, "skip": 1, "fail": 0})
         self.assertEqual(ums.last_round_date(self.root, "stocks"), "2026-11-02")  # 补跑干净才写标记
 
+    def test_lock_conflict_counts_skip_and_blocks_marker(self) -> None:
+        # I2：锁被其它进程持有 ≠ ok——skip 计数，且当轮完成标记不写（标记会把锁冲突票当日掩盖）
+        @contextmanager
+        def fake_lock(data_root, name, *, timeout_s=1.0):
+            yield False
+
+        fake = FakeMootdx(stocks=_stocks_frame([("600276", "恒瑞医药")]),
+                          bars=_bars_frame(["2026-11-02"], [71.54]))
+        with patch.object(ums, "series_lock", fake_lock), patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, latest="2026-11-02")
+        self.assertEqual(stats, {"ok": 0, "skip": 1, "fail": 0})  # skip 不 ok
+        self.assertIsNone(ums.last_round_date(self.root, "stocks"))  # 锁冲突轮：无标记
+        self.assertFalse(series_file(self.root, "600276.SH").exists())  # 确实没写
+
+    def test_empty_bars_counts_skip_but_marker_written(self) -> None:
+        # I2 取舍：长期停牌/无数据票（e2e 实测 ~45 只）空返回计 skip 但不阻止标记——
+        # 否则这些票天天挡标记，闸门永远不生效、非交易日零成本失效
+        fake = FakeMootdx(stocks=_stocks_frame([("600276", "a")]), bars=pd.DataFrame())
+        with patch.object(ums, "_mootdx_call", fake):
+            stats = ums.run_stocks_update(self.root, latest="2026-11-02")
+        self.assertEqual(stats, {"ok": 0, "skip": 1, "fail": 0})
+        self.assertEqual(ums.last_round_date(self.root, "stocks"), "2026-11-02")  # 标记照写
+
 
 class SectorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -289,6 +313,23 @@ class SectorTests(unittest.TestCase):
             stats = ums.run_sectors_update(self.root, latest="2026-11-03")
         self.assertEqual(stats, {"ok": 0, "skip": 0, "fail": 0})  # 整轮零调用
         self.assertFalse(fake.calls)  # 连清单枚举的 stocks 调用都没有（闸门在枚举之前）
+
+    def test_sectors_lock_conflict_counts_skip_and_blocks_marker(self) -> None:
+        # I2 sectors 调用点同款：锁冲突 → skip 不 ok，当轮 sectors 标记不写
+        @contextmanager
+        def fake_lock(data_root, name, *, timeout_s=1.0):
+            yield False
+
+        df = self._stocks_sh([("880301", "行业A")])
+        with patch.object(ums, "series_lock", fake_lock):
+            with patch.object(ums, "load_or_merge_sector_list", return_value=(
+                    [{"code": "880301", "name": "行业A", "category": "行业/概念"}], [])):
+                index_df = _bars_frame(["2026-11-02"], [3300.0], up_count=[16], down_count=[15])
+                fake = FakeMootdx(stocks=df, index_bars=index_df)
+                with patch.object(ums, "_mootdx_call", fake):
+                    stats = ums.run_sectors_update(self.root, latest="2026-11-03")
+        self.assertEqual(stats, {"ok": 0, "skip": 1, "fail": 0})
+        self.assertIsNone(ums.last_round_date(self.root, "sectors"))
 
 
 if __name__ == "__main__":

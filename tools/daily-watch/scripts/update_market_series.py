@@ -98,15 +98,21 @@ def list_cn_symbols() -> list[tuple[str, int]]:
 
 
 def _upsert_bars(path: Path, data_root: Path, code: str, backfill: int, *, source: str,
-                 index: bool = False) -> None:
+                 index: bool = False) -> str:
+    """结果语义（I2）：'written'=真写；'empty'=服务器空返回；'locked'=锁被其它进程持有。
+
+    调用方据此区分 ok/skip 与是否写完成标记——空/锁都不是 ok，静默 return 会让
+    ok 虚高、锁冲突票当日被完成标记掩盖。
+    """
     method = "index_bars" if index else "bars"
     df = _mootdx_call(method, symbol=code, frequency=9, offset=backfill)
     if df is None or df.empty:
-        return
+        return "empty"
     with series_lock(data_root, path.name) as acquired:
         if not acquired:
-            return
+            return "locked"
         upsert_series_rows(path, bars_to_rows(df, source=source), writer="batch")
+    return "written"
 
 
 def run_stocks_update(data_root: Path, *, backfill: int = 30,
@@ -121,6 +127,7 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
         targets = [(t.rsplit(".", 1)[0], 1 if t.upper().endswith(".SH") else 0) for t in tickers]
     else:
         targets = list_cn_symbols()
+    lock_conflict = False
     for code, market in targets:
         path = series_file(data_root, normalize_cn_symbol(code, market))
         try:
@@ -130,13 +137,22 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
             if rows and latest and rows[-1]["date"] >= latest and rows[-1].get("amount") is not None:
                 stats["skip"] += 1
                 continue
-            _upsert_bars(path, data_root, code, backfill, source="mootdx")
-            stats["ok"] += 1
+            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx")
+            if outcome == "written":
+                stats["ok"] += 1
+            else:
+                stats["skip"] += 1
+                if outcome == "locked":
+                    lock_conflict = True
+                    log(f"Warning: {code} 锁被其它进程持有，本次未更新——完成标记不写")
         except Exception as exc:  # noqa: BLE001 — 单票失败不中断
             stats["fail"] += 1
             log(f"Warning: {code} 更新失败: {exc}")
     log(f"stocks 汇总: {stats}")
-    if not tickers and latest is not None and stats["fail"] == 0:
+    # empty（长期停牌/无数据票，e2e 实测 ~45 只）不阻止标记——这些票每天都会空返回，
+    # 若按失败处理闸门永远不生效、非交易日零成本失效；锁冲突才阻止：那批票当日确实没写，
+    # 写了标记会被闸门整轮短路掩盖掉（I2）
+    if not tickers and latest is not None and stats["fail"] == 0 and not lock_conflict:
         write_round_marker(data_root, "stocks", latest)  # 干净全量轮才记完成（N1 补充点①）
     return stats
 
@@ -178,6 +194,7 @@ def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | Non
         return stats  # 非交易日零服务器调用（spec §9 补注）
     stocks_df = _mootdx_call("stocks", market=1)
     merged, _added = load_or_merge_sector_list(data_root, stocks_df)
+    lock_conflict = False
     for item in merged:
         code = item["code"]
         path = sector_series_file(data_root, code)
@@ -186,13 +203,20 @@ def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | Non
             if rows and latest and rows[-1]["date"] >= latest:
                 stats["skip"] += 1
                 continue
-            _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
-            stats["ok"] += 1
+            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
+            if outcome == "written":
+                stats["ok"] += 1
+            else:
+                stats["skip"] += 1
+                if outcome == "locked":
+                    lock_conflict = True
+                    log(f"Warning: 板块 {code} 锁被其它进程持有，本次未更新——完成标记不写")
         except Exception as exc:  # noqa: BLE001
             stats["fail"] += 1
             log(f"Warning: 板块 {code} 更新失败: {exc}")
     log(f"sectors 汇总: {stats}")
-    if latest is not None and stats["fail"] == 0:
+    # 与 stocks 同款（I2）：empty 不阻止标记（板块空返回=无该段数据，天天有），锁冲突阻止
+    if latest is not None and stats["fail"] == 0 and not lock_conflict:
         write_round_marker(data_root, "sectors", latest)
     return stats
 

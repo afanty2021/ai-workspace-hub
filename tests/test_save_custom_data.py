@@ -43,6 +43,20 @@ class CustomSeriesTests(unittest.TestCase):
         self.assertEqual(scd.show_series(self.root, "x")[-1]["value"], 2.0)
         self.assertEqual(len(scd.show_series(self.root, "x")), 1)  # 覆盖不追加
 
+    def test_series_slug_whitelist_blocks_write_through(self) -> None:
+        # I1：series 名零校验时 "../market/series/600276.SH" 会把行情序列文件当
+        # custom 序列整文件重写（写穿污染）——与 save_news_snapshot 的 slug 守卫同构
+        market = self.root / "market" / "series" / "600276.SH.jsonl"
+        market.parent.mkdir(parents=True)
+        market.write_text('{"date": "2026-11-02", "close": 71.0}\n', encoding="utf-8")
+        for bad in ("../market/series/600276.SH", "UPPER", "a/b", "-lead"):
+            with self.assertRaises(ValueError, msg=bad):
+                scd.append_record(self.root, series=bad, name="x", date="2026-11-02",
+                                  value=1.0, unit="u", source="s")
+        self.assertEqual(market.read_text(encoding="utf-8"),
+                         '{"date": "2026-11-02", "close": 71.0}\n')  # 行情文件未被碰
+        self.assertFalse((self.root / "custom").exists())  # 校验在读 registry 之前，连目录都不建
+
     def test_csv_import_maps_columns_and_skips_existing(self) -> None:
         scd.append_record(self.root, series="x", name="X", date="2026-10-01",
                           value=9.0, unit="件", source="seed")
