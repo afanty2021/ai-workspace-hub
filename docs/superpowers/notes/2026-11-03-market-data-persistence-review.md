@@ -191,3 +191,9 @@
 - **当日实操补充**：主会话另挂 15:05 后台 `--scope all --force`（与 15:10 删标记计划合流——盘中行 amount 非空带写者指纹，单删标记 16:30 仍全跳；force 已真修：stocks 7450/sectors 1037/indices 8 全 ok，600276 收盘 49.31 覆盖盘中 49.0、上证成交额 8108 亿入账，标记重写 11-03）；16:30 cron 将全 skip（已修完的口径，非异常）后重写标记
 - **评审员两条建议**：提取 run_indices/run_sectors 公共函数与「口径注释钉一处」暂缓（重构建议、标注「下次再动」，本轮不扩面），留档
 - 259 测试绿（249→254→259）；修复均未推送，等用户点名
+
+### 两条建议后续执行（2026-11-03 同日，用户点名「修掉」）
+
+- **①提取 `_run_list_round`**：sectors/indices 清单制共用轮——skip/empty/locked/fail 分类与完成标记条件（I2）唯一定义在此；stocks 不并入（多 amount 写者指纹逐票 skip 与 tickers 子集路径，标记条件另有 not tickers，docstring 注明）。两处 run_* 各瘦身为「闸门 + 清单准备 + 委托」
+- **②段位→市场口径注释钉一处**：唯一定义在 `market_data_io.py`（`_CN_PREFIX_WHITELIST` 邻近注释块，含 mootdx index_bars 00/88/99→SH 路由与 89 段不收 BSE 理由）；`update_market_series._CORE_INDICES` 与 `query_market._view_for` 两处缩成一行结论+引用
+- 行为零变化：259 测试绿、ruff 过（E/F/W ignore E501）、真实闸门冒烟三条消息与重构前逐字一致（标记 mtime 不动，零副作用）；已提交 80e9efc（重构）+ 本 docs commit（评审记录自身，commit 哈希以 git log 为准），未推送等点名
