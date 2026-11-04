@@ -35,14 +35,16 @@ PERMANENT_ABSTAIN = {
 }
 
 # 适配层数据面（gpcw+series）拿不到、persona 打分会踩的字段——field_availability
-# 一律标 "missing"（vendored 缺省：数值字段 0、ownership 字段 None）
+# 一律标 "missing"（vendored 缺省：数值字段 0、ownership 字段 None）。
+# 技术面 rsi/macd 族/atr/max_drawdown/volatility_20d 已从 series 日线补算（见
+# build_context），不在此列；beta_1y 需基准指数序列（本地数据面无指数 series，
+# 保持 missing）；stoch_k/stoch_d/short_interest/dividend_yield/payout_ratio 无源。
 ADAPTER_MISSING_FIELDS = (
     "gross_margins", "operating_margins", "fcf",
     "current_ratio", "quick_ratio",
     "institutional_ownership", "insider_ownership",
-    "short_interest", "volatility_20d", "volatility_60d", "volatility_252d",
-    "max_drawdown", "beta_1y", "rsi", "macd", "macd_signal", "macd_histogram",
-    "atr", "stoch_k", "stoch_d", "dividend_yield", "payout_ratio",
+    "short_interest", "volatility_60d", "volatility_252d",
+    "beta_1y", "stoch_k", "stoch_d", "dividend_yield", "payout_ratio",
 )
 
 # 固定汇率近似（USD/CNY）：MarketContext 的市值类字段（market_cap/ebitda/total_cash/
@@ -229,6 +231,86 @@ def _sma(closes: list[float], n: int) -> float:
     return sum(closes[-n:]) / n
 
 
+def _ema(values: list[float], n: int) -> list[float]:
+    """指数移动平均序列：alpha = 2/(n+1)，首值取首元素（主流 EMA 惯例）。"""
+    alpha = 2.0 / (n + 1)
+    out = [values[0]]
+    for v in values[1:]:
+        out.append(alpha * v + (1 - alpha) * out[-1])
+    return out
+
+
+def rsi(closes: list[float], n: int = 14) -> float | None:
+    """RSI(n)（Wilder 口径）：首窗简单平均，其后 Wilder 平滑；序列不足 n+1 返回 None。"""
+    if len(closes) < n + 1:
+        return None
+    gains = losses = 0.0
+    for prev, cur in zip(closes[:n], closes[1:n + 1]):
+        diff = cur - prev
+        gains += max(diff, 0.0)
+        losses += max(-diff, 0.0)
+    avg_gain, avg_loss = gains / n, losses / n
+    for prev, cur in zip(closes[n:], closes[n + 1:]):  # Wilder 递推
+        diff = cur - prev
+        avg_gain = (avg_gain * (n - 1) + max(diff, 0.0)) / n
+        avg_loss = (avg_loss * (n - 1) + max(-diff, 0.0)) / n
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD = EMA(fast) − EMA(slow)；signal = MACD 的 EMA(signal)；hist = MACD − signal。
+
+    返回 (macd, signal, histogram)；closes 不足 slow+signal−1 返回 (None, None, None)。
+    """
+    if len(closes) < slow + signal - 1:
+        return None, None, None
+    ema_fast, ema_slow = _ema(closes, fast), _ema(closes, slow)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)][slow - 1:]
+    signal_line = _ema(macd_line, signal)
+    return macd_line[-1], signal_line[-1], macd_line[-1] - signal_line[-1]
+
+
+def atr(rows: list[dict], n: int = 14) -> float | None:
+    """ATR(n)（Wilder 口径）：TR = max(high−low, |high−prev_close|, |low−prev_close|)。"""
+    if len(rows) < n + 1:
+        return None
+    trs = []
+    for prev, cur in zip(rows, rows[1:]):
+        tr = max(float(cur["high"]) - float(cur["low"]),
+                 abs(float(cur["high"]) - float(prev["close"])),
+                 abs(float(cur["low"]) - float(prev["close"])))
+        trs.append(tr)
+    value = sum(trs[:n]) / n
+    for tr in trs[n:]:  # Wilder 递推
+        value = (value * (n - 1) + tr) / n
+    return value
+
+
+def max_drawdown(closes: list[float], window: int = 252) -> float | None:
+    """近 window 日最大回撤（正值百分比）：max((peak − close)/peak)。序列不足 2 返回 None。"""
+    if len(closes) < 2:
+        return None
+    window_closes = closes[-window:]
+    peak, mdd = window_closes[0], 0.0  # 峰值从窗口首日起算（窗口外高点不计）
+    for close in window_closes:
+        peak = max(peak, close)
+        mdd = max(mdd, (peak - close) / peak)
+    return mdd * 100
+
+
+def volatility_20d(closes: list[float]) -> float | None:
+    """20 日年化波动率（百分比）：近 20 个日收益率样本标准差 × √252 × 100。"""
+    if len(closes) < 21:
+        return None
+    returns = [cur / prev - 1.0 for prev, cur in zip(closes[-21:], closes[-20:])]
+    mean = sum(returns) / len(returns)
+    var = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)  # 样本方差
+    return (var ** 0.5) * (252 ** 0.5) * 100
+
+
 def load_series(data_root: Path, code: str, suffix: str) -> list[dict]:
     path = _find_series_path(data_root, code, suffix)
     if path is None:
@@ -276,6 +358,13 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
     low_52w = min(float(r["low"]) for r in window_rows)
     sma20, sma50, sma200 = _sma(closes, 20), _sma(closes, 50), _sma(closes, 200)
 
+    # 技术面补算（延后项收口）：series 日线现算，序列长度不足的字段保持 missing
+    rsi_v = rsi(closes, 14)
+    macd_v, macd_signal_v, macd_hist_v = macd(closes, 12, 26, 9)
+    atr_v = atr(rows, 14)
+    mdd_v = max_drawdown(closes, 252)
+    vol20_v = volatility_20d(closes)  # dayu/marks 等按百分比数消费（>60 超高波动档）
+
     industry = industry_for(norm, suffix)
 
     # shares / 估值推导链（见 docstring）
@@ -303,6 +392,15 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
         "price_vs_52w_high", "price_vs_52w_low", "sma20", "sma50", "sma200", "volume",
     ]
     availability = {f: "replay" for f in replay_fields}
+    for field, value in (("rsi", rsi_v), ("macd", macd_v), ("macd_signal", macd_signal_v),
+                         ("macd_histogram", macd_hist_v), ("atr", atr_v),
+                         ("max_drawdown", mdd_v), ("volatility_20d", vol20_v)):
+        if value is not None:
+            replay_fields.append(field)
+            availability[field] = "replay"  # 序列足够，已从日线补算
+        # 序列不足（None）→ 留在 ADAPTER_MISSING_FIELDS 之外的兜底：显式标 missing
+        else:
+            availability[field] = "missing"
     if not sma200:
         availability["sma200"] = "missing"  # 序列不足 200 日
     if eps_missing:
@@ -335,6 +433,13 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
         sma20=sma20,
         sma50=sma50,
         sma200=sma200,
+        rsi=rsi_v if rsi_v is not None else 50.0,      # vendored 缺省 50/0，missing 时回退
+        macd=macd_v or 0.0,
+        macd_signal=macd_signal_v or 0.0,
+        macd_histogram=macd_hist_v or 0.0,
+        atr=atr_v or 0.0,
+        max_drawdown=mdd_v or 0.0,
+        volatility_20d=vol20_v or 0.0,
         field_availability=availability,
         as_of_date=str(last["date"]),
     )

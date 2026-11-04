@@ -230,6 +230,89 @@ def test_apply_coverage_degrades_duan_yongping(tmp_data_root):
     assert "arps" not in adapter.load_persona_deps()
 
 
+# ---------------------------------------------------------------- 技术面补算（延后项收口）
+
+def test_rsi_hand_computed():
+    """Wilder RSI 手工验值：全涨=100、全跌=0、对称振荡（+1/−1 交替，rs=1.5）=60。"""
+    up = [10, 11, 12, 13, 14, 15]
+    down = [15, 14, 13, 12, 11, 10]
+    osc = [10, 11, 10, 11, 10, 11]
+    assert adapter.rsi(up, 5) == pytest.approx(100.0)
+    assert adapter.rsi(down, 5) == pytest.approx(0.0)
+    # 首窗 5 个 diff：+1,−1,+1,−1,+1 → avg_gain=0.6 / avg_loss=0.4 → rs=1.5
+    assert adapter.rsi(osc, 5) == pytest.approx(100.0 - 100.0 / 2.5)
+    assert adapter.rsi([10.0] * 5, 5) is None  # 序列不足 n+1 → None（missing）
+
+
+def test_macd_constant_and_uptrend():
+    """MACD：常数序列 macd=signal=hist=0；单调上行 macd>0；序列不足返回 None 三元组。"""
+    flat = [100.0] * 40
+    m, s, h = adapter.macd(flat)
+    assert m == pytest.approx(0.0) and s == pytest.approx(0.0) and h == pytest.approx(0.0)
+    m, _s, _h = adapter.macd([float(i) for i in range(60)])
+    assert m > 0  # EMA12 在上行序列里高于 EMA26
+    assert adapter.macd([100.0] * 30) == (None, None, None)  # < 26+9−1
+    m, s, h = adapter.macd([100.0] * 34)
+    assert m == pytest.approx(0.0) and s is not None and h == pytest.approx(0.0)
+
+
+def test_atr_constant_tr_equals_range():
+    """ATR：每天 TR 恒为 high−low=2 的构造序列 → Wilder 平滑后仍恒等于 2。"""
+    rows = [{"high": 11.0, "low": 9.0, "close": 10.0} for _ in range(16)]
+    assert adapter.atr(rows, 14) == pytest.approx(2.0)
+    assert adapter.atr(rows[:14], 14) is None  # 序列不足 n+1
+
+
+def test_max_drawdown_hand_computed():
+    """近 252 日最大回撤（正值百分比）：[10,12,9,11] → (12−9)/12 = 25%。"""
+    assert adapter.max_drawdown([10, 12, 9, 11]) == pytest.approx(25.0)
+    assert adapter.max_drawdown([1, 2, 3, 4]) == pytest.approx(0.0)  # 单边上行无回撤
+    assert adapter.max_drawdown([5.0]) is None
+    # 窗口截断：前面的大回撤在 252 日窗口之外不计
+    closes = [10, 20, 5] + [5.0] * 260 + [4.9, 5.0]
+    assert adapter.max_drawdown(closes, 252) == pytest.approx(2.0, rel=1e-3)  # 窗口内 (5−4.9)/5
+
+
+def test_volatility_20d_hand_computed():
+    """20 日年化波动率：±10% 交替收益 → 样本std √(20×0.01/19) × √252 × 100。"""
+    closes = [100.0]
+    for i in range(20):  # 交替 +10% / −10%（近似，基数滚动）：直接构造精确交替
+        closes.append(closes[-1] * (1.1 if i % 2 == 0 else 1 / 1.1))
+    # 上面收益不严格 ±10%；改用精确构造：奇偶交替 110 / 100
+    closes = [110.0 if i % 2 else 100.0 for i in range(21)]
+    returns = [cur / prev - 1 for prev, cur in zip(closes, closes[1:])]  # +0.1 / −1/11 交替
+    mean = sum(returns) / 20
+    std = (sum((r - mean) ** 2 for r in returns) / 19) ** 0.5
+    assert adapter.volatility_20d(closes) == pytest.approx(std * 252 ** 0.5 * 100)
+    assert adapter.volatility_20d([100.0] * 21) == pytest.approx(0.0)  # 零波动
+    assert adapter.volatility_20d([100.0] * 20) is None  # 序列不足 21
+
+
+def test_build_context_technical_fields_replayed(tmp_data_root):
+    """build_context 技术面：单调上行 210 日序列 → rsi=100 / atr=0.4 / mdd=0，availability replay。"""
+    ctx = build_context("300476.SZ", tmp_data_root, fetch=False)
+    assert ctx.rsi == pytest.approx(100.0)      # 逐日 +0.05 恒涨
+    assert ctx.atr == pytest.approx(0.4)        # TR 恒为 high−low = 0.4
+    assert ctx.max_drawdown == pytest.approx(0.0)
+    assert ctx.macd > 0 and ctx.volatility_20d >= 0
+    for field in ("rsi", "macd", "macd_signal", "macd_histogram", "atr",
+                  "max_drawdown", "volatility_20d"):
+        assert ctx.field_availability[field] == "replay", field
+    # 无源字段保持 missing（声明不动）
+    for field in ("beta_1y", "stoch_k", "short_interest", "dividend_yield"):
+        assert ctx.field_availability[field] == "missing", field
+
+
+def test_build_context_short_series_technicals_missing(tmp_data_root):
+    """序列不足：技术面保持 availability missing（值回退 vendored 缺省），不编造。"""
+    _write_series(tmp_data_root, "300476.SZ.jsonl", days=10)
+    ctx = build_context("300476.SZ", tmp_data_root, fetch=False)
+    for field in ("rsi", "macd", "macd_signal", "macd_histogram", "atr",
+                  "volatility_20d"):
+        assert ctx.field_availability[field] == "missing", field
+    assert ctx.rsi == 50.0 and ctx.macd == 0.0  # vendored 缺省回退
+
+
 # ---------------------------------------------------------------- 报告冒烟
 
 def test_report_smoke(tmp_path, tmp_data_root, monkeypatch):
