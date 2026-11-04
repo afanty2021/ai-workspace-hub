@@ -102,6 +102,24 @@ def _persist_market_data_hook(market_data: dict[str, Any],
         log(f"Warning: persist hook failed (report continues): {exc}")
 
 
+def fetch_macro_or_degrade(workspace_root: Path, enabled: bool) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """宏观抓取 + 失败降级（实施评审 #1）：macro 崩只丢宏观段，不连坐市场数据落盘。
+
+    宏观调用序前移到 persist hook 之前（spec §3.3 拍板 #2 ②）后，若无隔离，
+    macro 崩会把 hook 一起拖死——市场数据整个不落盘（旧调用序只丢报告不丢数据，
+    属回归）。失败路径：stderr 告警 + macro_data={} + meta 标失败原因（missing_symbols
+    含 ALL，data-close 的 missing 透传可见），hook 照常执行。
+    """
+    if not enabled:
+        return {}, None
+    try:
+        macro_data = run_json_script(workspace_root, "fetch_macro_data.py")
+        return macro_data, macro_data.get("meta") or None
+    except Exception as exc:  # noqa: BLE001 — 宏观属可降级模块
+        log(f"Warning: fetch_macro_data 失败（宏观段降级为空，市场数据照常落盘）: {exc}")
+        return {}, {"missing_symbols": ["ALL"], "reason": f"macro fetch failed: {exc}"[:200]}
+
+
 def format_pct(value: Any) -> str:
     if value is None:
         return "N/A"
@@ -998,15 +1016,9 @@ def main() -> int:
     market_data = run_json_script(workspace_root, "fetch_market_data.py")
     # 宏观调用序前移到 persist hook 之前（spec §3.3 拍板 #2 ②）：宏观降级清单
     # （meta.missing_symbols）才能进 data-close 的 missing；macro_data 消费位置不变。
-    macro_data = (
-        run_json_script(workspace_root, "fetch_macro_data.py")
-        if modules["macro"]
-        else {}
-    )
-    _persist_market_data_hook(
-        market_data,
-        macro_meta=(macro_data.get("meta") or None) if modules["macro"] else None,
-    )
+    # 宏观失败只降级不连坐（实施评审 #1，见 fetch_macro_or_degrade）。
+    macro_data, macro_meta = fetch_macro_or_degrade(workspace_root, modules["macro"])
+    _persist_market_data_hook(market_data, macro_meta=macro_meta)
     movers = market_data.get("movers") or []
     earnings = market_data.get("earnings") or []
     hypothesis_enabled, auto_writeback = hypothesis_settings(config)

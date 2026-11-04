@@ -366,12 +366,14 @@ class SignalEvidenceTimingTests(unittest.TestCase):
         self.assertEqual(path1, path2)
 
     def test_report_call_order_macro_before_persist_hook(self) -> None:
-        # 4c 调用序：fetch_macro_data 在 persist hook 之前（宏观降级清单才能进 data-close）
+        # 4c 调用序：fetch_macro_data 在 persist hook 之前（宏观降级清单才能进 data-close）；
+        # 实施评审 #1 后宏观抓取收进 fetch_macro_or_degrade（失败降级不连坐 hook），
+        # 断言锚点随之更新为 main 内的三步调用序
         source = (REPO_ROOT / "tools/daily-watch/scripts/generate_daily_report.py"
                   ).read_text(encoding="utf-8")
-        macro_call = source.index('run_json_script(workspace_root, "fetch_macro_data.py")')
-        hook_call = source.index("_persist_market_data_hook(\n        market_data,")
         market_call = source.index('run_json_script(workspace_root, "fetch_market_data.py")')
+        macro_call = source.index("macro_data, macro_meta = fetch_macro_or_degrade(workspace_root,")
+        hook_call = source.index("_persist_market_data_hook(market_data, macro_meta=macro_meta)")
         self.assertLess(market_call, macro_call)
         self.assertLess(macro_call, hook_call)
 

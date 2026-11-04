@@ -236,10 +236,44 @@ class HookTests(unittest.TestCase):
 
     def test_report_source_wires_hook(self) -> None:
         source = (REPO_ROOT / "tools/daily-watch/scripts/generate_daily_report.py").read_text(encoding="utf-8")
-        # 4c 宏观前移后调用带 macro_meta 透传（旧断言 `_persist_market_data_hook(market_data)`
-        # 按无参调用锁定，已随调用序前移更新）
-        self.assertIn("_persist_market_data_hook(\n        market_data,", source)
+        # 4c 宏观前移后调用带 macro_meta 透传；实施评审 #1 后宏观抓取走
+        # fetch_macro_or_degrade（失败降级不连坐 hook），hook 调用紧随其后
+        self.assertIn("macro_data, macro_meta = fetch_macro_or_degrade(", source)
+        self.assertIn("_persist_market_data_hook(market_data, macro_meta=macro_meta)", source)
         self.assertIn("def _persist_market_data_hook(", source)
+
+    def test_macro_failure_degrades_without_killing_hook(self) -> None:
+        """实施评审 #1：macro 脚本崩 → 宏观段降级（meta 标失败），市场数据照常
+        落盘且 data-close 的 missing 含 macro 失败项（旧调用序只丢报告不丢数据，
+        前移后若无隔离会连坐 persist hook）。"""
+        import generate_daily_report as gdr
+
+        with patch.object(gdr, "run_json_script",
+                          side_effect=RuntimeError("fetch_macro_data.py exited with code 1")):
+            macro_data, macro_meta = gdr.fetch_macro_or_degrade(self.root, enabled=True)
+        self.assertEqual(macro_data, {})
+        self.assertIsNotNone(macro_meta)
+        self.assertIn("ALL", macro_meta["missing_symbols"])
+        self.assertIn("macro fetch failed", macro_meta["reason"])
+
+        # 端到端：降级 meta 进真钩子 → 市场数据落盘 + data-close missing 可见
+        pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root,
+                             macro_meta=macro_meta)
+        self.assertTrue(series_file(self.root, "600276.SH").exists())
+        rows = [json.loads(line) for line in
+                (self.root / ".state" / "run-log.jsonl").read_text(encoding="utf-8").splitlines()]
+        close_row = next(r for r in rows if r["type"] == "data-close")
+        self.assertIn({"item": "ALL", "reason": macro_meta["reason"]}, close_row["missing"])
+
+    def test_macro_fetch_ok_passes_meta_through(self) -> None:
+        """宏观正常：meta 原样透传（不造 ALL 哨兵）。"""
+        import generate_daily_report as gdr
+
+        payload = {"items": [], "meta": {"missing_symbols": ["VIX"], "reason": "no key"}}
+        with patch.object(gdr, "run_json_script", return_value=payload):
+            macro_data, macro_meta = gdr.fetch_macro_or_degrade(self.root, enabled=True)
+        self.assertEqual(macro_data, payload)
+        self.assertEqual(macro_meta, payload["meta"])
 
 
 class RunLedgerHookTests(unittest.TestCase):
