@@ -177,8 +177,11 @@ def _ledger_failed(data_root: Path, step: str, exc: Exception) -> None:
 
 
 def sentinel_of(data_root: Path) -> Path:
-    """sentinel 路径（data/.state/run-log.error）——run_archive 未导入也能算（独立实现避免循环依赖）。"""
-    return Path(data_root) / ".state" / "run-log.error"
+    """sentinel 路径：优先复用 run_archive.sentinel_path（单一事实源），导入失败回退本地实现。"""
+    try:
+        return Path(_load_run_archive().sentinel_path(data_root))
+    except Exception:  # noqa: BLE001 — best-effort 复用，账本模块不可用时不能连 sentinel 都写不了
+        return Path(data_root) / ".state" / "run-log.error"
 
 
 def _degradations_from_meta(market_data: dict[str, Any]) -> list[Any]:

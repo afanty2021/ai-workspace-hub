@@ -299,7 +299,7 @@ def render_watchlist_summary(entries: list[dict], trade_date: str, watchlist_pat
             lines.append(f"| {e['ticker']} | {e['name']} | {e['score']:.2f} | {e['signal']} "
                          f"| {e['participants']} | {e['abstains']} | {kelly}% | {div_txt} |")
         elif e["status"] == "abstain":
-            lines.append(f"| {e['ticker']} | {e['name']} | — | abstain | 0 | 18 | — "
+            lines.append(f"| {e['ticker']} | {e['name']} | — | abstain | 0 | {len(AGENTS)} | — "
                          f"| {e['reason']} |")
         else:  # error
             lines.append(f"| {e['ticker']} | {e['name']} | ERR | error | — | — | — "
