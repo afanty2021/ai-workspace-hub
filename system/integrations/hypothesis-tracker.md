@@ -53,6 +53,15 @@ my-ai-workspace/
 
 建立假设前先问：这是关于产业世界如何变化的判断，还是只关于某家公司？如果多家公司会受同一驱动影响，优先建立一个主题假设，再链接公司，不要为每家公司复制一份相同逻辑。
 
+## 巡检流程
+
+巡检 = 按假设 frontmatter 的 `next_review_at`（到期）与温度计设定（触线）对检查点逐项判定：
+
+- 判定行用 `system/integrations/object-model.md`「巡检判定词表」的 verdict（`normal / warn / trigger / missing`）与行文法，逐条**追加**到假设正文「巡检记录」区，不改写旧行。
+- 每个检查点要么有读数，要么是一条带 `reason` 和**可执行补数命令**的 `missing` 行，不允许沉默缺失。
+- 关键证据 `review_status: pending` 时，该检查点判定降级为 `missing`（reason: `关键证据 pending review [E-ID]`）。
+- `trigger` 行必须关联 evidence ID，并提示按 `system/skills/hypothesis-review.md` 启动复盘；巡检记录是历史事件，不改变假设 frontmatter 的当前状态。
+
 ## 边界
 
 - 只管假设的记录、证据归集和复盘，不抓材料、不产日报。

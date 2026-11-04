@@ -1,8 +1,9 @@
 ---
 id: E-YYYYMMDD-type-ref-H1
 type: evidence
-observed_at: YYYY-MM-DD
-recorded_at: YYYY-MM-DD
+observed_at: YYYY-MM-DD                       # 业务时点（当地日历日）
+available_at: YYYY-MM-DDTHH:MM:SS+08:00       # 可得时刻：该事实最早可被知晓，必填，ISO 8601 带时区（跨时区按当期实际偏移换算）
+recorded_at: YYYY-MM-DDTHH:MM:SS+08:00        # 登记时刻（文件写入）
 source_type: web
 source_path:
 source_url:

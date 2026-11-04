@@ -15,6 +15,11 @@
 5. 建议修改先进入 `workspace/review-queue.md`。只有用户确认后，才修改假设 frontmatter 的确定性、状态和 `last_reviewed_at`，并把证据 `review_status` 更新为 `confirmed` 或 `rejected`。
 6. 结论稳定后，沉淀或更新 `wiki/explorations/`，并完成对应队列项。
 
+## 复盘弃权规则
+
+- 复盘 / 回看只能采信 `available_at ≤ 复盘基准日` 的证据；`available_at` 晚于基准日的证据弃权——不计入当期判定，单独列出（“后视镜证据，留待下期”）。
+- 关键证据 `review_status: pending` → 判定降级 `missing` 并带 reason（`关键证据 pending review [E-ID]`），不允许悄悄当 confirmed 用；verdict 词表见 `system/integrations/object-model.md`。
+
 ## 边界
 
 - 不因单条普通新闻调整确定性。

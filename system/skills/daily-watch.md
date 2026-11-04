@@ -40,8 +40,9 @@ Agent 首次使用时检查上述条件，缺什么补什么。
 3. 持久化钩子自动落 data/（失败不阻塞日报）；引用外链文章时 agent 顺手 `save_news_snapshot.py --input <临时md>` 存原文
 4. 脚本输出报告骨架到 `output/daily-watch/YYYY-MM/YYYY-MM-DD.md`
 5. Agent 用 websearch 补充新闻：异动原因、财报反应、行业动态
-6. Agent 扫描 `hypothesis/H*.md`。可确认的行情/财报信号先写入 `evidence/YYYY-MM/`，再把证据 ID 引用到相关假设；主题匹配仍只提示，不自动造证据
+6. Agent 扫描 `hypothesis/H*.md`。可确认的行情/财报信号先写入 `evidence/YYYY-MM/`，再把证据 ID 引用到相关假设；主题匹配仍只提示，不自动造证据。登记前判业务时点与可得时点，跨时区按当期实际偏移填 `available_at`（三时点口径见 `system/integrations/object-model.md`）
 7. 最终报告写入，更新 `workspace/meta/active-context.md`
+8. 报告落盘后补运行账本 close 行（一步命令，见「运行账本」）
 
 日报默认只处理上一份日报之后的新证据，使用 `dedup_key` 避免重复堆积；这仍是现有 `daily-watch`，不是新的日报类型。日报不自动改变假设确定性或状态。命中证伪条件、关键催化剂、财报或连续多条同方向证据时，追加待确认复盘项，并提示按 `system/skills/hypothesis-review.md` 启动复盘。
 
@@ -68,6 +69,16 @@ Longbridge Skill/CLI 是独立 Agent 扩展，不是 `tools/daily-watch/` 的内
 | 独立证据 | `evidence/YYYY-MM/E-*.md` |
 | 假设证据 | `hypothesis/H*.md`（只追加证据引用） |
 | 长期结论 | `wiki/explorations/`（可选沉淀） |
+
+## 运行账本
+
+每次运行在 `data/.state/run-log.jsonl` 记存在证明与修订痕迹（schema 见 `system/integrations/object-model.md`「运行账本」）。`open` / `data-close` 由持久化钩子自动写入；报告落盘后 skill 一步补全 close 行：
+
+```bash
+python3 system/scripts/run_archive.py close --run-id RUN-YYYYMMDD-HHMM-watch --report output/daily-watch/YYYY-MM/YYYY-MM-DD.md
+```
+
+修订纪律：任何对已 close 运行产物的修改（报告正文、series 行、evidence 文件），**先 `run_archive.py amend` 记 intent，改完 `amend --done`** 补哈希，两步都不可省，漏记会被 verify 抓出。报告里的「数据修正披露」散文段保留（给人看），amend 行是其机器可读镜像。
 
 ## 股票池格式
 

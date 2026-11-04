@@ -8,6 +8,7 @@
 - `review_status: pending` 表示只完成了采集，尚未由用户确认其方向和权重。
 - 日报可以自动登记可确认的行情或财报信号，但不能自动改变假设的 `certainty` 或 `status`。
 - 同一事件使用 `dedup_key` 去重；假设文件只引用证据 ID，不复制整段内容。
+- 三时点口径：`observed_at` 记业务时点（当地日历日），`available_at` 必填 ISO 8601 带时区时刻（该事实最早可被知晓），`recorded_at` 记登记时刻，且按日粒度 `observed_at ≤ available_at ≤ recorded_at`。
 - 新闻、管理层表述和行业资料必须保留原始 URL 或本地来源路径。
 
 字段契约见 `system/integrations/object-model.md`。
