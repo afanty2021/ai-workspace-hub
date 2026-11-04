@@ -322,7 +322,8 @@ def test_report_smoke(tmp_path, tmp_data_root, monkeypatch):
     assert report.exists()
     text = report.read_text(encoding="utf-8")
     for fragment in ["免责声明", "常驻弃权", "arps", "serenity", "共识", "half-Kelly",
-                     "数据截至", "2025Q4-2026Q3", "missing 清单", "不是指令"]:
+                     "数据截至", "2025Q4-2026Q3", "missing 清单", "不是指令",
+                     "roe 口径：roe 为 gpcw 累计期 YTD 未年化，截至 2026 年三季报（2026-09-30）"]:
         assert fragment in text, fragment
     # 16 位参与：报告应含多位大师标题，且不含常驻弃权两位的评分条目
     assert text.count("### ") == 16

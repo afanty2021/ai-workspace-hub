@@ -80,6 +80,16 @@ def _factor_extremes(resp) -> tuple[str, str]:
     return ordered[0][0], ordered[-1][0]
 
 
+_QUARTER_LABEL = {"03-31": "一季报", "06-30": "半年报", "09-30": "三季报", "12-31": "年报"}
+
+
+def _roe_basis_note(meta: dict) -> str:
+    """roe 口径注记（延后项收口）：gpcw 累计期 YTD 未年化 + 实际报告期；不改数值不年化。"""
+    rd = str(meta.get("gpcw_report_date") or "")
+    label = f"截至 {rd[:4]} 年{_QUARTER_LABEL[rd[5:]]}（{rd}）" if rd[5:] in _QUARTER_LABEL else "YTD 未年化"
+    return f"roe 为 gpcw 累计期 YTD 未年化，{label}"
+
+
 def render_report(ticker_label: str, context, results, consensus, industry, abstain_notes: dict) -> str:
     meta = context.mcp_metrics.get("masters_adapter", {})
     lines: list[str] = [
@@ -152,6 +162,7 @@ def render_report(ticker_label: str, context, results, consensus, industry, abst
         "## 数据截至",
         "",
         f"- TTM 窗口：{meta.get('ttm_window', 'N/A')}（gpcw report_date {meta.get('gpcw_report_date', 'N/A')}）",
+        f"- roe 口径：{_roe_basis_note(meta)}——各大师发现里的 ROE 数值同此口径",
         f"- 行情截至：{meta.get('series_last_date', 'N/A')}（series 末日收盘 {context.price}）",
         f"- shares = 归母净利(TTM)/eps(TTM) = {meta.get('shares', 0) / 1e8:.2f} 亿股"
         "（禁用 bps 法：净资产含少数股东权益）",
@@ -161,8 +172,10 @@ def render_report(ticker_label: str, context, results, consensus, industry, abst
         "## missing 清单（半盲声明）",
         "",
         "- gpcw+series 数据面拿不到：毛利率 / 营业利润率 / FCF / 流动比率 / 速动比率 /"
-        " 机构与内部人持股 / 空头利息 / 波动率族 / RSI / MACD 族 / ATR / Stoch——"
-        "相关因子基于 vendored 缺省值打分，命中 persona_deps 的大师已降权（适用性 ×0.6）并在上方标注。",
+        " 机构与内部人持股 / 空头利息 / 60/252 日波动率 / beta（无基准指数序列）/ Stoch /"
+        " 股息率与派息率——RSI/MACD 族/ATR/最大回撤/20 日波动率已从 series 日线补算；"
+        "缺失字段相关因子基于 vendored 缺省值打分，命中 persona_deps 的大师已降权"
+        "（适用性 ×0.6）并在上方标注。",
     ]
     return "\n".join(lines) + "\n"
 
@@ -310,9 +323,10 @@ def render_watchlist_summary(entries: list[dict], trade_date: str, watchlist_pat
 
     lines += [
         "",
-        "> **已知口径**：roe/增长字段为 gpcw 累计期 YTD 未年化；技术指标（RSI/MACD/ATR/"
-        "波动率族等）缺省，dalio/soros/marks 等命中 persona_deps 的大师已降权（保守方向已知，"
-        "本轮不补算 series 技术面）；市值按固定汇率 USD/CNY=7.2 换算参与规模档判定。",
+        "> **已知口径**：roe/增长字段为 gpcw 累计期 YTD 未年化（各票报告期见单票报告"
+        "「数据截至」段）；RSI/MACD 族/ATR/最大回撤/20 日波动率已从 series 日线补算，"
+        "beta（无基准指数序列）/Stoch/空头利息等仍缺省，命中 persona_deps 的大师已降权；"
+        "市值按固定汇率 USD/CNY=7.2 换算参与规模档判定。",
         "",
         "## 分歧 → 研究问题（候选）",
         "",

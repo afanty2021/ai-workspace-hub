@@ -86,7 +86,7 @@ def test_batch_structure_17_plus_4(tmp_path, mock_watchlist, monkeypatch):
     assert "失败：ValueError: 依赖期缺失" in text
     # 表头/免责/已知口径
     for frag in ["| Ticker | 名称 | score | signal | 参与大师数 | 弃权数 | half-Kelly | 关键分歧 |",
-                 "免责声明", "YTD 未年化", "已降权", "USD/CNY=7.2"]:
+                 "免责声明", "YTD 未年化", "报告期见单票报告", "已降权", "USD/CNY=7.2"]:
         assert frag in text, frag
     # 分歧 → 研究问题：有 pair 的个股各一条（17 − 1 error − 1 无分歧 = 15）+ 不自动写队列指引
     assert text.count("候选研究问题") == 15
