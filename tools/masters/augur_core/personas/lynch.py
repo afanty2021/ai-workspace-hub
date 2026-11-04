@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # 来源: https://github.com/BruceLanLan/augur (MIT License)
 # 锁定 commit: 0c721acc8522d4da57ea38bcd1852a30f23674e9
-# 本地改动: 仅将 import 路径 augur.personas.base 改为 augur_core.personas.base，并加此头注；其余逐字节一致
+# 本地改动: import 路径 augur.personas.base 改为 augur_core.personas.base，加此头注，
+#           + 删除 analyze 内 agent_hyperparams 阈值覆写钩子（同 base 钩子待遇）；其余逐字节一致
 """
 LynchAgent - Peter Lynch 成长投资(GARP)
 """
@@ -42,14 +43,6 @@ class LynchAgent(BaseAgent):
     def analyze(self, context: MarketContext) -> AgentResponse:
         """Lynch风格分析"""
         factors = {}
-
-        try:
-            from augur.agent_hyperparams import load_optimized_thresholds
-            opt = load_optimized_thresholds(self.agent_id)
-            if opt:
-                self.thresholds.update(opt)
-        except Exception:
-            pass
 
         # 行业专属权重调整
         sector = context.sector.lower() if context.sector else ""
