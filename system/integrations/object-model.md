@@ -83,7 +83,7 @@ dedup_key: DW-2026-07-11-mover-ifx-de-H1
 
 **行锚定哈希**：series 是追加式 jsonl，整文件哈希次日必过期。data-close 的 series 目标记三元组 `{path, anchor_date, sha256}`，其中 sha256 = **对文件中 `date ≤ anchor_date` 的全部行（按文件序）拼接的哈希**。效果：追加新行（date > anchor）不触发 verify；改写旧行（date ≤ anchor 的行内容变化）才触发。报告类目标（md）用整文件哈希。amend 的 `--data-target path#date` 同口径。该模型同时兼容 `update_market_series.py`（writer=batch 权威覆盖，不走 persist）——它的合法覆盖更新若发生在 anchor 之后不影响验证，改 anchor 内旧行则须先 amend。
 
-**两步 amend**：任何对已 close 运行产物的修改，先记 intent（`post_sha256: null`）→ 改文件 → `amend --done` 补哈希，两步都不可省；有 intent 无 done 列入“未完成修订”清单。
+**两步 amend**：任何对已 close 运行产物的修改，先记 intent（`post_sha256: null`）→ 改文件 → `amend --done` 补哈希，两步都不可省；有 intent 无 done 列入“未完成修订”清单。evidence 状态字段（review_status/direction/confidence）的合法生命周期迁移不属修订，不触发 amend 义务；verify 对 evidence_registered 目标的哈希将这三个字段值归一化（视为待更新态）后计算。
 
 **尾行哈希链**：每行带 `prev_sha256`（前一行整行哈希），verify 顺带校验链——整行删除或篡改会断链可见。
 
@@ -105,7 +105,7 @@ dedup_key: DW-2026-07-11-mover-ifx-de-H1
 判定行文法（字段序固定）：
 
 ```
-- YYYY-MM-DD | check: <检查项id> | verdict: <四值之一> | as_of: <读数时点> | reading: <值或—> | evidence: <E-ID或—> | 补数: <仅missing时必填，可执行命令>
+- YYYY-MM-DD | check: <检查项id> | verdict: <四值之一> | as_of: <读数时点> | reading: <值或—> | evidence: <E-ID或—> | 补数: <仅missing时必填，可执行命令> | reason: <仅 missing 必填，禁竖线>
 ```
 
 空值统一 `—`；**值内禁竖线**（`|` 是分隔符）；补数命令为自由文本但同样禁 `|`。ledger 脚本按此文法解析，解析失败显式报错降级为“人工读取”，不静默跳过。
