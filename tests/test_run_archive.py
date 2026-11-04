@@ -304,3 +304,186 @@ def test_data_close_cli_targets_sources_missing(data_root: Path, tmp_path: Path,
     assert row["data_targets"] == [{
         "path": "data/s.jsonl", "anchor_date": "2026-11-03",
         "sha256": RA.row_anchor_hash(tmp_path / "data" / "s.jsonl", "2026-11-03")}]
+
+
+# ---------------------------------------------------------------------------
+# ledger 子命令（Task 5）：三段汇总 + 坏行降级 + 假设过滤
+# ---------------------------------------------------------------------------
+
+EV_TMPL = """---
+id: {eid}
+type: evidence
+observed_at: '{observed}'
+available_at: '{observed}T15:30:00+08:00'
+recorded_at: '{recorded}'
+source_type: daily-watch
+direction: {direction}
+confidence: pending
+review_status: {review}
+linked_hypotheses:
+- {hyp}
+---
+
+# {eid}
+
+正文。
+"""
+
+HYP_TMPL = """---
+id: {hid}
+type: hypothesis
+status: 新建
+---
+
+# {hid}
+
+{body}
+"""
+
+
+def append_raw(data_root: Path, row: dict) -> None:
+    """直接追加一行到 tmp 账本（时间戳固定，不依赖真实时钟），prev_sha256 链按口径接上。"""
+    ledger = data_root / ".state" / "run-log.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    raws = [ln for ln in ledger.read_text(encoding="utf-8").splitlines(keepends=True)
+            if ln.strip()] if ledger.exists() else []
+    row = dict(row)
+    row["prev_sha256"] = (hashlib.sha256(raws[-1].encode("utf-8")).hexdigest()
+                          if raws else None)
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def write_evidence(tmp_path: Path, eid: str, recorded: str, hyp: str,
+                   direction: str = "+", review: str = "pending") -> None:
+    path = tmp_path / "evidence" / recorded[:7] / f"{eid}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(EV_TMPL.format(eid=eid, observed=recorded, recorded=recorded,
+                                   direction=direction, review=review, hyp=hyp),
+                    encoding="utf-8")
+
+
+def write_hypothesis(tmp_path: Path, hid: str, body_lines: list[str]) -> None:
+    path = tmp_path / "hypothesis" / f"{hid}-demo.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(HYP_TMPL.format(hid=hid, body="\n".join(body_lines)),
+                    encoding="utf-8")
+
+
+def _seed_ledger_rows(data_root: Path) -> None:
+    append_raw(data_root, {"type": "open", "run_id": "R1", "kind": "watch",
+                           "trade_date": "2026-11-03", "started_at": "2026-11-03T16:00:00+08:00"})
+    append_raw(data_root, {
+        "type": "data-close", "run_id": "R1", "at": "2026-11-03T18:00:00+08:00",
+        "data_targets": [], "sources_used": ["mootdx"],
+        "missing": [  # 股票侧 / 宏观侧两种键形并存（T4 评审遗留约定）
+            {"ticker": "300476.SZ", "source_tried": "mootdx", "reason": "停牌",
+             "fallback": "eod"},
+            {"item": "VIX", "reason": "FMP key 未配置"},
+        ]})
+    append_raw(data_root, {"type": "close", "run_id": "R1",
+                           "finished_at": "2026-11-03T19:00:00+08:00",
+                           "report": "output/daily-watch/2026-11/2026-11-03.md"})
+    append_raw(data_root, {"type": "amend", "run_id": "R1",
+                           "at": "2026-11-02T10:00:00+08:00",
+                           "target": "output/daily-watch/2026-11/2026-11-03.md",
+                           "reason": "修正数字"})
+    append_raw(data_root, {"type": "close", "run_id": "R0",  # 区间外，应被排除
+                           "finished_at": "2026-10-15T19:00:00+08:00",
+                           "report": "output/old.md"})
+
+
+def test_ledger_three_sections(data_root: Path, tmp_path: Path, capsys) -> None:
+    """三段输出齐全：运行与修订（两种 missing 键形可读）/ 证据增量 / 判定变化；区间外剔除。"""
+    _seed_ledger_rows(data_root)
+    write_evidence(tmp_path, "E-20261103-demo-h1", "2026-11-03", "H1")
+    write_evidence(tmp_path, "E-20261001-old-h1", "2026-10-01", "H1")  # 区间外
+    write_hypothesis(tmp_path, "H1", [
+        "- 2026-11-03 | check: sox-break | verdict: warn | as_of: 2026-11-03T09:00:00+08:00 | reading: 4200 | evidence: —",
+        "- 2026-10-15 | check: old-check | verdict: normal | as_of: 2026-10-15 | reading: 1 | evidence: —",
+    ])
+
+    argv = ["--data-root", str(data_root), "ledger",
+            "--from", "2026-11-01", "--to", "2026-11-04"]
+    assert RA.main(argv) == 0
+    out = capsys.readouterr().out
+
+    assert "## 运行与修订" in out
+    assert "close R1 -> output/daily-watch/2026-11/2026-11-03.md" in out
+    assert "amend intent R1" in out and "修正数字" in out
+    assert "close R0" not in out  # 区间外
+    assert "数据缺口（2）" in out
+    assert "300476.SZ" in out and "源 mootdx" in out and "降级 eod" in out  # 股票侧键形
+    assert "VIX" in out and "FMP key 未配置" in out                          # 宏观侧键形
+
+    assert "## 证据增量" in out
+    assert "E-20261103-demo-h1" in out and "direction=+" in out
+    assert "review_status=pending" in out and "recorded_at=2026-11-03" in out
+    assert "E-20261001-old-h1" not in out
+
+    assert "## 判定变化" in out
+    assert "[H1] 2026-11-03 check=sox-break verdict=warn reading=4200" in out
+    assert "old-check" not in out  # 区间外判定行
+    assert "无法解析的行" not in out  # 本例无坏行
+
+
+def test_ledger_json_output(data_root: Path, tmp_path: Path, capsys) -> None:
+    """--json 输出结构化结果，键与库返回一致。"""
+    _seed_ledger_rows(data_root)
+    write_evidence(tmp_path, "E-20261103-demo-h1", "2026-11-03", "H1")
+    assert RA.main(["--data-root", str(data_root), "ledger", "--json",
+                    "--from", "2026-11-01", "--to", "2026-11-04"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == {"runs", "amends", "missing", "evidence", "verdicts", "unparseable"}
+    assert payload["missing"][0]["entry"]["ticker"] == "300476.SZ"
+    assert payload["missing"][1]["entry"]["item"] == "VIX"
+
+
+def test_ledger_bad_verdict_line_degrades(data_root: Path, tmp_path: Path,
+                                          capsys) -> None:
+    """文法坏行显式报错降级：打印无法解析的行清单，好行照常输出，退出码仍 0。"""
+    _seed_ledger_rows(data_root)
+    write_hypothesis(tmp_path, "H1", [
+        "- 2026-11-02 | check: good-check | verdict: trigger | as_of: 2026-11-02 | reading: 9 | evidence: E-1",
+        "- 2026-11-02 | check: bad-verdict | verdict: maybe",
+        "- 2026-11-02 | foo: bar | check: bad-key | verdict: normal",
+        "- 2026-11-02 | check: bad-missing | verdict: missing | as_of: —",
+    ])
+    assert RA.main(["--data-root", str(data_root), "ledger",
+                    "--from", "2026-11-01", "--to", "2026-11-04"]) == 0
+    out = capsys.readouterr().out
+    assert "无法解析的行（3" in out
+    assert "verdict 非四值：'maybe'" in out
+    assert "未知键 'foo'" in out
+    assert "缺 reason" in out
+    assert "check=good-check verdict=trigger" in out  # 好行不被坏行中断
+
+
+def test_ledger_hypothesis_filter(data_root: Path, tmp_path: Path, capsys) -> None:
+    """--hypothesis H1：只看 H1 文件判定行 + linked_hypotheses 含 H1 的证据（不受日期约束）。"""
+    _seed_ledger_rows(data_root)
+    write_evidence(tmp_path, "E-20261102-a-h1", "2026-11-02", "H1")
+    write_evidence(tmp_path, "E-20261020-b-h2", "2026-10-20", "H2")
+    write_evidence(tmp_path, "E-20261015-c-h1", "2026-10-15", "H1")  # 区间外但 linked 命中
+    write_hypothesis(tmp_path, "H1", [
+        "- 2026-11-02 | check: h1-check | verdict: normal | as_of: 2026-11-02 | reading: 1 | evidence: —"])
+    write_hypothesis(tmp_path, "H2", [
+        "- 2026-11-02 | check: h2-check | verdict: normal | as_of: 2026-11-02 | reading: 2 | evidence: —"])
+
+    assert RA.main(["--data-root", str(data_root), "ledger", "--hypothesis", "H1",
+                    "--from", "2026-11-01", "--to", "2026-11-04"]) == 0
+    out = capsys.readouterr().out
+    assert "h1-check" in out and "[H1]" in out
+    assert "h2-check" not in out
+    assert "E-20261102-a-h1" in out
+    assert "E-20261015-c-h1" in out   # linked 命中，不受 recorded_at 区间约束
+    assert "E-20261020-b-h2" not in out
+
+
+def test_ledger_hypothesis_not_found(data_root: Path, capsys) -> None:
+    """--hypothesis 指向不存在的假设：报参数错误（SystemExit 2），不静默。"""
+    with pytest.raises(SystemExit) as exc:
+        RA.main(["--data-root", str(data_root), "ledger", "--hypothesis", "H9",
+                 "--from", "2026-11-01", "--to", "2026-11-04"])
+    assert exc.value.code == 2
+    assert "H9" in capsys.readouterr().err

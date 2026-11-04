@@ -45,6 +45,8 @@ orphan_opens（孤儿 open）/ sentinel / chain_breaks（断链或坏行号，1-
     python3 system/scripts/run_archive.py amend --done --run-id R --target P  # 第二步：补哈希
     python3 system/scripts/run_archive.py abort --run-id R --reason TXT
     python3 system/scripts/run_archive.py verify [--json]
+    python3 system/scripts/run_archive.py ledger --from 2026-11-01 --to 2026-11-04 \\
+        [--hypothesis H1] [--json]
 """
 
 from __future__ import annotations
@@ -61,6 +63,12 @@ from pathlib import Path
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
+
+try:  # 复用 evidence_lint 的零依赖 frontmatter reader（同目录），不另写一份
+    from evidence_lint import parse_frontmatter
+except ImportError:  # importlib 动态加载 / 非脚本目录执行时补路径
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from evidence_lint import parse_frontmatter
 
 KINDS = ("watch", "inspect", "research", "screen", "masters", "backfill")
 LEDGER_REL = Path(".state") / "run-log.jsonl"
@@ -593,6 +601,239 @@ def verify_ledger(data_root, now: datetime | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ledger：两次运行之间变了什么（Task 5）
+# ---------------------------------------------------------------------------
+
+# 判定行文法（object-model.md「巡检判定词表」段）：八槽固定字段序，值内禁竖线，空值 —
+VERDICTS = ("normal", "warn", "trigger", "missing")
+VERDICT_KEYS = ("check", "verdict", "as_of", "reading", "evidence", "补数", "reason")
+_VERDICT_LINE_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}) \| (.+)$")
+
+
+def parse_verdict_line(line: str):
+    """解析一条判定行。
+
+    返回 (fields, None)：解析成功（fields 含 date + 各槽）；
+    返回 (None, None)：不是判定行（不参与文法检查）；
+    返回 (None, reason)：形似判定行但文法坏了（显式降级，不静默跳过）。
+    """
+    match = _VERDICT_LINE_RE.match(line.strip())
+    if not match:
+        return None, None
+    day, rest = match.groups()
+    fields: dict[str, str] = {"date": day}
+    for part in rest.split("|"):
+        part = part.strip()
+        key, sep, value = part.partition(":")
+        key, value = key.strip(), value.strip()
+        if not sep:
+            return None, f"槽缺 ``key: value``：{part!r}"
+        if key not in VERDICT_KEYS:
+            return None, f"未知键 {key!r}"
+        if key in fields:
+            return None, f"重复键 {key!r}"
+        fields[key] = value
+    if not fields.get("check"):
+        return None, "缺必填槽 check"
+    if not fields.get("verdict"):
+        return None, "缺必填槽 verdict"
+    if fields["verdict"] not in VERDICTS:
+        return None, f"verdict 非四值：{fields['verdict']!r}"
+    if fields["verdict"] == "missing" and not fields.get("reason"):
+        return None, "missing 判行缺 reason"
+    return fields, None
+
+
+def _hypothesis_files(data_root, hypothesis: str | None = None) -> list[Path]:
+    """hypothesis/*.md；带 id 时按 frontmatter id（或文件名 H<id>- 前缀）过滤，找不到抛错。"""
+    root = _repo_root(data_root) / "hypothesis"
+    files = sorted(root.glob("*.md")) if root.is_dir() else []
+    if hypothesis is None:
+        return files
+    want = str(hypothesis)
+    matched = [p for p in files
+               if parse_frontmatter(p.read_text(encoding="utf-8")).get("id") == want
+               or p.stem == want or p.stem.startswith(f"{want}-")]
+    if not matched:
+        raise ValueError(f"假设文件未找到（hypothesis/*.md，id={want}）")
+    return matched
+
+
+def _linked_hypotheses(text: str) -> list[str]:
+    """frontmatter 的 linked_hypotheses 列表（reader 只认标量，列表手工补读）。"""
+    values: list[str] = []
+    in_list = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if in_list:
+            if stripped.startswith("- "):
+                values.append(stripped[2:].strip())
+                continue
+            in_list = False
+        if line.startswith("linked_hypotheses:"):
+            in_list = True
+            inline = line.partition(":")[2].strip().strip("'\"[]")
+            if inline:
+                values.append(inline)
+    return values
+
+
+def _row_day(row: dict, keys: tuple[str, ...]):
+    """取行内首个可解析时间戳的日历日（naive 按本地时区补全，与账本口径一致）。"""
+    for key in keys:
+        parsed = _parse_dt(row.get(key))
+        if parsed is not None:
+            return parsed.date()
+    return None
+
+
+def build_ledger(data_root, from_day, to_day, hypothesis: str | None = None) -> dict:
+    """汇总区间账：运行与修订 / 证据增量 / 判定变化，外加显式降级的坏行清单。
+
+    - 账本行按时间戳日历日落区间（close 看 finished_at，其余看 at）；
+    - evidence 按 recorded_at 落区间；带 --hypothesis 时改为 linked_hypotheses 命中该假设；
+    - 假设正文判定行按行首日期落区间；文法坏行进 unparseable，不静默跳过也不中断。
+    """
+    result: dict = {"runs": [], "amends": [], "missing": [],
+                    "evidence": [], "verdicts": [], "unparseable": []}
+    rows, _ = _read_rows_strict(ledger_path(data_root))
+    for row in rows:
+        rtype = row.get("type")
+        if rtype in ("close", "abort", "data-close"):
+            day = _row_day(row, ("finished_at", "at"))
+            if day is None or not from_day <= day <= to_day:
+                continue
+            entry = {"type": rtype, "run_id": row.get("run_id"),
+                     "at": row.get("finished_at") or row.get("at")}
+            if rtype == "close":
+                entry["report"] = row.get("report")
+            elif rtype == "abort":
+                entry["reason"] = row.get("reason")
+            elif rtype == "data-close":
+                entry["sources_used"] = list(row.get("sources_used") or [])
+                # missing 数组两种键形并存：股票侧 {ticker, source_tried, reason, fallback}
+                # 与宏观侧 {item, reason}，展示层两者都要可读（T4 评审遗留约定）
+                for m in row.get("missing") or []:
+                    result["missing"].append({"run_id": row.get("run_id"), "entry": m})
+            result["runs"].append(entry)
+        elif rtype in ("amend", "amend-done"):
+            day = _row_day(row, ("at",))
+            if day is None or not from_day <= day <= to_day:
+                continue
+            result["amends"].append({"type": rtype, "run_id": row.get("run_id"),
+                                     "target": row.get("target"), "reason": row.get("reason"),
+                                     "at": row.get("at")})
+
+    # -- 证据增量：evidence/**/*.md frontmatter（复用 evidence_lint reader）
+    ev_root = _evidence_root(data_root)
+    for path in sorted(ev_root.glob("**/*.md")) if ev_root.is_dir() else []:
+        text = path.read_text(encoding="utf-8")
+        fm = parse_frontmatter(text)
+        ev_id = fm.get("id") or path.stem
+        if hypothesis is not None:
+            if str(hypothesis) not in _linked_hypotheses(text):
+                continue
+        else:
+            recorded = _parse_dt(fm.get("recorded_at"))
+            if recorded is None or not from_day <= recorded.date() <= to_day:
+                continue
+        result["evidence"].append({
+            "id": ev_id, "direction": fm.get("direction", "—"),
+            "review_status": fm.get("review_status", "—"),
+            "recorded_at": fm.get("recorded_at", "—"),
+            "path": str(path.relative_to(_repo_root(data_root)))})
+
+    # -- 判定变化：假设正文巡检行，按文法解析，坏行显式降级
+    for hyp in _hypothesis_files(data_root, hypothesis):
+        text = hyp.read_text(encoding="utf-8")
+        hyp_id = parse_frontmatter(text).get("id") or hyp.stem
+        for lineno, line in enumerate(text.splitlines(), 1):
+            fields, why = parse_verdict_line(line)
+            if fields is None:
+                if why is not None:
+                    result["unparseable"].append(
+                        {"file": hyp.name, "line": lineno, "text": line.strip(),
+                         "reason": why})
+                continue
+            if from_day <= date.fromisoformat(fields["date"]) <= to_day:
+                entry = dict(fields)
+                entry["hypothesis"] = hyp_id
+                result["verdicts"].append(entry)
+    return result
+
+
+def _fmt_missing(entry) -> str:
+    """missing 条目转一行文字；两种键形（股票侧 / 宏观侧）与自由文本都兼容。"""
+    if not isinstance(entry, dict):
+        return str(entry)
+    head = entry.get("ticker") or entry.get("item") or "?"
+    parts = [str(head)]
+    if entry.get("source_tried"):
+        parts.append(f"源 {entry['source_tried']}")
+    if entry.get("reason"):
+        parts.append(f"原因 {entry['reason']}")
+    if entry.get("fallback"):
+        parts.append(f"降级 {entry['fallback']}")
+    return " / ".join(parts)
+
+
+def _render_ledger(result: dict, from_day, to_day, hypothesis: str | None) -> str:
+    span = f"{from_day:%Y-%m-%d} ~ {to_day:%Y-%m-%d}"
+    head = f"[run-archive ledger] {span}"
+    if hypothesis is not None:
+        head += f"（假设过滤：{hypothesis}）"
+    out = [head, ""]
+
+    out.append("## 运行与修订")
+    runs = result["runs"] + result["amends"]
+    if not runs:
+        out.append("- （区间内无记账行）")
+    for entry in runs:
+        run_id = entry.get("run_id") or "?"
+        if entry["type"] == "close":
+            out.append(f"- close {run_id} -> {entry.get('report') or '?'}（{entry.get('at') or '?'}）")
+        elif entry["type"] == "abort":
+            out.append(f"- abort {run_id}：{entry.get('reason') or '?'}（{entry.get('at') or '?'}）")
+        elif entry["type"] == "data-close":
+            sources = ",".join(entry.get("sources_used") or []) or "—"
+            out.append(f"- data-close {run_id} 源 {sources}（{entry.get('at') or '?'}）")
+        elif entry["type"] == "amend":
+            out.append(f"- amend intent {run_id} -> {entry.get('target') or '?'}"
+                       f"：{entry.get('reason') or '?'}（{entry.get('at') or '?'}）")
+        else:  # amend-done
+            out.append(f"- amend-done {run_id} -> {entry.get('target') or '?'}"
+                       f"（{entry.get('at') or '?'}）")
+    if result["missing"]:
+        out.append(f"- 数据缺口（{len(result['missing'])}）：")
+        for item in result["missing"]:
+            out.append(f"  - [{item['run_id']}] {_fmt_missing(item['entry'])}")
+    out.append("")
+
+    out.append("## 证据增量")
+    if not result["evidence"]:
+        out.append("- （无）")
+    for ev in result["evidence"]:
+        out.append(f"- {ev['id']} | direction={ev['direction']} | "
+                   f"review_status={ev['review_status']} | recorded_at={ev['recorded_at']}")
+    out.append("")
+
+    out.append("## 判定变化")
+    if not result["verdicts"]:
+        out.append("- （无）")
+    for v in result["verdicts"]:
+        out.append(f"- [{v['hypothesis']}] {v['date']} check={v['check']} "
+                   f"verdict={v['verdict']} reading={v.get('reading', '—')}"
+                   + (f" evidence={v['evidence']}" if v.get("evidence", "—") != "—" else ""))
+    if result["unparseable"]:
+        out.append("")
+        out.append(f"✗ 无法解析的行（{len(result['unparseable'])}，人工读取）：")
+        for bad in result["unparseable"]:
+            out.append(f"  - {bad['file']} 第 {bad['line']} 行：{bad['text']}"
+                       f"（{bad['reason']}）")
+    return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # CLI 薄壳
 # ---------------------------------------------------------------------------
 
@@ -689,7 +930,24 @@ def main(argv: list[str] | None = None) -> int:
             _print_verify(result, ledger_path(data_root))
         return 0 if result["clean"] else 1
     if args.command == "ledger":
-        parser.error("ledger: not implemented（Task 5 落地）")
+        if not args.from_date or not args.to_date:
+            parser.error("ledger 需要 --from 与 --to（YYYY-MM-DD）")
+        try:
+            from_day = date.fromisoformat(args.from_date)
+            to_day = date.fromisoformat(args.to_date)
+        except ValueError as exc:
+            parser.error(f"日期非法（YYYY-MM-DD）：{exc}")
+        if from_day > to_day:
+            parser.error("--from 不能晚于 --to")
+        try:
+            result = build_ledger(data_root, from_day, to_day, args.hypothesis)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(_render_ledger(result, from_day, to_day, args.hypothesis), end="")
+        return 0
 
     try:
         if args.command == "open":
