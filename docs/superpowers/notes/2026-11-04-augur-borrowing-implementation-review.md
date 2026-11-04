@@ -60,3 +60,14 @@
 
 ---
 *协调者亲核项：C1（verify 覆盖式赋值+persist max 锚）、#1（调用序代码）、#2（run-log.jsonl 实文件）、#3（adapter replay_fields）、#5（grep 路由）、对拍工作树路径、605016 映射行。评审全程只读（测试/lint/只读脚本除外），未改工作树。*
+
+## 延后项处置记录（2026-11-04，合并后收口）
+
+上表「可延后」及各层 Minor 中六项已全部处置（详见 design §8「延后项收口」表）：
+
+- **快照哈希覆盖**（评审 B #5-12 设计留白）：persist hook 把 `market/daily/<day>.json` 随 data-close 记整文件 sha256；新闻快照（.md，独立 CLI）与宏观数据（仅 stdout 不落盘）不经 hook，不入账。
+- **#4 并发**（原「先声明单写者假设」）：`_append` 升级为 fcntl.flock 文件级排它锁内读算写；Windows 降级无锁并在注释声明。多线程并发追加测试钉死尾链完整。
+- **amend 锚边界**（新增 Minor，权威表「更晚锚赢」的镜像洞）：amend-done 锚早于账本权威锚时 fail-loud，不再静默丢弃 post_sha256。
+- **dayu pe=0 占位加分**（adapter #3 的本体侧）：vendored 声明式补丁（两处仅 `pe < 0`），锁测试对上游源应用同一字符串替换后对拍，其余 17 persona 保持逐字节。
+- **技术面补算**：adapter 从 series 日线补算 RSI/MACD 族/ATR/最大回撤/20 日波动率（公式注释 + 手工序列验值测试）；beta_1y 无基准指数序列、stoch 族/空头利息/股息率无源，保持 missing 并在报告声明。
+- **roe YTD 注记**：单票报告与汇总表在 roe 数值出现处标注口径与实际报告期（如「截至 2026 年三季报」），数值不动不年化。

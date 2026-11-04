@@ -260,6 +260,17 @@
 | 3 | 处置方式 | **全部修订落设计文档**（推荐项；本 v2 即处置结果，6C/11I/Minor 全修） |
 | 4 | P3 期间口径（I6） | **P3 即做 TTM**（四期滚动 + eps 反推 shares；未采用推荐项"单期年化"，评审开放问题"启动前再拍"提前锁定为 TTM） |
 
+**延后项收口（2026-11-04，合并后一批，六项）**：
+
+| # | 议题 | 处置 |
+|---|---|---|
+| 1 | amend 锚早于权威锚 | append_amend done 阶段 fail-loud（库 ValueError / CLI exit 1），不落会被权威表丢弃的坏行 |
+| 2 | dayu pe=0 占位加分 | vendored 声明式补丁：两处仅 `pe < 0`（真亏损保留上游语义），锁测试对上游应用同一替换后对拍 |
+| 3 | 快照哈希覆盖 | persist hook 把 market/daily/<day>.json 随 data-close 记整文件 sha256（新闻 .md 与宏观 stdout 不经 hook，不入账） |
+| 4 | 技术面补算 | adapter 从 series 日线补算 rsi/macd 族/atr/max_drawdown/volatility_20d；beta 无基准序列、stoch 族等无源保持 missing |
+| 5 | roe YTD 注记 | 单票报告「数据截至」+ 汇总表口径注记带实际报告期；数值不动不年化 |
+| 6 | 账本追加并发 | _append 全程 fcntl.flock 排它锁（文件级；Windows 降级无锁，单写者假设） |
+
 **开放问题（剩余，不阻塞开工）**：
 
 1. P3 与 P1/P2 并行还是串行？（技术无依赖，可并行；串行则记账层先稳）
