@@ -1,0 +1,39 @@
+{
+  "_comment": "A 股代码 → augur industry_matrix 行业键 + 英文 sector 关键词（spec §5.3）。industry_key 必须是 consensus/industry_matrix.py _SECTOR_WEIGHTS 的键：technology/financial/healthcare/consumer/energy/industrials/materials/utilities/real_estate/communication/china。适配层不走 detect_industry（防 .SZ 后缀短路进 china），直接把 industry_key 传 get_agent_weights，sector_en 填 MarketContext.sector（引擎的 tech/financial/healthcare 关键词增益靠它吃到）。sw_industries 是常见申万一级 → 键的通用映射示例（人工核对初版，后续按需扩充）。缺失回落 {\"industry_key\": \"china\", \"sector_en\": \"China\"}。",
+  "codes": {
+    "600276.SH": {"industry_key": "healthcare", "sector_en": "Healthcare", "industry_cn": "医药生物-创新药"},
+    "603087.SH": {"industry_key": "healthcare", "sector_en": "Healthcare", "industry_cn": "医药生物-胰岛素"},
+    "600079.SH": {"industry_key": "healthcare", "sector_en": "Healthcare", "industry_cn": "医药生物-麻醉"},
+    "600309.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "基础化工-聚氨酯"},
+    "600989.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "基础化工-煤化工"},
+    "600096.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "基础化工-磷化工"},
+    "600456.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "有色金属-钛材"},
+    "002545.SZ": {"industry_key": "industrials", "sector_en": "Industrials", "industry_cn": "机械设备-铁塔"},
+    "301358.SZ": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "电力设备-锂电正极"},
+    "601899.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "有色金属-铜金"},
+    "603993.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "有色金属-铜钴"},
+    "000630.SZ": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "有色金属-铜"},
+    "002415.SZ": {"industry_key": "technology", "sector_en": "Technology", "industry_cn": "计算机-安防"},
+    "300124.SZ": {"industry_key": "industrials", "sector_en": "Industrials", "industry_cn": "电力设备-工控"},
+    "300274.SZ": {"industry_key": "industrials", "sector_en": "Industrials", "industry_cn": "电力设备-光伏储能"},
+    "300476.SZ": {"industry_key": "technology", "sector_en": "Technology", "industry_cn": "电子-PCB"},
+    "605016.SH": {"industry_key": "consumer", "sector_en": "Consumer", "industry_cn": "食品饮料-食品配料"}
+  },
+  "sw_industries": {
+    "医药生物": {"industry_key": "healthcare", "sector_en": "Healthcare"},
+    "食品饮料": {"industry_key": "consumer", "sector_en": "Consumer"},
+    "电子": {"industry_key": "technology", "sector_en": "Technology"},
+    "计算机": {"industry_key": "technology", "sector_en": "Technology"},
+    "通信": {"industry_key": "communication", "sector_en": "Communication Services"},
+    "银行": {"industry_key": "financial", "sector_en": "Financials"},
+    "非银金融": {"industry_key": "financial", "sector_en": "Financials"},
+    "基础化工": {"industry_key": "materials", "sector_en": "Materials"},
+    "有色金属": {"industry_key": "materials", "sector_en": "Materials"},
+    "机械设备": {"industry_key": "industrials", "sector_en": "Industrials"},
+    "电力设备": {"industry_key": "industrials", "sector_en": "Industrials"},
+    "石油石化": {"industry_key": "energy", "sector_en": "Energy"},
+    "公用事业": {"industry_key": "utilities", "sector_en": "Utilities"},
+    "房地产": {"industry_key": "real_estate", "sector_en": "Real Estate"},
+    "汽车": {"industry_key": "consumer", "sector_en": "Consumer"}
+  }
+}

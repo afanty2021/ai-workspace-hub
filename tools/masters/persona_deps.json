@@ -1,0 +1,93 @@
+{
+  "_comment": "persona × 因子 → 依赖的 MarketContext 字段（spec §5.3 缺失可见性硬约束）。apply_coverage 据此检查 context.field_availability：因子依赖字段缺失（值落在 vendored 缺省上）→ 该因子计入 degraded_factors 且 coverage_confidence ×0.6（降权自动传导进共识权重）。核对口径：逐个读 vendored persona 源码的打分路径，只收录适配层数据面（gpcw+series）拿不到的字段——gross_margins/operating_margins/fcf/current_ratio/quick_ratio/insider_ownership/institutional_ownership/short_interest/volatility_20d/max_drawdown/beta_1y/rsi/macd/macd_signal/macd_histogram/atr/stoch_k。重点防「缺省 0 引来加分」型（duan_yongping durability 的 debt_ratio<0.40 +1.5 同型：current_ratio>1.5 加分、quick_ratio/current_ratio 缺省 0 会被 graham 当不达标扣分）。适配层实际供数的字段（pe/roe/revenue/debt_ratio/market_cap/revenue_growth/earnings_growth/pb/ps 等）不入表——它们永远 present，入表只添噪音。arps/serenity 是 A 股常驻弃权（run_masters 过滤），不列依赖。",
+  "buffett": {
+    "moat": ["gross_margins", "operating_margins"],
+    "earnings_predictability": ["fcf"],
+    "financial_strength": ["current_ratio"],
+    "management_quality": ["institutional_ownership"],
+    "valuation": ["fcf"]
+  },
+  "graham": {
+    "balance_sheet": ["current_ratio", "quick_ratio"]
+  },
+  "lynch": {
+    "growth": ["gross_margins"],
+    "quality": ["gross_margins", "operating_margins"]
+  },
+  "dalio": {
+    "macro_outlook": ["rsi"],
+    "trend_strength": ["macd", "macd_signal"],
+    "risk_adjusted": ["atr"],
+    "momentum": ["macd_histogram", "stoch_k"]
+  },
+  "munger": {
+    "contra_bet": ["rsi", "institutional_ownership"],
+    "psychological": ["atr"],
+    "moat_durability": ["gross_margins"]
+  },
+  "soros": {
+    "market_bias": ["volatility_20d"],
+    "trend_reinforcement": ["macd", "macd_signal"],
+    "inflection_condition": ["rsi"],
+    "liquidity": ["beta_1y", "short_interest"],
+    "exit_signal": ["macd_histogram", "rsi"]
+  },
+  "marks": {
+    "pendulum_position": ["rsi"],
+    "risk_pricing": ["volatility_20d"],
+    "second_level_thinking": ["short_interest", "institutional_ownership"],
+    "distressed_discount": ["gross_margins"]
+  },
+  "cathie_wood": {
+    "disruption_score": ["gross_margins"],
+    "tech_risk": ["gross_margins"]
+  },
+  "fisher": {
+    "scuttlebutt": ["gross_margins"],
+    "management_quality": ["institutional_ownership"],
+    "sales_organization": ["operating_margins"],
+    "margin_sustainability": ["gross_margins", "operating_margins"],
+    "growth_durability": ["fcf"]
+  },
+  "aschenbrenner": {
+    "vertical_integration": ["gross_margins", "operating_margins"],
+    "moat_reinforcement": ["gross_margins"],
+    "management_vision": ["insider_ownership", "institutional_ownership"]
+  },
+  "dayu": {
+    "momentum_sentiment": ["rsi"],
+    "risk_capital": ["max_drawdown"]
+  },
+  "thiel": {
+    "monopoly_power": ["gross_margins", "operating_margins"],
+    "contrarian_timing": ["insider_ownership", "institutional_ownership"],
+    "founder_quality": ["insider_ownership"],
+    "technology_moat": ["gross_margins", "fcf"],
+    "long_term_bet": ["insider_ownership"]
+  },
+  "zhang_lei": {
+    "business_model_quality": ["gross_margins", "operating_margins", "fcf"],
+    "management_excellence": ["insider_ownership", "institutional_ownership"],
+    "competitive_moat": ["gross_margins", "operating_margins"]
+  },
+  "li_lu": {
+    "intrinsic_value_discount": ["fcf"],
+    "competitive_position": ["gross_margins", "operating_margins"],
+    "financial_soundness": ["current_ratio", "fcf"],
+    "management_quality": ["insider_ownership", "institutional_ownership"]
+  },
+  "dan_bin": {
+    "brand_moat": ["gross_margins"],
+    "pricing_power": ["gross_margins", "operating_margins"],
+    "growth_franchise": ["fcf"],
+    "china_structural_theme": ["institutional_ownership"],
+    "valuation_acceptability": ["fcf"]
+  },
+  "duan_yongping": {
+    "business_clarity": ["fcf", "gross_margins", "operating_margins"],
+    "moat_quality": ["gross_margins", "operating_margins"],
+    "management_integrity": ["insider_ownership", "institutional_ownership", "fcf"],
+    "long_term_durability": ["current_ratio", "gross_margins", "operating_margins"],
+    "valuation_reasonableness": ["fcf"]
+  }
+}
