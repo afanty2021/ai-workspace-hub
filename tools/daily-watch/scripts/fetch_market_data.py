@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
-from threading import Lock
-from typing import Any, Iterable
+from threading import Lock, local as thread_local
+from typing import Any, Callable, Iterable
 
 import requests
 import yaml
@@ -46,6 +46,24 @@ _YFINANCE_IMPORT_WARNING_EMITTED = False
 
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# 结构化降级收集（spec §3.3 拍板 #2 ①：stderr 降级原因进 payload meta）
+# ---------------------------------------------------------------------------
+
+_DEG_LOCAL = thread_local()
+
+
+def _note_fetch_failure(ticker: str, source: str, reason: str) -> None:
+    """fetcher 内部吞掉的异常原因 → 线程局部缓冲；仅缓冲激活时记录，行为零改变。
+
+    缓冲由 fetch_fallback_quote 激活（每个 worker 线程一个 ticker 一轮链），
+    链收口时与「哪一环未命中」合并成 meta.quotes.degradations 条目。
+    """
+    buf = getattr(_DEG_LOCAL, "failures", None)
+    if buf is not None:
+        buf.append((str(ticker), source, reason))
 
 def load_config(config_path: Path) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
@@ -265,6 +283,7 @@ def fetch_tushare_quote(client: Any, ticker: str) -> dict[str, Any] | None:
         else:
             return None
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "tushare", str(exc))
         log(f"Warning: tushare request failed for {ticker}: {exc}")
         return None
 
@@ -394,6 +413,7 @@ def fetch_nasdaq_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "nasdaq",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "nasdaq", str(exc))
         log(f"Warning: Nasdaq fallback failed for {ticker}: {exc}")
         return None
 
@@ -403,6 +423,7 @@ def fetch_finnhub_quote(ticker: str, api_key: str) -> dict[str, Any] | None:
     try:
         payload = request_json(url)
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "finnhub", str(exc))
         log(f"Warning: finnhub fallback failed for {ticker}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -448,6 +469,7 @@ def fetch_eod_quote(ticker: str, market: str, api_key: str) -> dict[str, Any] | 
     try:
         payload = request_json(url)
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "eod", str(exc))
         log(f"Warning: eod fallback failed for {ticker}: {exc}")
         return None
     if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
@@ -541,6 +563,7 @@ def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "eastmoney",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "eastmoney", str(exc))
         log(f"Warning: Eastmoney fallback failed for {ticker}: {exc}")
         return None
 
@@ -585,6 +608,7 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "tencent",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "tencent", str(exc))
         log(f"Warning: Tencent fallback failed for {ticker}: {exc}")
         return None
 
@@ -633,6 +657,7 @@ def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "sina",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "sina", str(exc))
         log(f"Warning: Sina fallback failed for {ticker}: {exc}")
         return None
 
@@ -689,6 +714,7 @@ def fetch_nasdaq_index_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "nasdaq",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "nasdaq-index", str(exc))
         log(f"Warning: Nasdaq index fallback failed for {ticker}: {exc}")
         return None
 
@@ -731,6 +757,7 @@ def fetch_fred_series_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "fred",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "fred", str(exc))
         log(f"Warning: FRED fallback failed for {ticker}: {exc}")
         return None
 
@@ -804,6 +831,7 @@ def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "source": "sina",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "sina-global", str(exc))
         log(f"Warning: Sina global fallback failed for {ticker}: {exc}")
         return None
 
@@ -864,6 +892,7 @@ def fetch_eastmoney_global_quote(ticker: str, market: str) -> dict[str, Any] | N
             "source": "eastmoney",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "eastmoney-global", str(exc))
         log(f"Warning: Eastmoney global fallback failed for {ticker}: {exc}")
         return None
 
@@ -908,106 +937,110 @@ def fetch_yfinance_quote(ticker: str) -> dict[str, Any] | None:
             "source": "yfinance",
         }
     except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "yfinance", str(exc))
         log(f"Warning: yfinance fallback failed for {ticker}: {exc}")
         return None
 
 
-def fetch_fallback_quote(item: dict[str, str], env: dict[str, str]) -> dict[str, Any] | None:
+def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
+                         degradations: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """逐源降级链（顺序与闸门 2026-11-04 起表驱动，行为与手写序一致）。
+
+    degradations 传入时，把「尝试过而未命中」的每一环结构化收集为
+    {ticker, source_tried, reason, fallback}（spec §3.3 拍板 #2 ①）——
+    reason 优先取 fetcher 内部吞掉的真实异常（_note_fetch_failure 线程局部
+    缓冲），无异常记录的环标 "returned no data"；fallback = 链上的下一环，
+    末环为 "none"。被 key/市场闸门跳过的源不算「尝试过」，不产生条目。
+    """
     ticker = item["ticker"]
     market = item.get("market", "")
     market_upper = market.strip().upper()
 
-    quote = fetch_nasdaq_quote(ticker, market)
-    if quote:
-        return quote
+    # Keyless global index/macro feeds (mapped tickers only: ^IXIC/^SOX/^TNX,
+    # 美元指数, 伦敦金, 伦铜, 000660.KS); each fetcher self-gates via its map.
+    chain: list[tuple[str, Callable[[], dict[str, Any] | None]]] = [
+        ("nasdaq", lambda: fetch_nasdaq_quote(ticker, market)),
+    ]
 
     finnhub_key = env.get("FINNHUB_API_KEY", "").strip()
     if finnhub_key and market_upper == "US":
-        quote = fetch_finnhub_quote(ticker, finnhub_key)
-        if quote:
-            return quote
+        chain.append(("finnhub", lambda: fetch_finnhub_quote(ticker, finnhub_key)))
 
     eod_key = env.get("EOD_API_KEY", "").strip()
     if eod_key and market_upper in EOD_MARKET_SUFFIX:
-        quote = fetch_eod_quote(ticker, market, eod_key)
-        if quote:
-            return quote
+        chain.append(("eod", lambda: fetch_eod_quote(ticker, market, eod_key)))
 
-    # Keyless global index/macro feeds (mapped tickers only: ^IXIC/^SOX/^TNX,
-    # 美元指数, 伦敦金, 伦铜, 000660.KS); each fetcher self-gates via its map.
-    quote = fetch_nasdaq_index_quote(ticker, market)
-    if quote:
-        return quote
-
-    quote = fetch_fred_series_quote(ticker, market)
-    if quote:
-        return quote
+    chain.append(("nasdaq-index", lambda: fetch_nasdaq_index_quote(ticker, market)))
+    chain.append(("fred", lambda: fetch_fred_series_quote(ticker, market)))
 
     # Eastmoney before Sina: fresher prev-close reference for LME; Sina stays
     # as the resilient fallback when eastmoney's anti-bot drops the request.
-    quote = fetch_eastmoney_global_quote(ticker, market)
-    if quote:
-        return quote
-
-    quote = fetch_sina_global_quote(ticker, market)
-    if quote:
-        return quote
+    chain.append(("eastmoney-global", lambda: fetch_eastmoney_global_quote(ticker, market)))
+    chain.append(("sina-global", lambda: fetch_sina_global_quote(ticker, market)))
 
     # Mootdx per-ticker retry ahead of tushare: recovers individual misses from
     # the batch path. When mootdx is unavailable this fails fast (negative
     # cache) and the chain continues down. Honors DISABLE_MOOTDX.
     if mootdx_enabled(env):
-        try:
-            quote = fetch_mootdx_quote(ticker, market)
-            if quote:
-                return quote
-        except Exception as exc:  # noqa: BLE001
-            log(f"Warning: mootdx fallback failed for {ticker}: {exc}")
+        chain.append(("mootdx", lambda: fetch_mootdx_quote(ticker, market)))
 
     # Tushare first among keyless-and-scraper fallbacks (demoted from primary
     # when mootdx took over): official EOD with pre_close, still more
     # authoritative than the HTTP scrapers below. HK tickers only ever reach
     # CN sources via this gate.
     tushare_token = env.get("TUSHARE_TOKEN", "").strip()
+    tushare_client = None
     if tushare_token and (ticker.endswith(CN_SUFFIXES) or ticker.endswith(HK_SUFFIX)):
-        client = get_cached_tushare_client(tushare_token)
-        if client is not None:
-            quote = fetch_tushare_quote(client, ticker)
-            if quote:
-                return quote
+        tushare_client = get_cached_tushare_client(tushare_token)
+        if tushare_client is not None:
+            chain.append(("tushare", lambda: fetch_tushare_quote(tushare_client, ticker)))
 
     # Keyless A-share fallbacks (also cover ETFs tushare `daily` misses).
     # The _cn_quote_symbol gate inside each fetcher returns None for non-CN.
-    quote = fetch_eastmoney_quote(ticker, market)
-    if quote:
-        return quote
-
-    quote = fetch_tencent_quote(ticker, market)
-    if quote:
-        return quote
-
-    quote = fetch_sina_quote(ticker, market)
-    if quote:
-        return quote
+    chain.append(("eastmoney", lambda: fetch_eastmoney_quote(ticker, market)))
+    chain.append(("tencent", lambda: fetch_tencent_quote(ticker, market)))
+    chain.append(("sina", lambda: fetch_sina_quote(ticker, market)))
 
     yf_flag = env.get("ENABLE_YFINANCE", "").strip().lower()
     if yf_flag in ("1", "true", "yes", "on"):
-        quote = fetch_yfinance_quote(ticker)
-        if quote:
-            return quote
+        chain.append(("yfinance", lambda: fetch_yfinance_quote(ticker)))
 
-    return None
+    inner_failures: list[tuple[str, str, str]] = []
+    _DEG_LOCAL.failures = inner_failures
+    try:
+        for idx, (name, fetch) in enumerate(chain):
+            fallback = chain[idx + 1][0] if idx + 1 < len(chain) else "none"
+            try:
+                quote = fetch()
+            except Exception as exc:  # noqa: BLE001 — 与旧 mootdx 环同口径：单环崩溃链继续
+                log(f"Warning: {name} fallback failed for {ticker}: {exc}")
+                quote = None
+            if quote:
+                return quote
+            if degradations is not None:
+                reason = next((r for t, s, r in inner_failures if t == ticker and s == name),
+                              "returned no data")
+                degradations.append({
+                    "ticker": ticker, "source_tried": name,
+                    "reason": reason, "fallback": fallback,
+                })
+                inner_failures[:] = []  # 已消费，避免污染下一环的 reason 归因
+        return None
+    finally:
+        _DEG_LOCAL.failures = None
 
 
 def fetch_fallback_quotes(
-    missing: list[dict[str, str]], env: dict[str, str], max_workers: int
+    missing: list[dict[str, str]], env: dict[str, str], max_workers: int,
+    degradations: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """逐票并发跑降级链；degradations 传入时聚合各线程的结构化降级条目（append 原子，无序）。"""
     if not missing:
         return []
     recovered: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(missing))) as executor:
         futures = {
-            executor.submit(fetch_fallback_quote, item, env): item for item in missing
+            executor.submit(fetch_fallback_quote, item, env, degradations): item for item in missing
         }
         for future in as_completed(futures):
             item = futures[future]
@@ -1424,12 +1457,13 @@ def build_snapshot(
 
     fetched_tickers = {quote["ticker"] for quote in quotes}
     missing_items = [item for item in watchlist if item["ticker"] not in fetched_tickers]
+    degradations: list[dict[str, Any]] = []
     if missing_items:
         log(
             f"Attempting fallback sources for {len(missing_items)} missing ticker(s): "
             f"{', '.join(item['ticker'] for item in missing_items)}"
         )
-        fallback_raws = fetch_fallback_quotes(missing_items, env, max_workers)
+        fallback_raws = fetch_fallback_quotes(missing_items, env, max_workers, degradations)
         for raw in fallback_raws:
             symbol = str(raw.get("symbol", "")).strip().upper()
             if symbol in watchlist_map:
@@ -1458,6 +1492,9 @@ def build_snapshot(
                 "requested": len(watchlist), "received": len(quotes),
                 "missing_tickers": [x["ticker"] for x in watchlist
                                     if x["ticker"] not in {q["ticker"] for q in quotes}],
+                # spec §3.3 拍板 #2 ①：降级链结构化清单（曾试过而未命中的每一环），
+                # persist 钩子透传成运行账本 data-close 的 missing 数组
+                "degradations": sorted(degradations, key=lambda d: (d.get("ticker", ""), d.get("source_tried", ""))),
             },
             "earnings": earnings_status,
         },
