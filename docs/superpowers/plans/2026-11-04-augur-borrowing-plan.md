@@ -12,7 +12,7 @@
 5. **run-log 哈希语义**（spec §3.2 逐字）：series 目标 = 三元组 `{path, anchor_date, sha256}`，sha256 对文件中 `date ≤ anchor_date` 的全部行（按文件序）拼接计算；追加新行不触发 verify，改写旧行才触发。报告类目标用整文件 sha256。
 6. **两步 amend**：`amend` 记 intent（`post_sha256: null`）→ 改文件 → `amend --done` 补完成行；verify 只认 done。
 7. **尾行哈希链**：账本每行带 `prev_sha256`（前一行整行哈希，首行为 null），verify 校验链。
-8. **verdict 四值词表 + 固定文法**（spec §4）：`- YYYY-MM-DD | check: <id> | verdict: normal|warn|trigger|missing | as_of: <时点> | reading: <值或—> | evidence: <E-ID或—> | 补数: <missing 必填>`；值内禁竖线；空值用 `—`。
+8. **verdict 四值词表 + 固定文法**（spec §4）：`- YYYY-MM-DD | check: <id> | verdict: normal|warn|trigger|missing | as_of: <时点> | reading: <值或—> | evidence: <E-ID或—> | 补数: <missing 必填> | reason: <仅 missing 必填，禁竖线>`；值内禁竖线；空值用 `—`。
 9. **三时点格式**（spec §2.1）：`observed_at` 当地日历日（裸日期）；`available_at` 必填 ISO 8601 带时区时刻；`recorded_at` 新文件带时区时刻；单调性按日粒度包含判定（先换算 +08:00 再取 date）。
 10. **vendored 代码**（spec §5.2）：只搬 `src/augur/personas/base.py`（303 行，删 `_merge_saved_thresholds`）+ 18 个 persona（合计 4,144 行，仅改 import 行）+ 共识核心（剥离 sentiment/MetaModel/RiskManager/agent 相关性惩罚/ten_x/learning 预测记录、macro_features/regime_router，只留 `get_agent_weights` 纯函数 + `restrict_weights_to_agents` + `calibrate_confidence` + half-Kelly 含 1% 保底）；文件头注明 MIT + 来源仓库 + 锁定 commit；**不搬** rolling-IC/学习权重/EDGAR/Dashboard/MCP。
 11. **大师面板边界**（spec §5.5）：输出是推测层分析产物——不写 `evidence/`、不写 hypothesis frontmatter、Kelly 只出现在报告、`portfolio/` 不自动写；ARPS/Serenity A 股常驻弃权；ETF/指数/美股/韩股 abstain。

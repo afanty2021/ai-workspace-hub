@@ -1,6 +1,6 @@
 # AI Workspace Instructions
 
-这个 repo 是一个 all-in-one AI 研究工作系统，包含六大能力。Codex 进入本目录后，先读本文件，再读 `workspace/workspace-config.md`。
+这个 repo 是一个 all-in-one AI 研究工作系统，包含七大能力。Codex 进入本目录后，先读本文件，再读 `workspace/workspace-config.md`。
 
 本文件与 `CLAUDE.md` 保持**同一套工作协议**。两者内容应当同源，改一个就同步另一个。研究对象、状态和 ID 统一遵循 `system/integrations/object-model.md`。
 
@@ -29,6 +29,7 @@
 | 开始研究 / 扫描本地知识 | `research_preflight.py` + `system/skills/research.md` | 一次加载 Rule / Pattern / Exploration，并扫描 Entity / Concept / Source |
 | 知识复盘 / 提炼 / 加载规则 | `system/skills/knowledge-lifecycle.md` + `knowledge_lifecycle.py` | exploration 验证 → pattern → rule；按场景选择性加载 |
 | 快速筛选 | `system/skills/screen.md` | `output/screen/` |
+| 大师面板（个股多视角评分） | `system/skills/masters.md` | `output/masters/` |
 | 播客摄入 | `system/skills/podcast.md` | `wiki/sources/` + `wiki/raw/podcasts/` + `output/pod2wiki/` |
 | 日报监控 | `system/skills/daily-watch.md`（接线细节见 `system/integrations/daily-watchlist.md`） | `output/daily-watch/` + `data/`（持久化钩子）+ `evidence/` + 假设引用 |
 | 管理股票池 | `system/skills/daily-watch-import.md` | `config/daily-watchlist-watchlist.md` |
@@ -38,7 +39,7 @@
 | 生成输出 | `workspace/meta/active-context.md` + 相关 wiki 文件 | `output/` |
 | 遇到摩擦 | 相关文件 | `workspace/meta/friction-log.md` |
 
-## 六大能力
+## 七大能力
 
 | 能力 | 说明 | Skill 文件 | 需要 API? |
 |---|---|---|---|
@@ -48,6 +49,7 @@
 | hypothesis | 假设追踪 | `system/integrations/hypothesis-tracker.md` | 否 |
 | podcast | 播客/博客摄入 | `system/skills/podcast.md` | 当前 Agent 无需独立 Key；后台摘要需 Key |
 | daily-watch | 日报监控 | `system/skills/daily-watch.md` | 可选（tushare / FMP） |
+| masters | 大师面板（个股多视角评分） | `system/skills/masters.md` | 否（mootdx 补拉可选） |
 
 工具代码在 `tools/` 目录下。首次使用时 agent 检查依赖，缺什么用 `python3 -m pip install ...` 安装；如果环境只有 `python`，再替换成 `python -m pip ...`。
 

@@ -149,6 +149,19 @@
   - `evidence/`
   - `hypothesis/`（只追加证据引用，不自动改变状态）
 
+### masters（大师面板：个股多视角评分）
+
+- status: `enabled`
+- skill: `system/skills/masters.md`
+- project_path: `./tools/masters`
+- reads_from:
+  - `data/market/series/`
+  - `data/finance/`（gpcw 财务快照）
+  - `config/daily-watchlist-watchlist.md`（批量模式）
+- writes_to:
+  - `output/masters/`
+  - `data/.state/run-log.jsonl`（运行账本 open/close；冒烟跑账本随 `--out` 隔离）
+
 ## 数据源（按市场选择，没配降级不报错）
 
 > 完整接入指南见 `DATA-SOURCES.md`。key 走环境变量或 `config/*.env`，不要写进 repo。没配的字段 agent 会标 `[待验证]` 而不是编造。
