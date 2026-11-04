@@ -1,5 +1,5 @@
 {
-  "_comment": "persona × 因子 → 依赖的 MarketContext 字段（spec §5.3 缺失可见性硬约束）。apply_coverage 据此检查 context.field_availability：因子依赖字段缺失（值落在 vendored 缺省上）→ 该因子计入 degraded_factors 且 coverage_confidence ×0.6（降权自动传导进共识权重）。核对口径：逐个读 vendored persona 源码的打分路径，只收录适配层数据面（gpcw+series）拿不到的字段——gross_margins/operating_margins/fcf/current_ratio/quick_ratio/insider_ownership/institutional_ownership/short_interest/volatility_20d/max_drawdown/beta_1y/rsi/macd/macd_signal/macd_histogram/atr/stoch_k。重点防「缺省 0 引来加分」型（duan_yongping durability 的 debt_ratio<0.40 +1.5 同型：current_ratio>1.5 加分、quick_ratio/current_ratio 缺省 0 会被 graham 当不达标扣分）。适配层实际供数的字段（pe/roe/revenue/debt_ratio/market_cap/revenue_growth/earnings_growth/pb/ps 等）不入表——它们永远 present，入表只添噪音。arps/serenity 是 A 股常驻弃权（run_masters 过滤），不列依赖。",
+  "_comment": "persona × 因子 → 依赖的 MarketContext 字段（spec §5.3 缺失可见性硬约束）。apply_coverage 据此检查 context.field_availability：因子依赖字段缺失（值落在 vendored 缺省上）→ 该因子计入 degraded_factors 且 coverage_confidence ×0.6（降权自动传导进共识权重）。核对口径：逐个读 vendored persona 源码的打分路径，只收录适配层数据面（gpcw+series）拿不到的字段——gross_margins/operating_margins/fcf/current_ratio/quick_ratio/insider_ownership/institutional_ownership/short_interest/volatility_20d/max_drawdown/beta_1y/rsi/macd/macd_signal/macd_histogram/atr/stoch_k。重点防「缺省 0 引来加分」型（duan_yongping durability 的 debt_ratio<0.40 +1.5 同型：current_ratio>1.5 加分、quick_ratio/current_ratio 缺省 0 会被 graham 当不达标扣分）。market_cap/pe 例外（实施评审 #3）：eps_ttm 缺失/为 0 时 shares/market_cap/pe 派生链整体失效（adapter 标 missing、值 0）——market_cap=0 会被 lynch/thiel/cathie_wood/dayu 等当「极小市值」加分、pe=0 被 dayu 当早期机会加分，故凡 vendored 源码把 market_cap/pe 用于阈值打分的因子都入表（lynch/cathie_wood/thiel/dayu/dan_bin/aschenbrenner，2026-11-04 逐 persona 核对）。适配层实际供数且无派生失效路径的字段（roe/revenue/debt_ratio/revenue_growth/earnings_growth/pb/ps 等）不入表——它们永远 present，入表只添噪音。arps/serenity 是 A 股常驻弃权（run_masters 过滤），不列依赖。",
   "buffett": {
     "moat": ["gross_margins", "operating_margins"],
     "earnings_predictability": ["fcf"],
@@ -12,7 +12,8 @@
   },
   "lynch": {
     "growth": ["gross_margins"],
-    "quality": ["gross_margins", "operating_margins"]
+    "quality": ["gross_margins", "operating_margins"],
+    "understandability": ["market_cap"]
   },
   "dalio": {
     "macro_outlook": ["rsi"],
@@ -23,7 +24,8 @@
   "munger": {
     "contra_bet": ["rsi", "institutional_ownership"],
     "psychological": ["atr"],
-    "moat_durability": ["gross_margins"]
+    "moat_durability": ["gross_margins"],
+    "quality_coverage": ["fcf"]
   },
   "soros": {
     "market_bias": ["volatility_20d"],
@@ -40,6 +42,7 @@
   },
   "cathie_wood": {
     "disruption_score": ["gross_margins"],
+    "tam_size": ["market_cap"],
     "tech_risk": ["gross_margins"]
   },
   "fisher": {
@@ -50,20 +53,22 @@
     "growth_durability": ["fcf"]
   },
   "aschenbrenner": {
-    "vertical_integration": ["gross_margins", "operating_margins"],
+    "compute_infrastructure": ["market_cap"],
+    "vertical_integration": ["gross_margins", "operating_margins", "market_cap"],
     "moat_reinforcement": ["gross_margins"],
-    "management_vision": ["insider_ownership", "institutional_ownership"]
+    "management_vision": ["insider_ownership", "institutional_ownership", "market_cap"]
   },
   "dayu": {
     "momentum_sentiment": ["rsi"],
+    "information_edge": ["market_cap", "pe"],
     "risk_capital": ["max_drawdown"]
   },
   "thiel": {
     "monopoly_power": ["gross_margins", "operating_margins"],
-    "contrarian_timing": ["insider_ownership", "institutional_ownership"],
+    "contrarian_timing": ["insider_ownership", "institutional_ownership", "market_cap"],
     "founder_quality": ["insider_ownership"],
     "technology_moat": ["gross_margins", "fcf"],
-    "long_term_bet": ["insider_ownership"]
+    "long_term_bet": ["insider_ownership", "market_cap"]
   },
   "zhang_lei": {
     "business_model_quality": ["gross_margins", "operating_margins", "fcf"],
@@ -80,7 +85,7 @@
     "brand_moat": ["gross_margins"],
     "pricing_power": ["gross_margins", "operating_margins"],
     "growth_franchise": ["fcf"],
-    "china_structural_theme": ["institutional_ownership"],
+    "china_structural_theme": ["institutional_ownership", "market_cap"],
     "valuation_acceptability": ["fcf"]
   },
   "duan_yongping": {

@@ -253,3 +253,63 @@ def test_report_smoke(tmp_path, tmp_data_root, monkeypatch):
     close_rows = [r for r in rows if r["type"] == "close"]
     assert len(close_rows) == 1
     assert close_rows[0]["report"] == str(report.relative_to(tmp_path))
+
+
+# ---------------------------------------------------------------- 实施评审 #3 / #2c / #5a
+
+def test_eps_zero_derived_chain_missing_and_coverage(tmp_data_root):
+    """#3（上轮 I8 同型）：eps_ttm=0 → shares/market_cap/pe 派生链失效。
+
+    值保持 0 但 field_availability 标 missing；lynch/thiel/cathie_wood 把
+    market_cap 用于阈值加分路径（market_cap=0 会被当极小市值加分），
+    apply_coverage 必须降权且 degraded_factors 含 market_cap。
+    """
+    # 覆写四期 eps 全为 0 → TTM eps = 0（FY + Q3 − Q3上年 = 0）
+    patched = []
+    for row in _GPCW_300476:
+        new = dict(row)
+        if new["code"] == "300476":
+            new["eps_basic"] = 0.0
+        patched.append(new)
+    by_date: dict[str, list[dict]] = {}
+    for row in patched:
+        by_date.setdefault(row["report_date"], []).append(row)
+    _write_gpcw(tmp_data_root, by_date)
+
+    ctx = build_context("300476.SZ", tmp_data_root, fetch=False)
+    assert ctx.eps == 0 and ctx.market_cap == 0 and ctx.pe == 0  # 值保持 0
+    for field in ("eps", "shares", "market_cap", "pe"):
+        assert ctx.field_availability.get(field) == "missing", field
+
+    results = analyze_all(ctx)
+    before = {aid: results[aid].coverage_confidence
+              for aid in ("lynch", "thiel", "cathie_wood")}
+    results = apply_coverage(results, ctx)
+    for aid in ("lynch", "thiel", "cathie_wood"):
+        resp = results[aid]
+        assert resp.coverage_confidence == pytest.approx(before[aid] * 0.6), aid
+        assert any("market_cap" in d["missing_fields"]
+                   for d in resp.metadata["degraded_factors"]), aid
+
+
+def test_run_log_disable_skips_masters_ledger(tmp_path, tmp_data_root, monkeypatch):
+    """#5a：RUN_LOG_DISABLE=1 跳过账本（与 persist_market_data 同语义）。"""
+    monkeypatch.setenv("RUN_LOG_DISABLE", "1")
+    report = run_masters.run("300476.SZ", tmp_data_root, tmp_path / "out", fetch=False)
+    assert report.exists()
+    assert not (tmp_data_root / ".state" / "run-log.jsonl").exists()
+
+
+def test_out_root_outside_repo_isolates_ledger(tmp_path, tmp_data_root, monkeypatch,
+                                               tmp_path_factory):
+    """#2c：--out 根在仓库外而 data-root 在仓库内（冒烟跑形态）→ 账本写 out 根
+    下 .state/（与报告同生命周期），不碰 data-root 的 .state/。"""
+    monkeypatch.setattr(run_masters, "REPO_ROOT", tmp_path)  # 假仓库根 = tmp_path
+    out_dir = tmp_path_factory.mktemp("masters-smoke-outside")  # out 在（假）仓库外
+    run_masters.run("300476.SZ", tmp_data_root, out_dir, fetch=False)
+    assert (out_dir / ".state" / "run-log.jsonl").exists()
+    assert not (tmp_data_root / ".state" / "run-log.jsonl").exists()
+    rows = [json.loads(line) for line in
+            (out_dir / ".state" / "run-log.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["type"] for r in rows] == ["open", "close"]
+    assert all(r.get("kind") in (None, "masters") for r in rows)

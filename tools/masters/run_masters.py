@@ -7,7 +7,9 @@
 流程：abstain 判定 → build_context（TTM，缺期经 mootdx 补拉）→ 18 位跑 analyze
 （ARPS/Serenity 常驻弃权，不进共识）→ apply_coverage 降权 → compute_consensus
 → 报告落 output/masters/YYYY-MM/<code>-<date>.md → run-log open/close 入账
-（失败写 sentinel 不中断，同 persist_market_data 口径）。
+（失败写 sentinel 不中断，同 persist_market_data 口径）。账本写入根三态：
+RUN_LOG_DISABLE=1 跳过；--out 根在仓库外（冒烟跑）账本随报告写 out 根下
+.state/；其余写真实仓库 data/.state/。
 
 边界纪律（spec §5.5）：报告页眉固定免责声明；Kelly 是建议数字不是指令；
 分歧清单可整理为研究问题候选进 review-queue。
@@ -16,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -202,7 +205,7 @@ def _analyze_and_report(code: str, suffix: str, data_root: Path, out_dir: Path, 
         render_report(ticker_label, context, results, consensus, industry, abstain_notes),
         encoding="utf-8")
 
-    _ledger(data_root, report_path, report_date)
+    _ledger(data_root, report_path, report_date, out_dir=out_dir)
 
     # 汇总行素材（批量模式用；关键分歧取一对代表性行为空对）
     bulls = [r for r in results.values() if r.signal == SignalType.BULLISH]
@@ -356,29 +359,59 @@ def run_watchlist(data_root: Path, out_dir: Path, *, fetch: bool = True,
     summary_path = month_dir / f"watchlist-{trade_date}.md"
     summary_path.write_text(render_watchlist_summary(entries, trade_date, watchlist_path),
                             encoding="utf-8")
-    _ledger(data_root, summary_path, trade_date)
+    _ledger(data_root, summary_path, trade_date, out_dir=out_dir)
     print(summary_path)
     return summary_path
 
 
-def _ledger(data_root: Path, report_path: Path, trade_date: str) -> None:
-    """run-log open/close（kind=masters）。失败写 sentinel 不中断。"""
+def _ledger_root(data_root: Path, out_dir: Path) -> Path | None:
+    """账本写入根（实施评审 #2c/#5a）：
+
+    - RUN_LOG_DISABLE=1 → None（逃生门，与 persist_market_data 同语义，跳过账本写入）；
+    - --out 根在仓库外**而 data_root 在仓库内**（冒烟跑的典型形态：--out 指向
+      /private/tmp/... 而 --data-root 用默认真实仓库）→ 账本改写到 out 根下
+      .state/run-log.jsonl（与报告同生命周期），不再污染真实仓库 data/.state/；
+    - 其余（两者同域：都在仓库内，或测试里都在 tmp）→ data_root。
+    """
+    if os.environ.get("RUN_LOG_DISABLE", "").strip() == "1":
+        return None
     try:
+        out_dir.resolve().relative_to(REPO_ROOT.resolve())
+        return data_root  # 报告在仓库内 → 常规路径
+    except ValueError:
+        pass
+    try:
+        data_root.resolve().relative_to(REPO_ROOT.resolve())
+        return out_dir     # 报告出仓库、账本根在仓库 → 隔离到 out 根
+    except ValueError:
+        return data_root   # 测试形态：data_root 本就在 tmp，与报告同生命周期
+
+
+def _ledger(data_root: Path, report_path: Path, trade_date: str,
+            out_dir: Path | None = None) -> None:
+    """run-log open/close（kind=masters）。失败写 sentinel 不中断。
+
+    out_dir 给出时按 _ledger_root 裁定账本根（冒烟隔离 / 逃生门）。
+    """
+    try:
+        root = _ledger_root(data_root, out_dir or report_path.parent)
+        if root is None:
+            return
         run_archive = _load_run_archive()
         try:
-            run_id = run_archive.append_open(data_root, kind="masters", trade_date=trade_date)
+            run_id = run_archive.append_open(root, kind="masters", trade_date=trade_date)
         except Exception as exc:  # noqa: BLE001
-            _ledger_failed(data_root, "append_open", exc)
+            _ledger_failed(root, "append_open", exc)
             return
         try:
-            # 账本内路径一律「解析根（data_root.parent）相对」
-            report_rel = str(report_path.resolve().relative_to(data_root.parent.resolve()))
+            # 账本内路径一律「解析根（root.parent）相对」
+            report_rel = str(report_path.resolve().relative_to(root.parent.resolve()))
         except ValueError:
             report_rel = str(report_path.resolve())
         try:
-            run_archive.append_close(data_root, run_id, report=report_rel, evidence_registered=None)
+            run_archive.append_close(root, run_id, report=report_rel, evidence_registered=None)
         except Exception as exc:  # noqa: BLE001
-            _ledger_failed(data_root, "append_close", exc)
+            _ledger_failed(root, "append_close", exc)
     except Exception as exc:  # noqa: BLE001 — run_archive 模块本身导入失败
         _ledger_failed(data_root, "import run_archive", exc)
 

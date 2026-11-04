@@ -280,10 +280,15 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
 
     # shares / 估值推导链（见 docstring）
     eps_ttm = ttm["eps"]
-    shares = ttm["net_profit_parent"] / eps_ttm if eps_ttm not in (0, None) else 0.0
+    # eps 缺失/为 0 → shares/market_cap/pe 整条派生链失效（实施评审 #3，上轮 I8 同型）：
+    # 值保持 0，但 field_availability 标 missing，apply_coverage 据此对把 market_cap/pe
+    # 用于阈值打分的 persona 降权——否则 market_cap=0 会被 lynch/thiel/cathie_wood 等
+    # 当「极小市值」加分。
+    eps_missing = eps_ttm in (0, None)
+    shares = ttm["net_profit_parent"] / eps_ttm if not eps_missing else 0.0
     market_cap_cny = price * shares                 # 元
     market_cap_usd_bn = market_cap_cny / USD_CNY / 1e9  # USD 十亿（persona 阈值口径）
-    pe = price / eps_ttm if eps_ttm else 0.0
+    pe = price / eps_ttm if not eps_missing else 0.0
     bps = float(latest.get("bps") or 0)
     pb = price / bps if bps else 0.0
     ps = market_cap_cny / ttm["revenue"] if ttm["revenue"] else 0.0  # 同币种比率，汇率约掉
@@ -300,6 +305,9 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
     availability = {f: "replay" for f in replay_fields}
     if not sma200:
         availability["sma200"] = "missing"  # 序列不足 200 日
+    if eps_missing:
+        # 派生失效链（见上方注释）：eps 输入缺，shares/market_cap/pe 全部是占位 0
+        availability.update({f: "missing" for f in ("eps", "shares", "market_cap", "pe")})
     availability.update({f: "missing" for f in ADAPTER_MISSING_FIELDS})
 
     ctx = MarketContext(
