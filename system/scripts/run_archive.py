@@ -43,6 +43,8 @@ orphan_opens（孤儿 open）/ sentinel / chain_breaks（断链或坏行号，1-
     python3 system/scripts/run_archive.py amend --run-id R --target P --reason TXT \\
         [--data-target path#date]...        # 第一步：intent（post_sha256=null）
     python3 system/scripts/run_archive.py amend --done --run-id R --target P  # 第二步：补哈希
+    python3 system/scripts/run_archive.py amend --done --missing --run-id R --target P \\
+        --reason TXT   # 产物已消亡的收口（verify 摘除该 target 的权威比对）
     python3 system/scripts/run_archive.py abort --run-id R --reason TXT
     python3 system/scripts/run_archive.py verify [--json]
     python3 system/scripts/run_archive.py ledger --from 2026-11-01 --to 2026-11-04 \\
@@ -400,13 +402,17 @@ def _intent_anchor(rows: list[dict], run_id: str, target: str) -> str | None:
 
 
 def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=None,
-                 done: bool = False) -> None:
+                 done: bool = False, missing: bool = False) -> None:
     """两步 amend。
 
     done=False 写 intent 行（data_targets 记 `path#date` 串，post_sha256=null，reason 必填）；
     done=True 写 amend-done 行——series 目标（.jsonl）按 intent 声明（或 data_targets 显式
     传入）的锚定日期算行锚定哈希并记入 anchor_date，evidence 目标（evidence/**/E-*.md）
     按 I4 归一化口径记哈希（verify 据此同步 evidence_auth），其余目标记整文件哈希。
+
+    done=True 且 missing=True 写「产物已消亡」的 amend-done 行（带 target 与 reason，
+    不算哈希）：verify 据此把该 target 从权威表摘除、跳过其哈希比对——用于 close 指向
+    已删除文件的收口（如冒烟跑误入真实账本），append-only 不破（行保留，仅摘权威）。
     """
     rows, _ = _read_rows_strict(ledger_path(data_root))
     _require_run(rows, run_id)
@@ -415,6 +421,13 @@ def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=
     if done:
         entry: dict = {"type": "amend-done", "run_id": run_id,
                        "at": _iso(_now()), "target": target}
+        if missing:
+            if not reason:
+                raise ValueError("amend-done --missing 必须带 reason（产物为何消亡）")
+            entry["missing"] = True
+            entry["reason"] = reason
+            _append(data_root, entry)
+            return
         if target.endswith(".jsonl"):
             anchor = None
             for spec in specs:
@@ -465,6 +478,17 @@ def append_abort(data_root, run_id: str, reason: str) -> None:
 # verify：四张清单 + 哈希链
 # ---------------------------------------------------------------------------
 
+def _merge_series_auth(series_auth: dict, path: str, anchor_date: str, sha) -> None:
+    """series 权威合并（C1）：锚更晚者保留；同锚取后写。
+
+    更晚锚的哈希覆盖行区间 ⊇ 更早锚（date ≤ anchor 的行集单调扩大），受保护区间
+    因此只增不缩。早于既有锚的回填轮不再能把权威三元组整体拉回旧锚。
+    """
+    existing = series_auth.get(path)
+    if existing is None or anchor_date >= str(existing["anchor_date"]):
+        series_auth[path] = {"anchor_date": anchor_date, "sha256": sha}
+
+
 def verify_ledger(data_root, now: datetime | None = None) -> dict:
     """巡检账本，返回四张清单 + 断链行号（键名见模块 docstring），不抛巡检类异常。"""
     data_root = Path(data_root)
@@ -514,8 +538,11 @@ def verify_ledger(data_root, now: datetime | None = None) -> dict:
                 if not isinstance(t, dict) or not t.get("path"):
                     continue
                 if t.get("anchor_date"):
-                    series_auth[str(t["path"])] = {"anchor_date": str(t["anchor_date"]),
-                                                   "sha256": t.get("sha256")}
+                    # C1（实施评审）：同 path 多条 series 权威取**锚更晚**的条目（同锚取后写），
+                    # 不能无条件覆盖——某轮只回填迟到旧行（新锚 < 历史锚）时受保护区间会
+                    # 静默回退；更晚锚的哈希覆盖行区间 ⊇ 更早锚，取 max 才单调不收缩。
+                    _merge_series_auth(series_auth, str(t["path"]),
+                                       str(t["anchor_date"]), t.get("sha256"))
                 else:
                     report_auth[str(t["path"])] = t.get("sha256")
         elif rtype == "close":
@@ -528,10 +555,19 @@ def verify_ledger(data_root, now: datetime | None = None) -> dict:
             intents.append(row)
         elif rtype == "amend-done":
             done_keys.add((str(row.get("run_id")), str(row.get("target"))))
-            if row.get("anchor_date"):
-                series_auth[str(row.get("target"))] = {
-                    "anchor_date": str(row["anchor_date"]), "sha256": row.get("post_sha256")}
-            elif row.get("target"):
+            target = str(row.get("target")) if row.get("target") else None
+            if row.get("missing"):
+                # amend-done --missing：产物已消亡的收口——从权威表**摘除**（不删行，
+                # append-only 不破）：verify 跳过该 target 的哈希比对。
+                report_auth.pop(target, None)
+                series_auth.pop(target, None)
+                ev_id = _evidence_id_from_target(target or "")
+                if ev_id is not None:
+                    evidence_auth.pop(ev_id, None)
+            elif row.get("anchor_date"):
+                _merge_series_auth(series_auth, target,
+                                   str(row["anchor_date"]), row.get("post_sha256"))
+            elif target:
                 ev_id = _evidence_id_from_target(str(row["target"]))
                 if ev_id is not None:
                     # evidence 目标的 amend-done：同步权威表三键空间的 evidence_auth 键，
@@ -925,6 +961,10 @@ def main(argv: list[str] | None = None) -> int:
     p_amend.add_argument("--data-target", action="append", default=[], metavar="PATH#DATE",
                          help="series 修订目标 path#date，可多次（intent 声明；--done 时可再给）")
     p_amend.add_argument("--done", action="store_true", help="第二步：写 amend-done 行（改后哈希）")
+    p_amend.add_argument("--missing", action="store_true",
+                         help="与 --done 同用：产物已消亡（文件不存在）的收口——"
+                              "写带 missing 标记的 amend-done，verify 摘除该 target 的权威比对；"
+                              "必须给 --reason 说明消亡原因")
 
     p_abort = sub.add_parser("abort", help="运行中止显式记账")
     p_abort.add_argument("--run-id", required=True)
@@ -985,7 +1025,8 @@ def main(argv: list[str] | None = None) -> int:
             if not args.done and not args.reason:
                 parser.error("amend intent 必须带 --reason")
             append_amend(data_root, args.run_id, args.target, args.reason,
-                         data_targets=args.data_target or None, done=args.done)
+                         data_targets=args.data_target or None, done=args.done,
+                         missing=args.missing)
             print("amend-done 已记账" if args.done else "amend intent 已记账")
         elif args.command == "abort":
             append_abort(data_root, args.run_id, args.reason)

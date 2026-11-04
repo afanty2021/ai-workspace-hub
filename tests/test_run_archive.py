@@ -541,3 +541,104 @@ def test_ledger_hypothesis_not_found(data_root: Path, capsys) -> None:
                  "--from", "2026-11-01", "--to", "2026-11-04"])
     assert exc.value.code == 2
     assert "H9" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- 实施评审修复回归
+
+def test_anchor_shrink_regression_backfill_keeps_later_anchor(data_root: Path, tmp_path: Path) -> None:
+    """C1 回归：run2 只回填迟到旧行（新锚 11-01 < 历史锚 11-03）时权威锚不收缩。
+
+    评审实证场景：两轮 data-close 锚 11-03 → 11-01（回填），随后篡改 11-03 行——
+    修复前 verify 对同 path 的 series 权威无条件覆盖 → 11-01 锚生效 → 篡改脱离
+    保护、verify clean；修复后取锚更晚的条目，篡改必须报未申报。
+    """
+    series = tmp_path / "data" / "s.jsonl"
+    write_series(series, [
+        {"date": "2026-11-01", "close": 10.0},
+        {"date": "2026-11-03", "close": 12.0},
+    ])
+    run1 = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_data_close(data_root, run1,
+                         [{"path": "data/s.jsonl", "anchor_date": "2026-11-03"}], [], [])
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+    # run2：只回填迟到的 11-01 旧行（本轮最大写入行日期 = 11-01，新锚早于历史锚）
+    run2 = RA.append_open(data_root, "watch", "2026-11-01", now=NOW + timedelta(minutes=1))
+    RA.append_data_close(data_root, run2,
+                         [{"path": "data/s.jsonl", "anchor_date": "2026-11-01"}], [], [])
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True  # 无篡改时干净
+
+    # 篡改 11-03 行（处于历史锚 11-03 的保护区间内、在回填锚 11-01 之外）
+    lines = series.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines[1] = json.dumps({"date": "2026-11-03", "close": 99.0}) + "\n"
+    series.write_text("".join(lines), encoding="utf-8")
+    result = RA.verify_ledger(data_root, now=LATER)
+    flagged = [u for u in result["undeclared"] if u["kind"] == "series"]
+    assert len(flagged) == 1 and flagged[0]["target"] == "data/s.jsonl"
+    assert result["clean"] is False
+
+
+def test_series_authority_same_anchor_takes_later_row(data_root: Path, tmp_path: Path) -> None:
+    """C1 修法补充：同锚两条权威取后写（amend-done 刷新同锚哈希时生效）。"""
+    series = tmp_path / "data" / "s.jsonl"
+    write_series(series, [{"date": "2026-11-01", "close": 10.0}])
+    run1 = RA.append_open(data_root, "watch", "2026-11-01", now=NOW)
+    RA.append_data_close(data_root, run1,
+                         [{"path": "data/s.jsonl", "anchor_date": "2026-11-01"}], [], [])
+    # 合法修订：amend intent → 改行 → amend-done 补同锚新哈希
+    RA.append_amend(data_root, run1, "data/s.jsonl", reason="订正 11-01 收盘价",
+                    data_targets=["data/s.jsonl#2026-11-01"])
+    write_series(series, [{"date": "2026-11-01", "close": 10.5}])
+    RA.append_amend(data_root, run1, "data/s.jsonl", done=True,
+                    data_targets=["data/s.jsonl#2026-11-01"])
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+
+def test_amend_done_missing_drops_authority(data_root: Path, tmp_path: Path) -> None:
+    """#2a：close 指向的产物已消亡 → intent + amend-done --missing 收口。
+
+    verify 遇 missing-done 把该 target 从权威表摘除（行保留，append-only 不破），
+    不再对其做「文件缺失」的未申报判定。
+    """
+    write_report(tmp_path)  # output/r.md
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_close(data_root, run_id, "output/r.md", [])
+    (tmp_path / "output" / "r.md").unlink()  # 产物消亡
+
+    result = RA.verify_ledger(data_root, now=LATER)
+    flagged = [u for u in result["undeclared"] if u.get("target") == "output/r.md"]
+    assert len(flagged) == 1 and flagged[0]["detail"] == "文件缺失"
+
+    RA.append_amend(data_root, run_id, "output/r.md", reason="产物已消亡（冒烟跑误入）")
+    mid = RA.verify_ledger(data_root, now=LATER)
+    assert mid["unfinished_amends"] and not mid["clean"]  # intent 未完成仍报
+
+    RA.append_amend(data_root, run_id, "output/r.md", done=True, missing=True,
+                    reason="产物已消亡（冒烟跑误入）")
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+    rows = [json.loads(line) for line in ledger_lines(data_root)]
+    assert rows[-1]["type"] == "amend-done" and rows[-1]["missing"] is True
+    assert "post_sha256" not in rows[-1]  # 消亡收口不算哈希
+
+
+def test_amend_done_missing_requires_reason(data_root: Path) -> None:
+    """--missing 不带 reason 拒绝（消亡原因必须可追溯）。"""
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    with pytest.raises(ValueError, match="reason"):
+        RA.append_amend(data_root, run_id, "output/r.md", done=True, missing=True)
+
+
+def test_amend_missing_cli_roundtrip(data_root: Path, tmp_path: Path, capsys) -> None:
+    """CLI：amend --done --missing 全链 exit 0，verify 回干净。"""
+    write_report(tmp_path)
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_close(data_root, run_id, "output/r.md", [])
+    (tmp_path / "output" / "r.md").unlink()
+    assert RA.main(["--data-root", str(data_root), "amend", "--run-id", run_id,
+                    "--target", "output/r.md", "--reason", "冒烟跑误入真实账本"]) == 0
+    assert RA.main(["--data-root", str(data_root), "amend", "--done", "--missing",
+                    "--run-id", run_id, "--target", "output/r.md",
+                    "--reason", "冒烟跑误入真实账本"]) == 0
+    assert "amend-done 已记账" in capsys.readouterr().out
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
