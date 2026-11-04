@@ -642,3 +642,62 @@ def test_amend_missing_cli_roundtrip(data_root: Path, tmp_path: Path, capsys) ->
                     "--reason", "冒烟跑误入真实账本"]) == 0
     assert "amend-done 已记账" in capsys.readouterr().out
     assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+
+# ------------------------------------------------------- 延后项收口：amend 锚 / flock
+
+def test_amend_done_earlier_anchor_fails_loud(data_root: Path, tmp_path: Path, capsys) -> None:
+    """amend-done 锚早于账本权威锚 → fail-loud：库抛 ValueError，CLI exit 1 + stderr，
+    账本不写入会被权威表丢弃 post_sha256 的坏行（否则 verify 误报未申报修订）。"""
+    series = tmp_path / "data" / "s.jsonl"
+    write_series(series, [
+        {"date": "2026-11-01", "close": 10.0},
+        {"date": "2026-11-02", "close": 11.0},
+        {"date": "2026-11-03", "close": 12.0},
+    ])
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_data_close(data_root, run_id,
+                         [{"path": "data/s.jsonl", "anchor_date": "2026-11-03"}], [], [])
+
+    # 本次 amend 的锚 11-02 < 权威锚 11-03：库 API 抛 ValueError
+    with pytest.raises(ValueError, match="权威锚"):
+        RA.append_amend(data_root, run_id, "data/s.jsonl", done=True,
+                        data_targets=["data/s.jsonl#2026-11-02"])
+    # CLI 路径：exit 1 + stderr 提示
+    assert RA.main(["--data-root", str(data_root), "amend", "--done", "--run-id", run_id,
+                    "--target", "data/s.jsonl", "--data-target", "data/s.jsonl#2026-11-02"]) == 1
+    assert "更晚锚" in capsys.readouterr().err
+
+    # 账本未被写入坏行：仍是 open + data-close 两行，verify 干净
+    rows = [json.loads(line) for line in ledger_lines(data_root)]
+    assert [r["type"] for r in rows] == ["open", "data-close"]
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+
+def test_amend_done_same_or_later_anchor_unchanged(data_root: Path, tmp_path: Path) -> None:
+    """锚相同或更晚：行为不变（回归）——同锚 amend-done 刷新哈希、更晚锚正常记账。"""
+    series = tmp_path / "data" / "s.jsonl"
+    write_series(series, [{"date": "2026-11-03", "close": 12.0}])
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_data_close(data_root, run_id,
+                         [{"path": "data/s.jsonl", "anchor_date": "2026-11-03"}], [], [])
+
+    # 同锚：改行后 amend-done 补新哈希（与既有 test_series_authority_same_anchor 同路径）
+    write_series(series, [{"date": "2026-11-03", "close": 12.5}])
+    RA.append_amend(data_root, run_id, "data/s.jsonl", reason="订正收盘价",
+                    data_targets=["data/s.jsonl#2026-11-03"])
+    RA.append_amend(data_root, run_id, "data/s.jsonl", done=True,
+                    data_targets=["data/s.jsonl#2026-11-03"])
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+    # 更晚锚：追加新行后以新锚记账，verify 干净
+    with series.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"date": "2026-11-04", "close": 13.0}) + "\n")
+    RA.append_amend(data_root, run_id, "data/s.jsonl", reason="补 11-04 行",
+                    data_targets=["data/s.jsonl#2026-11-04"])
+    RA.append_amend(data_root, run_id, "data/s.jsonl", done=True,
+                    data_targets=["data/s.jsonl#2026-11-04"])
+    done_rows = [json.loads(line) for line in ledger_lines(data_root)
+                 if json.loads(line)["type"] == "amend-done"]
+    assert [r["anchor_date"] for r in done_rows] == ["2026-11-03", "2026-11-04"]
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True

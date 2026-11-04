@@ -150,7 +150,12 @@ def _read_rows_strict(ledger: Path) -> tuple[list[dict], list[str]]:
 
 
 def _append(data_root, row: dict) -> None:
-    """追加一行并接上尾行哈希链：prev_sha256 = 前一原始行（含换行）的 sha256，首行 null。"""
+    """追加一行并接上尾行哈希链：prev_sha256 = 前一原始行（含换行）的 sha256，首行 null。
+
+    读全文→算 prev→写回是非原子三步，并发追加会互相覆盖尾链——整个序列在账本文件级
+    fcntl.flock 排它锁内完成（锁粒度 = run-log.jsonl 单文件）；Windows 无 flock 时
+    降级保持无锁现状（单写者假设，见 object-model.md「运行账本」段）。
+    """
     ledger = ledger_path(data_root)
     ledger.parent.mkdir(parents=True, exist_ok=True)
     _, raws = _read_rows_strict(ledger)
@@ -401,6 +406,27 @@ def _intent_anchor(rows: list[dict], run_id: str, target: str) -> str | None:
     return anchor
 
 
+def _series_authority_anchor(rows: list[dict], path: str) -> str | None:
+    """账本现有 series 权威锚：data-close / amend-done 里该 path 的最晚 anchor_date。
+
+    与 verify 顺扫建权威表同口径（_merge_series_auth 的锚更晚者保留），供 amend-done
+    前置校验——本次 amend 锚比它早时 post_sha256 会被权威表静默丢弃。
+    """
+    anchor: str | None = None
+    for row in rows:
+        rtype = row.get("type")
+        if rtype == "data-close":
+            for t in row.get("data_targets") or []:
+                if (isinstance(t, dict) and str(t.get("path")) == path
+                        and t.get("anchor_date")):
+                    cand = str(t["anchor_date"])
+                    anchor = cand if anchor is None or cand > anchor else anchor
+        elif rtype == "amend-done" and str(row.get("target")) == path and row.get("anchor_date"):
+            cand = str(row["anchor_date"])
+            anchor = cand if anchor is None or cand > anchor else anchor
+    return anchor
+
+
 def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=None,
                  done: bool = False, missing: bool = False) -> None:
     """两步 amend。
@@ -439,6 +465,14 @@ def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=
                 raise ValueError(
                     f"series 目标的 amend-done 需要锚定日期：先在 intent 里声明 "
                     f"--data-target {target}#date，或在 --done 时再次给出")
+            # amend 锚早于权威锚 fail-loud：权威表「更晚锚赢」，早锚 amend-done 的
+            # post_sha256 会被静默丢弃（verify 仍按旧权威比对 → 误报未申报修订）。
+            auth_anchor = _series_authority_anchor(rows, target)
+            if auth_anchor is not None and str(anchor) < auth_anchor:
+                raise ValueError(
+                    f"amend-done 锚 {anchor} 早于账本权威锚 {auth_anchor}（path={target}）："
+                    f"该行的 post_sha256 会被权威表丢弃，verify 将误报未申报修订——"
+                    f"请以更晚锚（≥ {auth_anchor}）重做 amend")
             entry["anchor_date"] = anchor
             entry["post_sha256"] = row_anchor_hash(_resolve_target(data_root, target), anchor)
         else:
@@ -1032,7 +1066,9 @@ def main(argv: list[str] | None = None) -> int:
             append_abort(data_root, args.run_id, args.reason)
             print(f"abort 已记账：{args.run_id}")
     except (ValueError, FileNotFoundError) as exc:
-        parser.error(str(exc))
+        # 库 API 的 fail-loud 异常转 CLI：stderr + exit 1（区别于 argparse 参数错的 exit 2）
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
