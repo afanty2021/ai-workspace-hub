@@ -287,7 +287,7 @@ def test_dayu_vendored_source_has_declared_patch_only(monkeypatch):
     """vendored dayu 源与「上游源 + 声明式替换」逐字节一致（除头注本地改动声明行）。"""
     vendored_path = REPO_ROOT / "tools" / "masters" / "augur_core" / "personas" / "dayu.py"
     vendored = vendored_path.read_text(encoding="utf-8")
-    vendored_body = vendored.split('"""\n', 1)[1]  # 头注（含改动声明）不参与比对
+    vendored_body = vendored.split('"""', 1)[1].lstrip("\n")  # 头注（含改动声明）不参与比对；不假定 """ 独占一行
     # 本地声明式改动落位：上游条件串已不存在，且恰被替换为 pe < 0
     assert DAYU_PE_PATCH[0] not in vendored_body
     assert vendored_body.count("if pe < 0:") == 1
@@ -296,7 +296,7 @@ def test_dayu_vendored_source_has_declared_patch_only(monkeypatch):
     upstream = (AUGUR_PERSONAS / "dayu.py").read_text(encoding="utf-8")
     patched = upstream.replace("from augur.personas.base import", "from augur_core.personas.base import") \
                       .replace(*DAYU_PE_PATCH)
-    patched_body = patched.split('"""\n', 1)[1] if '"""\n' in patched else patched
+    patched_body = patched.split('"""', 1)[1].lstrip("\n") if '"""' in patched else patched
     assert vendored_body == patched_body
 
 

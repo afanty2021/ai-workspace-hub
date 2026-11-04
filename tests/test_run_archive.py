@@ -674,6 +674,37 @@ def test_amend_done_earlier_anchor_fails_loud(data_root: Path, tmp_path: Path, c
     assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
 
 
+def test_amend_done_earlier_anchor_guard_rechecks_under_lock(
+        data_root: Path, tmp_path: Path, monkeypatch) -> None:
+    """锁内复检（TOCTOU）：锁外读到的旧账本没有更晚权威锚 → 外层检查放行，
+    但锁内最新账本已有更晚 data-close → guard 必须抛错且不写行。"""
+    series = tmp_path / "data" / "s.jsonl"
+    write_series(series, [
+        {"date": "2026-11-02", "close": 11.0},
+        {"date": "2026-11-03", "close": 12.0},
+    ])
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_data_close(data_root, run_id,
+                         [{"path": "data/s.jsonl", "anchor_date": "2026-11-03"}], [], [])
+
+    # 构造锁外旧视图：抹掉那条 data-close（模拟读取与追加之间账本被并发推进）
+    real_read = RA._read_rows_strict
+    def _stale_read(ledger):
+        rows, raws = real_read(ledger)
+        return [r for r in rows if r["type"] != "data-close"], raws
+    monkeypatch.setattr(RA, "_read_rows_strict", _stale_read)
+
+    # 外层检查看到旧视图（无权威锚）放行；锁内 _append 读到真实账本 → guard 抛错
+    with pytest.raises(ValueError, match="权威锚"):
+        RA.append_amend(data_root, run_id, "data/s.jsonl", done=True,
+                        data_targets=["data/s.jsonl#2026-11-02"])
+
+    # 账本未被写入坏行（open + data-close 两行），verify 干净
+    rows = [json.loads(line) for line in ledger_lines(data_root)]
+    assert [r["type"] for r in rows] == ["open", "data-close"]
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+
 def test_amend_done_same_or_later_anchor_unchanged(data_root: Path, tmp_path: Path) -> None:
     """锚相同或更晚：行为不变（回归）——同锚 amend-done 刷新哈希、更晚锚正常记账。"""
     series = tmp_path / "data" / "s.jsonl"

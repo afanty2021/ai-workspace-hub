@@ -134,13 +134,14 @@ def _parse_dt(value) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.astimezone()
 
 
-def _read_rows_strict(ledger: Path) -> tuple[list[dict], list[str]]:
-    """严格读账本：(行对象, 原始行含换行)。空白行跳过；非 JSON 行抛 ValueError（append 不吞）。"""
-    if not ledger.exists():
-        return [], []
+def _parse_ledger_text(text: str) -> tuple[list[dict], list[str]]:
+    """严格解析账本文本：(行对象, 原始行含换行)。空白行跳过；非 JSON 行抛 ValueError。
+
+    _read_rows_strict 与 _append 锁内读共用，保证两处解析口径永远一致。
+    """
     rows: list[dict] = []
     raws: list[str] = []
-    for lineno, raw in enumerate(ledger.read_text(encoding="utf-8").splitlines(keepends=True), 1):
+    for lineno, raw in enumerate(text.splitlines(keepends=True), 1):
         if not raw.strip():
             continue
         try:
@@ -154,12 +155,23 @@ def _read_rows_strict(ledger: Path) -> tuple[list[dict], list[str]]:
     return rows, raws
 
 
-def _append(data_root, row: dict) -> None:
+def _read_rows_strict(ledger: Path) -> tuple[list[dict], list[str]]:
+    """严格读账本：(行对象, 原始行含换行)。空白行跳过；非 JSON 行抛 ValueError（append 不吞）。"""
+    if not ledger.exists():
+        return [], []
+    return _parse_ledger_text(ledger.read_text(encoding="utf-8"))
+
+
+def _append(data_root, row: dict, guard=None) -> None:
     """追加一行并接上尾行哈希链：prev_sha256 = 前一原始行（含换行）的 sha256，首行 null。
 
     读全文→算 prev→写回是非原子三步，并发追加会互相覆盖尾链——整个序列在账本文件级
     fcntl.flock 排它锁内完成（锁粒度 = run-log.jsonl 单文件）；Windows 无 flock 时
     降级保持无锁现状（单写者假设，见 object-model.md「运行账本」段）。
+
+    guard(rows)：锁内追加前对最新账本行的复检回调（抛错则本行不写）——调用方在锁外
+    先读后写的 check-then-append 存在 TOCTOU 窗口（如 amend 锚 vs 权威锚检查），
+    guard 让关键校验在拿到锁后对最新状态再跑一遍。
     """
     ledger = ledger_path(data_root)
     ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -170,18 +182,9 @@ def _append(data_root, row: dict) -> None:
             except OSError:  # pragma: no cover - 文件系统不支持 flock（如部分网络盘）
                 pass
         fh.seek(0)
-        text = fh.read()
-        raws: list[str] = []
-        for lineno, raw in enumerate(text.splitlines(keepends=True), 1):
-            if not raw.strip():
-                continue
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"账本第 {lineno} 行不是合法 JSON：{exc.msg}") from exc
-            if not isinstance(parsed, dict):
-                raise ValueError(f"账本第 {lineno} 行不是 JSON 对象")
-            raws.append(raw)
+        rows, raws = _parse_ledger_text(fh.read())
+        if guard is not None:
+            guard(rows)
         row["prev_sha256"] = hashlib.sha256(raws[-1].encode("utf-8")).hexdigest() if raws else None
         fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
@@ -488,21 +491,32 @@ def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=
                     f"--data-target {target}#date，或在 --done 时再次给出")
             # amend 锚早于权威锚 fail-loud：权威表「更晚锚赢」，早锚 amend-done 的
             # post_sha256 会被静默丢弃（verify 仍按旧权威比对 → 误报未申报修订）。
+
+            def _guard_amend_anchor(latest_rows: list[dict]) -> None:
+                # 锁内复检（TOCTOU）：锁外读到的权威锚可能已被并发追加推进
+                _require_run(latest_rows, run_id)
+                latest_auth = _series_authority_anchor(latest_rows, target)
+                if latest_auth is not None and str(anchor) < latest_auth:
+                    raise ValueError(
+                        f"amend-done 锚 {anchor} 早于账本权威锚 {latest_auth}（path={target}）："
+                        f"该行的 post_sha256 会被权威表丢弃，verify 将误报未申报修订——"
+                        f"请以更晚锚（≥ {latest_auth}）重做 amend")
+
             auth_anchor = _series_authority_anchor(rows, target)
             if auth_anchor is not None and str(anchor) < auth_anchor:
-                raise ValueError(
-                    f"amend-done 锚 {anchor} 早于账本权威锚 {auth_anchor}（path={target}）："
-                    f"该行的 post_sha256 会被权威表丢弃，verify 将误报未申报修订——"
-                    f"请以更晚锚（≥ {auth_anchor}）重做 amend")
+                _guard_amend_anchor(rows)  # 锁外快路径：直接触发同一报错（不进锁）
             entry["anchor_date"] = anchor
             entry["post_sha256"] = row_anchor_hash(_resolve_target(data_root, target), anchor)
+            if reason:
+                entry["reason"] = reason
+            _append(data_root, entry, guard=_guard_amend_anchor)
+            return
+        resolved = _resolve_target(data_root, target)
+        if _evidence_id_from_target(target) is not None:
+            # evidence 目标：按 I4 归一化口径记哈希（与 close 注册 / verify 比对一致）
+            entry["post_sha256"] = normalized_evidence_sha256(resolved)
         else:
-            resolved = _resolve_target(data_root, target)
-            if _evidence_id_from_target(target) is not None:
-                # evidence 目标：按 I4 归一化口径记哈希（与 close 注册 / verify 比对一致）
-                entry["post_sha256"] = normalized_evidence_sha256(resolved)
-            else:
-                entry["post_sha256"] = file_sha256(resolved)
+            entry["post_sha256"] = file_sha256(resolved)
         if reason:
             entry["reason"] = reason
         _append(data_root, entry)
