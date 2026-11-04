@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""单票大师面板 CLI（spec §5.4）。
+"""大师面板 CLI（spec §5.4 单票 + Task 8 批量）。
 
     python tools/masters/run_masters.py 300476.SZ [--data-root ...] [--out output/masters/]
+    python tools/masters/run_masters.py --watchlist [--watchlist-config ...]   # 批量汇总表
 
 流程：abstain 判定 → build_context（TTM，缺期经 mootdx 补拉）→ 18 位跑 analyze
 （ARPS/Serenity 常驻弃权，不进共识）→ apply_coverage 降权 → compute_consensus
@@ -173,9 +174,16 @@ def run(ticker: str, data_root: Path, out_dir: Path, *, fetch: bool = True) -> P
     if status != "stock":
         raise SystemExit(f"{ticker}: abstain —— {why}")
 
-    suffix = why
+    report_path, _ = _analyze_and_report(code, why, data_root, out_dir, fetch=fetch)
+    print(report_path)
+    return report_path
+
+
+def _analyze_and_report(code: str, suffix: str, data_root: Path, out_dir: Path, *,
+                        fetch: bool = True) -> tuple[Path, dict]:
+    """单票分析 + 报告 + run-log（run 与批量模式共用）。返回 (报告路径, 汇总行 dict)。"""
     ticker_label = f"{code}.{suffix}"
-    context = build_context(ticker, data_root, fetch=fetch)
+    context = build_context(code, data_root, fetch=fetch)
     industry = industry_for(code, suffix)
 
     all_results = analyze_all(context)
@@ -195,8 +203,162 @@ def run(ticker: str, data_root: Path, out_dir: Path, *, fetch: bool = True) -> P
         encoding="utf-8")
 
     _ledger(data_root, report_path, report_date)
-    print(report_path)
-    return report_path
+
+    # 汇总行素材（批量模式用；关键分歧取一对代表性行为空对）
+    bulls = [r for r in results.values() if r.signal == SignalType.BULLISH]
+    bears = [r for r in results.values() if r.signal == SignalType.BEARISH]
+    top_pair = None
+    if bulls and bears:
+        bull, bear = bulls[0], bears[0]
+        b_top, _ = _factor_extremes(bull)
+        r_top, _ = _factor_extremes(bear)
+        top_pair = {"bull": bull.agent_name, "bull_factor": b_top or "N/A",
+                    "bear": bear.agent_name, "bear_factor": r_top or "N/A"}
+    div = consensus.metadata.get("divergence") or {}
+    summary = {
+        "ticker": ticker_label,
+        "score": consensus.score,
+        "signal": consensus.signal.value,
+        "participants": len(results),
+        "abstains": len(abstain_notes),
+        "kelly_pct": consensus.metadata.get("position_pct"),
+        "divergence": div,
+        "top_pair": top_pair,
+        "report": report_path,
+    }
+    return report_path, summary
+
+
+# ---------------------------------------------------------------------------
+# watchlist 批量模式（Task 8）
+# ---------------------------------------------------------------------------
+
+WATCHLIST_DEFAULT = REPO_ROOT / "config" / "daily-watchlist-watchlist.md"
+
+
+def parse_watchlist(path: Path) -> list[dict]:
+    """解析 daily-watchlist 配置表，取 Market=CN 的行（A 股个股 + ETF）。
+
+    海外/指数/宏观段（Market 非 CN）不进批量——classify_target 也会 abstain，
+    但先按 Market 过滤避免无谓迭代。返回 [{ticker, name, market, category}]。
+    """
+    rows: list[dict] = []
+    header: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if stripped.startswith("| Ticker") or stripped.startswith("|Ticker"):
+                header = cells
+                continue
+            if not header or all(set(c) <= {"-", ":"} for c in cells):
+                continue
+            row = dict(zip(header, cells, strict=False))
+            if row.get("Ticker") and row.get("Market") == "CN":
+                rows.append({"ticker": row["Ticker"], "name": row.get("Name", ""),
+                             "market": row["Market"], "category": row.get("Category", "")})
+    return rows
+
+
+def _research_questions(entries: list[dict]) -> list[str]:
+    """分歧 → 研究问题候选：每个存在对向分歧的标的一条，措辞可验证。"""
+    questions: list[str] = []
+    for e in entries:
+        pair = e.get("top_pair")
+        if not pair:
+            continue
+        factor = pair["bull_factor"] if pair["bull_factor"] != "N/A" else pair["bear_factor"]
+        topic = f"「{factor}」的多头逻辑" if factor != "N/A" else "多头核心逻辑"
+        questions.append(
+            f"- **{e['ticker']}**：{pair['bull']}（最强因子 {pair['bull_factor']}） vs "
+            f"{pair['bear']}（最强因子 {pair['bear_factor']}）——候选研究问题："
+            f"最新财报季 {e['ticker']} 的 {topic}是否仍成立？（待验证）")
+    return questions
+
+
+def render_watchlist_summary(entries: list[dict], trade_date: str, watchlist_path: Path) -> str:
+    lines = [
+        f"# 大师面板汇总：watchlist（{trade_date}）",
+        "",
+        DISCLAIMER,
+        "",
+        f"- 股票池：`{watchlist_path}`｜A 股个股逐票跑，ETF 全员 abstain 记一行",
+        f"- 个股单票报告：`output/masters/{trade_date[:7]}/<code>-<date>.md`（本表只做对比汇总）",
+        "",
+        "| Ticker | 名称 | score | signal | 参与大师数 | 弃权数 | half-Kelly | 关键分歧 |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for e in entries:
+        if e["status"] == "ok":
+            div = e.get("divergence") or {}
+            div_txt = (f"{div.get('bullish_count', 0)}多 vs {div.get('bearish_count', 0)}空"
+                       f"（分歧度 {div.get('score', 0)}）") if div else "—"
+            if e.get("top_pair"):
+                div_txt += f"；{e['top_pair']['bull']} vs {e['top_pair']['bear']}"
+            kelly = e["kelly_pct"] if e["kelly_pct"] is not None else "N/A"
+            lines.append(f"| {e['ticker']} | {e['name']} | {e['score']:.2f} | {e['signal']} "
+                         f"| {e['participants']} | {e['abstains']} | {kelly}% | {div_txt} |")
+        elif e["status"] == "abstain":
+            lines.append(f"| {e['ticker']} | {e['name']} | — | abstain | 0 | 18 | — "
+                         f"| {e['reason']} |")
+        else:  # error
+            lines.append(f"| {e['ticker']} | {e['name']} | ERR | error | — | — | — "
+                         f"| 失败：{e['error']} |")
+
+    lines += [
+        "",
+        "> **已知口径**：roe/增长字段为 gpcw 累计期 YTD 未年化；技术指标（RSI/MACD/ATR/"
+        "波动率族等）缺省，dalio/soros/marks 等命中 persona_deps 的大师已降权（保守方向已知，"
+        "本轮不补算 series 技术面）；市值按固定汇率 USD/CNY=7.2 换算参与规模档判定。",
+        "",
+        "## 分歧 → 研究问题（候选）",
+        "",
+    ]
+    questions = _research_questions([e for e in entries if e["status"] == "ok"])
+    lines += questions or ["- 本轮无对向分歧。"]
+    lines += [
+        "",
+        "> 以上为**研究问题候选措辞**，确认后进 `workspace/review-queue.md`（本工具不自动写队列）。",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def run_watchlist(data_root: Path, out_dir: Path, *, fetch: bool = True,
+                  watchlist_path: Path | None = None, today: str | None = None) -> Path:
+    """批量跑整个 watchlist：17 只个股逐票 + 4 ETF abstain 行 → 汇总表。
+
+    单票失败不中断（失败行记 error 摘要）；汇总表自身也写 run-log open/close。
+    """
+    watchlist_path = watchlist_path or WATCHLIST_DEFAULT
+    rows = parse_watchlist(watchlist_path)
+    trade_date = today or datetime.now().strftime("%Y-%m-%d")
+
+    entries: list[dict] = []
+    for row in rows:
+        status, code, why = classify_target(row["ticker"])
+        entry = {"ticker": row["ticker"], "name": row["name"]}
+        if status != "stock":
+            entries.append({**entry, "status": "abstain", "reason": why})
+            continue
+        try:
+            _, summary = _analyze_and_report(code, why, data_root, out_dir, fetch=fetch)
+            entries.append({**entry, "status": "ok", "name": row["name"] or summary["ticker"],
+                            **{k: summary[k] for k in
+                               ("ticker", "score", "signal", "participants", "abstains",
+                                "kelly_pct", "divergence", "top_pair")}})
+        except Exception as exc:  # noqa: BLE001 — 单票失败不中断批量
+            print(f"Warning: {row['ticker']} 失败（记 error 行继续）: {exc}", file=sys.stderr)
+            entries.append({**entry, "status": "error",
+                            "error": f"{type(exc).__name__}: {exc}"[:120]})
+
+    month_dir = out_dir / trade_date[:7]
+    month_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = month_dir / f"watchlist-{trade_date}.md"
+    summary_path.write_text(render_watchlist_summary(entries, trade_date, watchlist_path),
+                            encoding="utf-8")
+    _ledger(data_root, summary_path, trade_date)
+    print(summary_path)
+    return summary_path
 
 
 def _ledger(data_root: Path, report_path: Path, trade_date: str) -> None:
@@ -223,13 +385,26 @@ def _ledger(data_root: Path, report_path: Path, trade_date: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="单票大师面板（18 persona + 共识 + 报告 + run-log）")
-    parser.add_argument("ticker", help="A 股代码，如 300476.SZ（ETF/指数/非 A 股自动 abstain）")
+    parser.add_argument("ticker", nargs="?", help="A 股代码，如 300476.SZ（ETF/指数/非 A 股自动 abstain）")
+    parser.add_argument("--watchlist", action="store_true",
+                        help="批量模式：读 config/daily-watchlist-watchlist.md，个股逐票 + ETF abstain 行，"
+                             "输出汇总表 output/masters/YYYY-MM/watchlist-<date>.md")
+    parser.add_argument("--watchlist-config", default=str(WATCHLIST_DEFAULT),
+                        help="批量模式的 watchlist 配置路径（默认 config/daily-watchlist-watchlist.md）")
     parser.add_argument("--data-root", default=str(adapter.DEFAULT_DATA_ROOT))
     parser.add_argument("--out", default=str(REPO_ROOT / "output" / "masters"))
     parser.add_argument("--no-fetch", action="store_true",
                         help="禁用 mootdx 缺期补拉（只用本地 gpcw；缺期直接报错）")
     args = parser.parse_args(argv)
-    run(args.ticker, Path(args.data_root), Path(args.out), fetch=not args.no_fetch)
+    if args.watchlist:
+        if args.ticker:
+            parser.error("--watchlist 与单票 ticker 二选一")
+        run_watchlist(Path(args.data_root), Path(args.out), fetch=not args.no_fetch,
+                      watchlist_path=Path(args.watchlist_config))
+    else:
+        if not args.ticker:
+            parser.error("请给单票 ticker，或用 --watchlist 批量模式")
+        run(args.ticker, Path(args.data_root), Path(args.out), fetch=not args.no_fetch)
     return 0
 
 
