@@ -124,13 +124,30 @@ def _china_context() -> MarketContext:
     )
 
 
-CONTEXTS = {"rich_tech": _rich_context, "sparse": _sparse_context, "china": _china_context}
+def _pe_zero_context() -> MarketContext:
+    # pe=0 = 适配层 eps 缺失占位（availability missing），非真亏损——dayu 声明式
+    # 补丁后不得按"未盈利=早期机会"加分
+    return MarketContext(ticker="300999.SZ", pe=0.0, ps=8.0, revenue_growth=0.3)
+
+
+def _pe_negative_context() -> MarketContext:
+    # 真亏损（pe<0）：保留上游"未盈利=早期机会"语义，dayu 两处仍加分
+    return MarketContext(ticker="300998.SZ", pe=-12.0, ps=8.0, revenue_growth=0.3)
+
+
+CONTEXTS = {"rich_tech": _rich_context, "sparse": _sparse_context, "china": _china_context,
+            "pe_zero": _pe_zero_context, "pe_negative": _pe_negative_context}
 
 
 # ---------------------------------------------------------------- helpers
 
 def _load_original_persona(name: str, monkeypatch):
-    """从原仓源文件直接加载 persona 模块，stub augur.personas.base = vendored base。"""
+    """从原仓源文件直接加载 persona 模块，stub augur.personas.base = vendored base。
+
+    dayu 例外：vendored 有声明式 pe 补丁（DAYU_PE_PATCH，见 dayu.py 头注②——
+    pe 未知占位 0 不加分，仅真亏损保留上游语义），对拍前对上游源做同一字符串
+    替换，其余 persona 逐字节直载。
+    """
     stub_a = types.ModuleType("augur")
     stub_p = types.ModuleType("augur.personas")
     stub_a.personas = stub_p
@@ -139,10 +156,19 @@ def _load_original_persona(name: str, monkeypatch):
     monkeypatch.setitem(sys.modules, "augur.personas.base", vendored_base)
 
     path = AUGUR_PERSONAS / f"{name}.py"
+    source = path.read_text(encoding="utf-8")
+    if name == "dayu":
+        source = source.replace(*DAYU_PE_PATCH)
     spec = importlib.util.spec_from_file_location(f"augur_orig_personas_{name}", path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    code = compile(source, str(path), "exec")
+    exec(code, mod.__dict__)  # noqa: S102 - 对拍加载原仓源（含声明式替换）
     return mod
+
+
+# dayu 声明式补丁（与 vendored dayu.py 的本地改动②严格同串）：上游把 pe=0（适配层
+# eps 缺失占位）与真亏损都加分，本地仅保留 pe<0 分支。锁测试对上游应用同一替换。
+DAYU_PE_PATCH = ("pe == 0 or pe < 0", "pe < 0")
 
 
 def _load_vendored_persona(name: str):
@@ -230,6 +256,48 @@ def test_base_delta_is_hook_removal_only(monkeypatch):
         scoring_weights={"a": 1.0}, thresholds={"bullish_threshold": 6.0},
     )
     assert agent.thresholds == {"bullish_threshold": 6.0}
+
+
+# ---------------------------------------------------------------- dayu 声明式 pe 补丁
+
+def test_dayu_pe_zero_no_bonus_pe_negative_keeps_upstream():
+    """pe=0（未知占位）不加分、pe<0（真亏损）保留上游加分——两处条件各验一遍。"""
+    from augur_core.personas.dayu import DayuAgent
+
+    agent = DayuAgent()
+    base = MarketContext(ticker="X", pe=20.0, ps=8.0, revenue_growth=0.3)
+    pe0 = MarketContext(ticker="X", pe=0.0, ps=8.0, revenue_growth=0.3)
+    peneg = MarketContext(ticker="X", pe=-12.0, ps=8.0, revenue_growth=0.3)
+
+    # 信息优势因子：pe=0 与正常 pe 同分；pe<0 比基准多 1
+    assert agent._score_information_edge(pe0, "technology") == \
+        agent._score_information_edge(base, "technology")
+    assert agent._score_information_edge(peneg, "technology") == \
+        agent._score_information_edge(base, "technology") + 1
+
+    # 叙事时机因子（ps>5 才触发）：同上
+    assert agent._score_narrative_timing(pe0, "technology", "") == \
+        agent._score_narrative_timing(base, "technology", "")
+    assert agent._score_narrative_timing(peneg, "technology", "") == \
+        agent._score_narrative_timing(base, "technology", "") + 1
+
+
+@pytest.mark.skipif(not AUGUR_PERSONAS.is_dir(), reason="augur 原仓不存在")
+def test_dayu_vendored_source_has_declared_patch_only(monkeypatch):
+    """vendored dayu 源与「上游源 + 声明式替换」逐字节一致（除头注本地改动声明行）。"""
+    vendored_path = REPO_ROOT / "tools" / "masters" / "augur_core" / "personas" / "dayu.py"
+    vendored = vendored_path.read_text(encoding="utf-8")
+    vendored_body = vendored.split('"""\n', 1)[1]  # 头注（含改动声明）不参与比对
+    # 本地声明式改动落位：上游条件串已不存在，且恰被替换为 pe < 0
+    assert DAYU_PE_PATCH[0] not in vendored_body
+    assert vendored_body.count("if pe < 0:") == 1
+    assert vendored_body.count("if (pe < 0) and ps > 5:") == 1
+    # 对拍上游（工作树，锁 0c721ac）：应用同一替换后，正文（头注之后）逐字节一致
+    upstream = (AUGUR_PERSONAS / "dayu.py").read_text(encoding="utf-8")
+    patched = upstream.replace("from augur.personas.base import", "from augur_core.personas.base import") \
+                      .replace(*DAYU_PE_PATCH)
+    patched_body = patched.split('"""\n', 1)[1] if '"""\n' in patched else patched
+    assert vendored_body == patched_body
 
 
 # ---------------------------------------------------------------- consensus 手工对拍

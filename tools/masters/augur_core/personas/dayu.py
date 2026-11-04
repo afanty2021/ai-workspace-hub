@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 # 来源: https://github.com/BruceLanLan/augur (MIT License)
 # 锁定 commit: 0c721acc8522d4da57ea38bcd1852a30f23674e9
-# 本地改动: 仅将 import 路径 augur.personas.base 改为 augur_core.personas.base，并加此头注；其余逐字节一致
+# 本地改动: ① import 路径 augur.personas.base → augur_core.personas.base，并加此头注；
+# ② 两处 pe 条件（_score_information_edge / _score_narrative_timing 的
+#    "pe == 0 or pe < 0"）改为仅 "pe < 0"——上游把「pe 未知（适配层占位 0）」与
+#    「真亏损（pe<0）」都按"未盈利=早期机会"加分；A 股适配层的 pe=0 是 eps 缺失
+#    占位（field_availability=missing，coverage 已降权），本体不应再加分，仅真亏损
+#    保留上游语义。锁测试对上游源做同一字符串替换后对拍（tests/test_masters_engine.py）。
 """
 DayuAgent (大宇) — 币圈"看准+重仓"投资人格
 
@@ -225,7 +230,7 @@ class DayuAgent(BaseAgent):
 
         # 亏损/未盈利=可能早期机会(币圈特色)
         pe = ctx.pe or 0
-        if pe == 0 or pe < 0:
+        if pe < 0:
             score += 1
 
         # 高增长=有故事可讲
@@ -301,7 +306,7 @@ class DayuAgent(BaseAgent):
         # 未盈利但高PS = 叙事驱动(币圈特色)
         pe = ctx.pe or 0
         ps = ctx.ps or 0
-        if (pe == 0 or pe < 0) and ps > 5:
+        if (pe < 0) and ps > 5:
             score += 1  # 叙事驱动型标的
 
         # 低位启动信号
