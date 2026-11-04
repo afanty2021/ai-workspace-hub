@@ -1,0 +1,720 @@
+#!/usr/bin/env python3
+"""run_archive —— 运行账本（data/.state/run-log.jsonl）的写入与巡检。
+
+账本是追加式 JSONL，定位是「存在证明 + 修订痕迹」：对产物记哈希，改可以改但必须先记账
+（约定全文见 system/integrations/object-model.md「运行账本」段）。本模块既是 CLI 也是库：
+持久化钩子（Task 4）导入 append_open / append_data_close / append_amend / row_anchor_hash /
+verify_ledger，公开函数保持 argparse 无关；CLI 薄壳供 skill 一步命令使用。
+
+行类型（spec §3.2）：open / data-close / close / amend / amend-done / abort。
+kind 六值：watch / inspect / research / screen / masters / backfill（backfill 无 close 语义，
+不参与 verify 的孤儿判定）。
+
+本模块拍板的实现约定（brief 未逐字规定处的最简一致口径）：
+
+1. 行序列化：json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\\n"。
+2. 尾行哈希链：每行 prev_sha256 = 前一**原始行**（含行尾换行）UTF-8 字节的 sha256，首行 null；
+   verify 按当前文件逐行重算比对，断链 / 坏 JSON 行号进 chain_breaks。
+3. 行锚定哈希：对文件中 date ≤ anchor_date 的行，按文件序保留原始字节（含各自换行）拼接后
+   取 sha256；空行跳过；date 缺失或不可解析的行保守计入（改它必须可检）。
+4. 时间戳：本地时区 ISO 8601 秒精度（如 2026-11-04T16:30:00+08:00）。
+5. 路径：账本内 target / report 一律仓库根相对路径；解析根 = data_root 的父目录（默认布局
+   data/.state/ 下 data_root 即 <仓库根>/data）。绝对路径原样使用。
+6. run_id 终结判定：同 run_id 存在 close 或 abort 行即视为已终结；已终结的 run_id 同分钟可
+   复用，未终结的同分钟重开追加 -r2 / -r3。
+7. evidence 归一化哈希（I4 豁免）：review_status / direction / confidence 三个状态字段的
+   合法生命周期迁移不属修订。close 不带 sha 时与 verify 重算均把 frontmatter 中这三个顶层
+   字段的值归一为占位值 ``pending``（模板初始态）后再整文哈希；显式 ``E-ID:sha256`` 透传。
+   无 frontmatter（或未闭合）的文件退化为整文件哈希。
+
+verify_ledger 返回 dict，键：undeclared（未申报修订）/ unfinished_amends（未完成修订）/
+orphan_opens（孤儿 open）/ sentinel / chain_breaks（断链或坏行号，1-based）+ clean（前五项
+全空为 True）。CLI verify 退出码：干净 0，任一非空 1。
+
+用法：
+
+    python3 system/scripts/run_archive.py open --kind watch --trade-date 2026-11-04
+    python3 system/scripts/run_archive.py data-close --run-id R \\
+        --data-target data/market/series/300476.SZ.jsonl#2026-11-03 \\
+        --sources mootdx,nasdaq --missing-json '[]'
+    python3 system/scripts/run_archive.py close --run-id R \\
+        --report output/daily-watch/2026-11/2026-11-03.md \\
+        --evidence E-20261103-sox-break-ai-financing-h1
+    python3 system/scripts/run_archive.py amend --run-id R --target P --reason TXT \\
+        [--data-target path#date]...        # 第一步：intent（post_sha256=null）
+    python3 system/scripts/run_archive.py amend --done --run-id R --target P  # 第二步：补哈希
+    python3 system/scripts/run_archive.py abort --run-id R --reason TXT
+    python3 system/scripts/run_archive.py verify [--json]
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+KINDS = ("watch", "inspect", "research", "screen", "masters", "backfill")
+LEDGER_REL = Path(".state") / "run-log.jsonl"
+SENTINEL_REL = Path(".state") / "run-log.error"
+ORPHAN_HOURS = 24
+# run 终结行（同 run_id 已终结则可复用，否则同分钟重开加 -r2）；孤儿判定看有下文的三类行
+TERMINAL_TYPES = ("close", "abort")
+ACTIVITY_TYPES = ("data-close", "close", "abort")
+# I4 归一化：evidence 三状态字段哈希前统一视作初始 pending 态（值内生命周期迁移不算修订）
+EVIDENCE_STATUS_FIELDS = ("review_status", "direction", "confidence")
+EVIDENCE_PLACEHOLDER = "pending"
+_STATUS_LINE_RE = re.compile(r"^(%s):" % "|".join(EVIDENCE_STATUS_FIELDS))
+
+
+# ---------------------------------------------------------------------------
+# 基础工具
+# ---------------------------------------------------------------------------
+
+def _now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat(timespec="seconds")
+
+
+def ledger_path(data_root) -> Path:
+    """账本文件路径：<data_root>/.state/run-log.jsonl。"""
+    return Path(data_root) / LEDGER_REL
+
+
+def sentinel_path(data_root) -> Path:
+    return Path(data_root) / SENTINEL_REL
+
+
+def _repo_root(data_root) -> Path:
+    """target / report 路径的解析根：默认布局下 data_root = <仓库根>/data。"""
+    return Path(data_root).resolve().parent
+
+
+def _resolve_target(data_root, path: str) -> Path:
+    p = Path(path)
+    return p if p.is_absolute() else _repo_root(data_root) / p
+
+
+def file_sha256(path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _parse_dt(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+    # naive 时刻按本地时区补全（账本约定带时区，防御旧数据/手改行）
+    return parsed if parsed.tzinfo else parsed.astimezone()
+
+
+def _read_rows_strict(ledger: Path) -> tuple[list[dict], list[str]]:
+    """严格读账本：(行对象, 原始行含换行)。空白行跳过；非 JSON 行抛 ValueError（append 不吞）。"""
+    if not ledger.exists():
+        return [], []
+    rows: list[dict] = []
+    raws: list[str] = []
+    for lineno, raw in enumerate(ledger.read_text(encoding="utf-8").splitlines(keepends=True), 1):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"账本第 {lineno} 行不是合法 JSON：{exc.msg}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"账本第 {lineno} 行不是 JSON 对象")
+        rows.append(row)
+        raws.append(raw)
+    return rows, raws
+
+
+def _append(data_root, row: dict) -> None:
+    """追加一行并接上尾行哈希链：prev_sha256 = 前一原始行（含换行）的 sha256，首行 null。"""
+    ledger = ledger_path(data_root)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    _, raws = _read_rows_strict(ledger)
+    row["prev_sha256"] = hashlib.sha256(raws[-1].encode("utf-8")).hexdigest() if raws else None
+    line = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
+def _git_head(root: Path) -> str | None:
+    """git rev-parse --short HEAD；失败（非 git 目录 / git 缺失 / 超时）返回 None。"""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(root), capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _allocate_run_id(data_root, kind: str, now: datetime) -> str:
+    """RUN-YYYYMMDD-HHMM-<kind>；同 run_id 已存在且未终结（无 close/abort）时追加 -r2/-r3。"""
+    base = f"RUN-{now:%Y%m%d-%H%M}-{kind}"
+    rows, _ = _read_rows_strict(ledger_path(data_root))
+    terminated = {
+        row["run_id"] for row in rows
+        if row.get("type") in TERMINAL_TYPES and row.get("run_id")
+    }
+    candidate, n = base, 2
+    while any(row.get("run_id") == candidate for row in rows):
+        if candidate in terminated:
+            break  # 同 id 上一轮已终结，可复用
+        candidate = f"{base}-r{n}"
+        n += 1
+    return candidate
+
+
+def _require_run(rows: list[dict], run_id: str) -> None:
+    if not any(row.get("run_id") == run_id for row in rows):
+        raise ValueError(f"run_id 不存在于账本：{run_id}")
+
+
+def _split_anchor_spec(spec: str) -> tuple[str, str | None]:
+    """拆 `path` / `path#anchor`；# 取最后一个（路径本身不含 # 的约定下安全）。"""
+    if "#" not in spec:
+        return spec, None
+    path, anchor = spec.rsplit("#", 1)
+    if not path or not anchor:
+        raise ValueError(f"目标格式非法（应为 path 或 path#date）：{spec}")
+    return path, anchor
+
+
+def _normalize_data_targets(data_root, data_targets) -> list[dict]:
+    """统一 data 目标：.jsonl → {path, anchor_date, sha256}（行锚定）；其余 → {path, sha256}。
+
+    入参可以是 CLI 的 `path#anchor` 字符串，或库调用的 dict（可省 sha256，缺则现算）。
+    """
+    entries: list[dict] = []
+    for item in data_targets or []:
+        if isinstance(item, str):
+            path, anchor = _split_anchor_spec(item)
+            src: dict = {"path": path}
+            if anchor:
+                src["anchor_date"] = anchor
+        else:
+            src = dict(item)
+        path = str(src["path"])
+        anchor = src.get("anchor_date")
+        entry: dict = {"path": path}
+        if path.endswith(".jsonl"):
+            if not anchor:
+                raise ValueError(f"series 目标（.jsonl）必须带锚定日期（path#date）：{path}")
+            entry["anchor_date"] = str(anchor)
+            entry["sha256"] = (str(src["sha256"]) if src.get("sha256")
+                               else row_anchor_hash(_resolve_target(data_root, path), str(anchor)))
+        else:
+            if anchor:
+                raise ValueError(f"仅 .jsonl 目标支持行锚定，其余整文件哈希：{path}")
+            entry["sha256"] = (str(src["sha256"]) if src.get("sha256")
+                               else file_sha256(_resolve_target(data_root, path)))
+        entries.append(entry)
+    return entries
+
+
+def _evidence_root(data_root) -> Path:
+    return _repo_root(data_root) / "evidence"
+
+
+def _find_evidence_file(data_root, ev_id: str) -> Path | None:
+    """按 id 匹配 evidence/**/*.md 的文件名（仓库约定文件名 = evidence id）。"""
+    root = _evidence_root(data_root)
+    if not root.is_dir():
+        return None
+    matches = sorted(root.glob(f"**/{ev_id}.md"))
+    return matches[0] if matches else None
+
+
+def normalized_evidence_sha256(path) -> str:
+    """I4 归一化哈希：frontmatter 三个状态字段值归一为 pending 后整文哈希。
+
+    无 frontmatter / frontmatter 未闭合 / 字段缺失时不做替换，退化为整文件哈希。
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def normalize(raw: str) -> str:
+        core = raw.rstrip("\r\n")
+        match = _STATUS_LINE_RE.match(core)
+        if not match:
+            return raw
+        return f"{match.group(1)}: {EVIDENCE_PLACEHOLDER}" + raw[len(core):]
+
+    out = [lines[0]]
+    closed = False
+    for raw in lines[1:]:
+        if closed:
+            out.append(raw)
+            continue
+        out.append(normalize(raw))
+        if raw.strip() == "---":
+            closed = True
+    if not closed:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256("".join(out).encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# 库 API（Task 4 持久化钩子导入；全部失败抛异常，不吞）
+# ---------------------------------------------------------------------------
+
+def append_open(data_root, kind: str, trade_date: str, now: datetime | None = None) -> str:
+    """写 open 行（started_at / git_head 如实记录），返回 run_id。
+
+    kind 非六值、trade_date 非 YYYY-MM-DD 抛 ValueError。
+    """
+    if kind not in KINDS:
+        raise ValueError(f"kind 非法：{kind!r}，合法六值 {KINDS}")
+    try:
+        date.fromisoformat(str(trade_date))
+    except ValueError as exc:
+        raise ValueError(f"trade_date 非法：{trade_date!r}（YYYY-MM-DD）") from exc
+    started = now or _now()
+    run_id = _allocate_run_id(data_root, kind, started)
+    _append(data_root, {
+        "type": "open",
+        "run_id": run_id,
+        "kind": kind,
+        "trade_date": str(trade_date),
+        "started_at": _iso(started),
+        "git_head": _git_head(_repo_root(data_root)),
+    })
+    return run_id
+
+
+def row_anchor_hash(path, anchor_date: str) -> str:
+    """行锚定哈希：date ≤ anchor_date 的行按文件序拼接（保留原始字节含换行）的 sha256。
+
+    空行跳过；date 缺失或不可解析的行保守计入。追加 date > anchor 的行不影响本哈希。
+    """
+    anchor = date.fromisoformat(str(anchor_date))
+    digest = hashlib.sha256()
+    for raw in Path(path).read_text(encoding="utf-8").splitlines(keepends=True):
+        if not raw.strip():
+            continue
+        try:
+            row_date = date.fromisoformat(json.loads(raw)["date"])
+        except (ValueError, KeyError, TypeError):
+            digest.update(raw.encode("utf-8"))
+            continue
+        if row_date <= anchor:
+            digest.update(raw.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def append_data_close(data_root, run_id: str, data_targets, sources_used, missing) -> None:
+    """写 data-close 行。series 目标记行锚定三元组，md 等其余目标记整文件哈希。
+
+    目标文件缺失、账本损坏、run_id 未知均抛异常——调用方（persist 钩子）决定降级方式。
+    """
+    rows, _ = _read_rows_strict(ledger_path(data_root))
+    _require_run(rows, run_id)
+    _append(data_root, {
+        "type": "data-close",
+        "run_id": run_id,
+        "at": _iso(_now()),
+        "data_targets": _normalize_data_targets(data_root, data_targets),
+        "sources_used": list(sources_used or []),
+        "missing": list(missing or []),
+    })
+
+
+def append_close(data_root, run_id: str, report: str, evidence_registered=None) -> None:
+    """写 close 行：报告整文件 sha256 + evidence_registered [{id, sha256}]。
+
+    evidence 条目可以是 "E-ID" / "E-ID:sha256" 字符串或 {id, sha256?} dict；
+    缺 sha256 时按 I4 归一化规则读文件现算，显式给出则透传。
+    """
+    rows, _ = _read_rows_strict(ledger_path(data_root))
+    _require_run(rows, run_id)
+    registered: list[dict] = []
+    for item in evidence_registered or []:
+        if isinstance(item, str):
+            ev_id, _, explicit_sha = item.partition(":")
+            explicit_sha = explicit_sha or None
+        else:
+            ev_id = str(item["id"])
+            explicit_sha = item.get("sha256")
+        if explicit_sha:
+            sha = str(explicit_sha)
+        else:
+            ev_path = _find_evidence_file(data_root, ev_id)
+            if ev_path is None:
+                raise ValueError(f"evidence 文件未找到（evidence/**/*.md 按 id 匹配）：{ev_id}")
+            sha = normalized_evidence_sha256(ev_path)
+        registered.append({"id": ev_id, "sha256": sha})
+    _append(data_root, {
+        "type": "close",
+        "run_id": run_id,
+        "finished_at": _iso(_now()),
+        "report": str(report),
+        "report_sha256": file_sha256(_resolve_target(data_root, report)),
+        "evidence_registered": registered,
+    })
+
+
+def _intent_anchor(rows: list[dict], run_id: str, target: str) -> str | None:
+    """从最近一条同 run/target 的 amend intent 里找该 target 的锚定日期。"""
+    anchor = None
+    for row in rows:
+        if (row.get("type") == "amend" and row.get("run_id") == run_id
+                and str(row.get("target")) == target):
+            for spec in row.get("data_targets") or []:
+                path, spec_anchor = _split_anchor_spec(str(spec))
+                if path == target and spec_anchor:
+                    anchor = spec_anchor
+    return anchor
+
+
+def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=None,
+                 done: bool = False) -> None:
+    """两步 amend。
+
+    done=False 写 intent 行（data_targets 记 `path#date` 串，post_sha256=null，reason 必填）；
+    done=True 写 amend-done 行——series 目标（.jsonl）按 intent 声明（或 data_targets 显式
+    传入）的锚定日期算行锚定哈希并记入 anchor_date，其余目标记整文件哈希。
+    """
+    rows, _ = _read_rows_strict(ledger_path(data_root))
+    _require_run(rows, run_id)
+    target = str(target)
+    specs = [str(s) for s in (data_targets or [])]
+    if done:
+        entry: dict = {"type": "amend-done", "run_id": run_id,
+                       "at": _iso(_now()), "target": target}
+        if target.endswith(".jsonl"):
+            anchor = None
+            for spec in specs:
+                path, spec_anchor = _split_anchor_spec(spec)
+                if path == target and spec_anchor:
+                    anchor = spec_anchor
+            anchor = anchor or _intent_anchor(rows, run_id, target)
+            if anchor is None:
+                raise ValueError(
+                    f"series 目标的 amend-done 需要锚定日期：先在 intent 里声明 "
+                    f"--data-target {target}#date，或在 --done 时再次给出")
+            entry["anchor_date"] = anchor
+            entry["post_sha256"] = row_anchor_hash(_resolve_target(data_root, target), anchor)
+        else:
+            entry["post_sha256"] = file_sha256(_resolve_target(data_root, target))
+        if reason:
+            entry["reason"] = reason
+        _append(data_root, entry)
+        return
+    if not reason:
+        raise ValueError("amend intent 必须带 reason（--reason）")
+    _append(data_root, {
+        "type": "amend",
+        "run_id": run_id,
+        "at": _iso(_now()),
+        "target": target,
+        "data_targets": specs,
+        "reason": reason,
+        "post_sha256": None,
+    })
+
+
+def append_abort(data_root, run_id: str, reason: str) -> None:
+    """写 abort 行：显式收口中止（verify 不再追其 close）。"""
+    rows, _ = _read_rows_strict(ledger_path(data_root))
+    _require_run(rows, run_id)
+    if not reason:
+        raise ValueError("abort 必须带 reason（--reason）")
+    _append(data_root, {"type": "abort", "run_id": run_id, "at": _iso(_now()), "reason": reason})
+
+
+# ---------------------------------------------------------------------------
+# verify：四张清单 + 哈希链
+# ---------------------------------------------------------------------------
+
+def verify_ledger(data_root, now: datetime | None = None) -> dict:
+    """巡检账本，返回四张清单 + 断链行号（键名见模块 docstring），不抛巡检类异常。"""
+    data_root = Path(data_root)
+    now = now or _now()
+    result: dict = {"undeclared": [], "unfinished_amends": [], "orphan_opens": [],
+                    "sentinel": [], "chain_breaks": []}
+
+    # -- 哈希链：逐行重算 prev_sha256；空白行 / 坏 JSON 行本身就是断链证据
+    rows: list[dict] = []
+    if ledger_path(data_root).exists():
+        prev_digest = None
+        for lineno, raw in enumerate(
+                ledger_path(data_root).read_text(encoding="utf-8").splitlines(keepends=True), 1):
+            if not raw.strip():
+                result["chain_breaks"].append(lineno)
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                result["chain_breaks"].append(lineno)
+                prev_digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                continue
+            expected = row.get("prev_sha256") if isinstance(row, dict) else None
+            if expected != prev_digest:
+                result["chain_breaks"].append(lineno)
+            if isinstance(row, dict):
+                rows.append(row)
+            prev_digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    # -- 顺扫建权威哈希表：同目标多 close / amend-done 合法，取最后一条
+    report_auth: dict[str, str | None] = {}    # path -> 期望整文件 sha
+    series_auth: dict[str, dict] = {}          # path -> {anchor_date, sha256}
+    evidence_auth: dict[str, str | None] = {}  # E-ID -> 期望（归一化）sha
+    intents: list[dict] = []
+    done_keys: set[tuple[str, str]] = set()
+    open_rows: list[dict] = []
+    active_runs: set[str] = set()
+
+    for row in rows:
+        rtype = row.get("type")
+        if rtype in ACTIVITY_TYPES:
+            active_runs.add(str(row.get("run_id")))
+        if rtype == "open":
+            open_rows.append(row)
+        elif rtype == "data-close":
+            for t in row.get("data_targets") or []:
+                if not isinstance(t, dict) or not t.get("path"):
+                    continue
+                if t.get("anchor_date"):
+                    series_auth[str(t["path"])] = {"anchor_date": str(t["anchor_date"]),
+                                                   "sha256": t.get("sha256")}
+                else:
+                    report_auth[str(t["path"])] = t.get("sha256")
+        elif rtype == "close":
+            if row.get("report"):
+                report_auth[str(row["report"])] = row.get("report_sha256")
+            for ev in row.get("evidence_registered") or []:
+                if isinstance(ev, dict) and ev.get("id"):
+                    evidence_auth[str(ev["id"])] = ev.get("sha256")
+        elif rtype == "amend":
+            intents.append(row)
+        elif rtype == "amend-done":
+            done_keys.add((str(row.get("run_id")), str(row.get("target"))))
+            if row.get("anchor_date"):
+                series_auth[str(row.get("target"))] = {
+                    "anchor_date": str(row["anchor_date"]), "sha256": row.get("post_sha256")}
+            elif row.get("target"):
+                report_auth[str(row["target"])] = row.get("post_sha256")
+
+    # -- ① 未申报修订
+    for path, expected in report_auth.items():
+        target = _resolve_target(data_root, path)
+        if not target.is_file():
+            result["undeclared"].append({"kind": "report", "target": path, "detail": "文件缺失"})
+            continue
+        actual = file_sha256(target)
+        if actual != expected:
+            result["undeclared"].append({
+                "kind": "report", "target": path,
+                "detail": f"整文件哈希不一致（期望 {str(expected)[:12]}，实际 {actual[:12]}）"})
+    for path, auth in series_auth.items():
+        target = _resolve_target(data_root, path)
+        if not target.is_file():
+            result["undeclared"].append({"kind": "series", "target": path, "detail": "文件缺失"})
+            continue
+        try:
+            actual = row_anchor_hash(target, auth["anchor_date"])
+        except ValueError as exc:
+            result["undeclared"].append(
+                {"kind": "series", "target": path, "detail": f"锚定日期非法：{exc}"})
+            continue
+        if actual != auth["sha256"]:
+            result["undeclared"].append({
+                "kind": "series", "target": path,
+                "detail": (f"行锚定哈希不一致（anchor {auth['anchor_date']}，"
+                           f"期望 {str(auth['sha256'])[:12]}，实际 {actual[:12]}）")})
+    for ev_id, expected in evidence_auth.items():
+        ev_path = _find_evidence_file(data_root, ev_id)
+        if ev_path is None:
+            result["undeclared"].append({"kind": "evidence", "target": ev_id, "detail": "文件缺失"})
+            continue
+        actual = normalized_evidence_sha256(ev_path)
+        if actual != expected:
+            result["undeclared"].append({
+                "kind": "evidence", "target": ev_id,
+                "detail": (f"归一化哈希不一致（期望 {str(expected)[:12]}，"
+                           f"实际 {actual[:12]}；正文改动须先 amend，状态字段迁移除外）")})
+
+    # -- ② 未完成修订（intent 无 done）
+    for row in intents:
+        key = (str(row.get("run_id")), str(row.get("target")))
+        if key not in done_keys:
+            result["unfinished_amends"].append({
+                "run_id": row.get("run_id"), "target": row.get("target"),
+                "reason": row.get("reason"), "at": row.get("at")})
+
+    # -- ③ 孤儿 open（>24h 无 data-close / close / abort 下文；backfill 不参与）
+    cutoff = timedelta(hours=ORPHAN_HOURS)
+    for row in open_rows:
+        run_id = str(row.get("run_id"))
+        if row.get("kind") == "backfill":
+            continue
+        if run_id in active_runs:
+            continue
+        started = _parse_dt(row.get("started_at"))
+        if started is None:
+            result["orphan_opens"].append({
+                "run_id": row.get("run_id"), "kind": row.get("kind"),
+                "started_at": row.get("started_at"), "detail": "started_at 不可解析"})
+            continue
+        age = now - started
+        if age > cutoff:
+            result["orphan_opens"].append({
+                "run_id": row.get("run_id"), "kind": row.get("kind"),
+                "started_at": row.get("started_at"),
+                "detail": f"open 后 {age.total_seconds() / 3600:.1f}h 无下文"})
+
+    # -- ④ sentinel：hook 写账本失败的可感知标记
+    sentinel = sentinel_path(data_root)
+    if sentinel.is_file():
+        result["sentinel"].append({
+            "path": str(SENTINEL_REL),
+            "content": sentinel.read_text(encoding="utf-8").strip()})
+
+    result["clean"] = not any(
+        result[key] for key in
+        ("undeclared", "unfinished_amends", "orphan_opens", "sentinel", "chain_breaks"))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# CLI 薄壳
+# ---------------------------------------------------------------------------
+
+def _print_verify(result: dict, ledger: Path) -> None:
+    print(f"[run-archive verify] 账本：{ledger}")
+    if result["clean"]:
+        print("  ✓ 全部干净")
+        return
+    sections = (
+        ("undeclared", "未申报修订"),
+        ("unfinished_amends", "未完成修订"),
+        ("orphan_opens", f"孤儿 open（>{ORPHAN_HOURS}h 无下文）"),
+        ("sentinel", "写失败 sentinel"),
+        ("chain_breaks", "哈希链断链行"),
+    )
+    for key, label in sections:
+        items = result[key]
+        print(f"  {'✗' if items else '✓'} {label}（{len(items)}）")
+        for item in items:
+            if isinstance(item, dict):
+                tag = f"[{item['kind']}] " if "kind" in item else ""
+                head = item.get("target") or item.get("path") or item.get("run_id") or ""
+                detail = item.get("detail") or item.get("content") or item.get("reason") or ""
+                print(f"    - {tag}{head}" + (f"：{detail}" if detail else ""))
+            else:
+                print(f"    - 第 {item} 行")
+
+
+def _parse_missing(spec: str) -> list:
+    try:
+        missing = json.loads(spec) if spec.strip() else []
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--missing-json 不是合法 JSON：{exc}") from exc
+    if not isinstance(missing, list):
+        raise SystemExit("--missing-json 必须是 JSON 数组")
+    return missing
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="run_archive",
+        description="运行账本 data/.state/run-log.jsonl 的写入与巡检（约定见 object-model.md「运行账本」段）")
+    parser.add_argument("--data-root", default=None,
+                        help="data 根目录（默认 <仓库根>/data；账本在 <data-root>/.state/run-log.jsonl）")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_open = sub.add_parser("open", help="运行开始：写 open 行并打印 run_id")
+    p_open.add_argument("--kind", required=True, choices=KINDS, help="运行类型（六值）")
+    p_open.add_argument("--trade-date", required=True, help="业务交易日 YYYY-MM-DD")
+
+    p_dc = sub.add_parser("data-close", help="数据侧收口（persist 钩子自动写；series 目标行锚定）")
+    p_dc.add_argument("--run-id", required=True)
+    p_dc.add_argument("--data-target", action="append", default=[], metavar="PATH[#ANCHOR]",
+                      help="目标路径，可多次；.jsonl 必须带 #anchor（行锚定），其余整文件哈希")
+    p_dc.add_argument("--sources", default="", help="逗号分隔的数据源清单")
+    p_dc.add_argument("--missing-json", default="[]", help="结构化降级清单（JSON 数组，透传）")
+
+    p_close = sub.add_parser("close", help="报告落盘后收口：报告哈希 + evidence 登记")
+    p_close.add_argument("--run-id", required=True)
+    p_close.add_argument("--report", required=True, help="报告路径（仓库根相对）")
+    p_close.add_argument("--evidence", action="append", default=[], metavar="E-ID[:SHA256]",
+                         help="evidence ID，可多次；不带 sha256 时按 I4 归一化规则现算，显式给出则透传")
+
+    p_amend = sub.add_parser("amend", help="两步修订：先 intent（--reason），改完再 --done")
+    p_amend.add_argument("--run-id", required=True)
+    p_amend.add_argument("--target", required=True, help="修订目标路径（仓库根相对）")
+    p_amend.add_argument("--reason", default=None, help="修订原因（intent 必填）")
+    p_amend.add_argument("--data-target", action="append", default=[], metavar="PATH#DATE",
+                         help="series 修订目标 path#date，可多次（intent 声明；--done 时可再给）")
+    p_amend.add_argument("--done", action="store_true", help="第二步：写 amend-done 行（改后哈希）")
+
+    p_abort = sub.add_parser("abort", help="运行中止显式记账")
+    p_abort.add_argument("--run-id", required=True)
+    p_abort.add_argument("--reason", required=True)
+
+    p_verify = sub.add_parser("verify", help="巡检：未申报修订/未完成修订/孤儿 open/sentinel + 哈希链")
+    p_verify.add_argument("--json", action="store_true", help="输出 JSON（默认人类可读清单）")
+
+    p_ledger = sub.add_parser("ledger", help="两次运行之间变了什么（Task 5 落地）")
+    p_ledger.add_argument("--from", dest="from_date", default=None, help="区间起（YYYY-MM-DD）")
+    p_ledger.add_argument("--to", dest="to_date", default=None, help="区间止（YYYY-MM-DD）")
+    p_ledger.add_argument("--hypothesis", default=None, help="按假设过滤（如 H1）")
+    p_ledger.add_argument("--json", action="store_true", help="输出 JSON")
+
+    args = parser.parse_args(argv)
+    data_root = (Path(args.data_root) if args.data_root
+                 else Path(__file__).resolve().parents[2] / "data")
+
+    if args.command == "verify":
+        result = verify_ledger(data_root)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            _print_verify(result, ledger_path(data_root))
+        return 0 if result["clean"] else 1
+    if args.command == "ledger":
+        parser.error("ledger: not implemented（Task 5 落地）")
+
+    try:
+        if args.command == "open":
+            print(append_open(data_root, args.kind, args.trade_date))
+        elif args.command == "data-close":
+            append_data_close(data_root, args.run_id, args.data_target,
+                              [s.strip() for s in args.sources.split(",") if s.strip()],
+                              _parse_missing(args.missing_json))
+            print(f"data-close 已记账：{args.run_id}")
+        elif args.command == "close":
+            append_close(data_root, args.run_id, args.report, args.evidence)
+            print(f"close 已记账：{args.run_id} -> {args.report}")
+        elif args.command == "amend":
+            if not args.done and not args.reason:
+                parser.error("amend intent 必须带 --reason")
+            append_amend(data_root, args.run_id, args.target, args.reason,
+                         data_targets=args.data_target or None, done=args.done)
+            print("amend-done 已记账" if args.done else "amend intent 已记账")
+        elif args.command == "abort":
+            append_abort(data_root, args.run_id, args.reason)
+            print(f"abort 已记账：{args.run_id}")
+    except (ValueError, FileNotFoundError) as exc:
+        parser.error(str(exc))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
