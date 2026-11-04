@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime
@@ -235,8 +236,93 @@ class HookTests(unittest.TestCase):
 
     def test_report_source_wires_hook(self) -> None:
         source = (REPO_ROOT / "tools/daily-watch/scripts/generate_daily_report.py").read_text(encoding="utf-8")
-        self.assertIn("_persist_market_data_hook(market_data)", source)
+        # 4c 宏观前移后调用带 macro_meta 透传（旧断言 `_persist_market_data_hook(market_data)`
+        # 按无参调用锁定，已随调用序前移更新）
+        self.assertIn("_persist_market_data_hook(\n        market_data,", source)
         self.assertIn("def _persist_market_data_hook(", source)
+
+
+class RunLedgerHookTests(unittest.TestCase):
+    """4a 运行账本接线：open+data-close 两行、逃生门、账本失败 sentinel 不抛。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _degraded_snapshot() -> dict:
+        snap = _snapshot([_quote("600276.SH")])
+        snap["meta"]["quotes"]["degradations"] = [
+            {"ticker": "NVDA", "source_tried": "nasdaq", "reason": "timeout",
+             "fallback": "finnhub"}]
+        return snap
+
+    def _ledger_rows(self) -> list[dict]:
+        ledger = self.root / ".state" / "run-log.jsonl"
+        return [json.loads(line) for line in
+                ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def test_hook_writes_open_and_data_close(self) -> None:
+        pmd.run_persist_hook(self._degraded_snapshot(), self.root)
+        rows = self._ledger_rows()
+        self.assertEqual([r["type"] for r in rows], ["open", "data-close"])
+        open_row, close_row = rows
+        self.assertEqual(open_row["kind"], "watch")
+        self.assertEqual(open_row["trade_date"], "2026-11-02")  # fetched_at 的业务日
+        self.assertEqual(close_row["run_id"], open_row["run_id"])
+        self.assertEqual(close_row["sources_used"], ["mootdx"])  # 行内 source 汇总
+        self.assertEqual(close_row["missing"], [  # meta 降级清单透传
+            {"ticker": "NVDA", "source_tried": "nasdaq", "reason": "timeout",
+             "fallback": "finnhub"}])
+        (target,) = close_row["data_targets"]
+        self.assertTrue(target["path"].endswith("market/series/600276.SH.jsonl"),
+                        msg=target["path"])
+        self.assertEqual(target["anchor_date"], "2026-11-02")
+        self.assertRegex(target["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_macro_meta_missing_flows_into_data_close(self) -> None:
+        pmd.run_persist_hook(
+            _snapshot([_quote("600276.SH")]), self.root,
+            macro_meta={"missing_symbols": ["VIX", "SPY"], "reason": "FMP_API_KEY not set"})
+        close_row = self._ledger_rows()[1]
+        self.assertIn({"item": "VIX", "reason": "FMP_API_KEY not set"}, close_row["missing"])
+        self.assertIn({"item": "SPY", "reason": "FMP_API_KEY not set"}, close_row["missing"])
+
+    def test_run_log_disable_env_skips_ledger(self) -> None:
+        with patch.dict(os.environ, {"RUN_LOG_DISABLE": "1"}):
+            pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root)
+        self.assertFalse((self.root / ".state").exists())
+        self.assertTrue(series_file(self.root, "600276.SH").exists())  # 持久化照常
+
+    def test_run_log_false_param_skips_ledger(self) -> None:
+        pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root, run_log=False)
+        self.assertFalse((self.root / ".state").exists())
+
+    def test_ledger_open_failure_writes_sentinel_not_raises(self) -> None:
+        archive = pmd._load_run_archive()
+        with patch.object(archive, "append_open", side_effect=RuntimeError("ledger boom")):
+            pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root)  # 不抛即通过
+        sentinel = self.root / ".state" / "run-log.error"
+        self.assertTrue(sentinel.is_file())
+        self.assertIn("open", sentinel.read_text(encoding="utf-8"))
+        self.assertTrue(series_file(self.root, "600276.SH").exists())  # 持久化不受账本失败影响
+
+    def test_ledger_close_failure_writes_sentinel_not_raises(self) -> None:
+        archive = pmd._load_run_archive()
+        with patch.object(archive, "append_data_close", side_effect=RuntimeError("close boom")):
+            pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root)
+        self.assertIn("data-close",
+                      (self.root / ".state" / "run-log.error").read_text(encoding="utf-8"))
+        self.assertEqual([r["type"] for r in self._ledger_rows()], ["open"])  # close 没写成
+
+    def test_persist_failure_leaves_open_without_close(self) -> None:
+        # 落盘失败不写 data-close：open 留给 verify 的孤儿判定（spec §3.2 I3）
+        with patch.object(pmd, "save_daily_snapshot", side_effect=RuntimeError("disk full")):
+            pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root)
+        self.assertEqual([r["type"] for r in self._ledger_rows()], ["open"])
 
 
 class CliSnapshotFileTests(unittest.TestCase):

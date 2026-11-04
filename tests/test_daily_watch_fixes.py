@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
+
+import yaml
 
 from _test_paths import REPO_ROOT  # noqa: F401 (also sets up sys.path)
 
@@ -26,6 +30,7 @@ from generate_daily_report import (  # noqa: E402
     hypothesis_settings,
     load_env_file,
     matches_focus_area,
+    write_signal_evidence,
 )
 from sync_hypothesis import (  # noqa: E402
     extract_frontmatter,
@@ -281,6 +286,164 @@ class MissingEnvFileTests(unittest.TestCase):
         missing = Path(tempfile.gettempdir()) / "definitely-missing-daily-watch.env"
         self.assertFalse(missing.exists())
         self.assertEqual(load_env_file(missing), {})
+
+
+class SignalEvidenceTimingTests(unittest.TestCase):
+    """4c write_signal_evidence 三时点（spec §2.1/C6）：observed=业务时点≠登记日，
+    available=收盘即可得（A 股 15:00+08:00；美股按美东 16:00 当期偏移换算），recorded 带时区。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _signal(**over: dict) -> dict:
+        base = {"hypothesis_id": "H1", "signal_type": "mover", "ref": "600276.SH",
+                "summary": "600276.SH 今日涨跌幅 +8.00%", "auto_writeback": True,
+                "observed_trade_date": "2026-11-02", "market": "CN"}
+        base.update(over)
+        return base
+
+    def _write(self, signal: dict, date_text: str = "2026-11-03") -> tuple[dict, str]:
+        path, created = write_signal_evidence(
+            self.root, date_text, signal, "output/daily-watch/2026-11/2026-11-03.md")
+        self.assertTrue(created)
+        text = path.read_text(encoding="utf-8")
+        fm_block = text.split("---")[1]
+        return yaml.safe_load(fm_block), text
+
+    def test_cn_mover_observed_is_trade_date_not_report_date(self) -> None:
+        fm, text = self._write(self._signal())
+        self.assertEqual(fm["observed_at"], "2026-11-02")  # 业务时点（quote tradeDate）≠ 报告日
+        self.assertEqual(fm["available_at"], "2026-11-02T15:00:00+08:00")  # A 股收盘
+        self.assertNotIn("时点注记", text)  # 口径明确时不留注记
+
+    def test_us_est_close_conversion(self) -> None:
+        # spec §2.1 样板：美东 11-02（EST）16:00 收盘 = 北京 11-03 05:00
+        fm, _ = self._write(self._signal(ref="NVDA", market="US"))
+        self.assertEqual(fm["available_at"], "2026-11-03T05:00:00+08:00")
+
+    def test_us_edt_close_conversion(self) -> None:
+        # 夏令时同口径：美东 7 月（EDT）16:00 收盘 = 北京次日 04:00
+        fm, _ = self._write(self._signal(ref="NVDA", market="US",
+                                          observed_trade_date="2026-07-13"))
+        self.assertEqual(fm["available_at"], "2026-07-14T04:00:00+08:00")
+
+    def test_recorded_at_is_timezone_aware_moment(self) -> None:
+        fm, _ = self._write(self._signal())
+        self.assertIsNotNone(datetime.fromisoformat(fm["recorded_at"]).tzinfo)
+
+    def test_missing_trade_date_falls_back_with_body_note(self) -> None:
+        fm, text = self._write(self._signal(observed_trade_date=None, market=""))
+        self.assertEqual(fm["observed_at"], "2026-11-03")  # 回退报告日
+        self.assertIn("时点注记", text)
+        self.assertIn("回退报告日", text)
+        self.assertIn("A 股 15:00+08:00 保守填写", text)  # 市场判定不了 → A 股口径+注记
+
+    def test_known_market_no_note_unknown_market_noted(self) -> None:
+        _, cn_text = self._write(self._signal(market="CN"))
+        self.assertNotIn("时点注记", cn_text)
+        _, kr_text = self._write(self._signal(ref="000660.KS", market="KR",
+                                              observed_trade_date="2026-11-02"))
+        self.assertIn("无法判定收盘口径", kr_text)
+
+    def test_earnings_uses_disclosure_date(self) -> None:
+        fm, _ = self._write(self._signal(signal_type="earnings", ref="NVDA", market="US",
+                                          observed_trade_date="2026-10-29"))
+        self.assertEqual(fm["observed_at"], "2026-10-29")
+
+    def test_second_write_is_dedup_no_overwrite(self) -> None:
+        signal = self._signal()
+        path1, created1 = write_signal_evidence(
+            self.root, "2026-11-03", signal, "output/daily-watch/2026-11/2026-11-03.md")
+        path2, created2 = write_signal_evidence(
+            self.root, "2026-11-03", signal, "output/daily-watch/2026-11/2026-11-03.md")
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(path1, path2)
+
+    def test_report_call_order_macro_before_persist_hook(self) -> None:
+        # 4c 调用序：fetch_macro_data 在 persist hook 之前（宏观降级清单才能进 data-close）
+        source = (REPO_ROOT / "tools/daily-watch/scripts/generate_daily_report.py"
+                  ).read_text(encoding="utf-8")
+        macro_call = source.index('run_json_script(workspace_root, "fetch_macro_data.py")')
+        hook_call = source.index("_persist_market_data_hook(\n        market_data,")
+        market_call = source.index('run_json_script(workspace_root, "fetch_market_data.py")')
+        self.assertLess(market_call, macro_call)
+        self.assertLess(macro_call, hook_call)
+
+
+class FallbackDegradationMetaTests(unittest.TestCase):
+    """4b meta.quotes.degradations：降级链每环结构化收集 {ticker, source_tried, reason, fallback}。"""
+
+    def test_chain_collects_failed_steps_with_fallback_attribution(self) -> None:
+        import fetch_market_data as fmd
+
+        degs: list[dict] = []
+        quote = {"symbol": "^TNX", "price": 4.3, "source": "fred"}
+        with patch.object(fmd, "fetch_nasdaq_quote", return_value=None), \
+             patch.object(fmd, "fetch_nasdaq_index_quote", return_value=None), \
+             patch.object(fmd, "fetch_fred_series_quote", return_value=quote), \
+             patch.object(fmd, "fetch_eastmoney_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_eastmoney_quote", return_value=None), \
+             patch.object(fmd, "fetch_tencent_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_quote", return_value=None):
+            result = fmd.fetch_fallback_quote(
+                {"ticker": "^TNX", "market": "INDEX"}, {"DISABLE_MOOTDX": "1"}, degs)
+        self.assertEqual(result, quote)
+        self.assertEqual(
+            [(d["ticker"], d["source_tried"], d["reason"], d["fallback"]) for d in degs],
+            [("^TNX", "nasdaq", "returned no data", "nasdaq-index"),
+             ("^TNX", "nasdaq-index", "returned no data", "fred")])
+
+    def test_inner_exception_reason_is_captured(self) -> None:
+        # fetcher 内部吞掉的异常原因（_note_fetch_failure）优先于笼统 "returned no data"
+        import fetch_market_data as fmd
+
+        def failing_nasdaq(ticker: str, market: str):
+            fmd._note_fetch_failure(ticker, "nasdaq", "connection timed out")
+            return None
+
+        degs: list[dict] = []
+        with patch.object(fmd, "fetch_nasdaq_quote", side_effect=failing_nasdaq), \
+             patch.object(fmd, "fetch_nasdaq_index_quote", return_value=None), \
+             patch.object(fmd, "fetch_fred_series_quote",
+                          return_value={"symbol": "^TNX", "price": 4.3, "source": "fred"}), \
+             patch.object(fmd, "fetch_eastmoney_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_eastmoney_quote", return_value=None), \
+             patch.object(fmd, "fetch_tencent_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_quote", return_value=None):
+            fmd.fetch_fallback_quote({"ticker": "^TNX", "market": "INDEX"},
+                                     {"DISABLE_MOOTDX": "1"}, degs)
+        self.assertEqual(degs[0]["reason"], "connection timed out")
+
+    def test_gated_sources_do_not_count_as_tried(self) -> None:
+        # finnhub/eod/yfinance 未配 key/flag → 不在链上，不产生降级条目
+        import fetch_market_data as fmd
+
+        degs: list[dict] = []
+        with patch.object(fmd, "fetch_nasdaq_quote", return_value=None), \
+             patch.object(fmd, "fetch_nasdaq_index_quote", return_value=None), \
+             patch.object(fmd, "fetch_fred_series_quote", return_value=None), \
+             patch.object(fmd, "fetch_eastmoney_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_eastmoney_quote", return_value=None), \
+             patch.object(fmd, "fetch_tencent_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_quote", return_value=None):
+            result = fmd.fetch_fallback_quote({"ticker": "ZZZZ", "market": "US"},
+                                              {"DISABLE_MOOTDX": "1"}, degs)
+        self.assertIsNone(result)
+        tried = {d["source_tried"] for d in degs}
+        self.assertNotIn("finnhub", tried)
+        self.assertNotIn("yfinance", tried)
+        self.assertEqual(degs[-1]["fallback"], "none")  # 末环 exhausted
+        for d in degs[:-1]:
+            self.assertNotEqual(d["fallback"], "none")
 
 
 if __name__ == "__main__":

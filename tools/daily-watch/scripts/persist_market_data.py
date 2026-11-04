@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 from datetime import date, datetime, time as dt_time
@@ -117,11 +118,13 @@ def quote_to_series_row(quote: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path,
-                                now_et: datetime | None = None) -> int:
+                                now_et: datetime | None = None,
+                                written: list[tuple[Path, str, str]] | None = None) -> int:
     """watchlist 全部票快照级 upsert（幂等可重入）；返回写入行数。
 
     now_et 可注入（测试用）；实时报价源行过「session 已收盘」闸门（_us_session_closed），
-    盘前/盘中报价只进快照不进 series。
+    盘前/盘中报价只进快照不进 series。written 传入时收集本轮实际写入的
+    (series 路径, 行日期, source) 三元组（运行账本 data-close 用）。
     """
     clock = now_et or datetime.now(_ET)
     total = 0
@@ -141,17 +144,125 @@ def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path,
             if not acquired:
                 continue
             total += upsert_series_rows(path, [row], writer="snapshot")
+            if written is not None:
+                written.append((path, row["date"], row["source"] or "snapshot"))
     return total
 
 
-def run_persist_hook(market_data: dict[str, Any], data_root: Path | None = None) -> None:
-    """generate_daily_report 调用入口；持久化失败永不阻塞日报（spec §3）。"""
+# ---------------------------------------------------------------------------
+# 运行账本接线（spec §3.3 拍板 #3：persist 挂钩导入式自动记账）
+# ---------------------------------------------------------------------------
+
+def _load_run_archive():
+    """跨目录导入 system/scripts/run_archive.py（sys.path 注入与 tests/_test_paths 同法）。"""
+    repo_root = Path(__file__).resolve().parents[3]
+    script_dir = str(repo_root / "system" / "scripts")
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    import run_archive  # noqa: PLC0415 — 延迟导入：账本模块缺失不应影响持久化本身
+    return run_archive
+
+
+def _ledger_failed(data_root: Path, step: str, exc: Exception) -> None:
+    """账本子步骤失败：stderr + sentinel（时间+异常），不抛（spec §3.2「账本写不吞」的可感知降级）。"""
+    log(f"Warning: 运行账本 {step} 失败（写 sentinel，日报继续）: {exc}")
+    try:
+        sentinel = sentinel_of(data_root)
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        with sentinel.open("a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')} {step} "
+                     f"{type(exc).__name__}: {exc}\n")
+    except Exception as nested:  # noqa: BLE001 — sentinel 本身也写不进时只剩 stderr
+        log(f"Warning: run-log.error sentinel 写入失败: {nested}")
+
+
+def sentinel_of(data_root: Path) -> Path:
+    """sentinel 路径（data/.state/run-log.error）——run_archive 未导入也能算（独立实现避免循环依赖）。"""
+    return Path(data_root) / ".state" / "run-log.error"
+
+
+def _degradations_from_meta(market_data: dict[str, Any]) -> list[Any]:
+    """meta.quotes.degradations 透传（spec §3.3 拍板 #2 ③）：形状不做假设，非法类型丢弃。"""
+    meta = market_data.get("meta") or {}
+    items = ((meta.get("quotes") or {}).get("degradations")) or []
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _macro_missing(macro_meta: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """宏观 meta 的 missing_symbols → data-close missing 条目（4c 宏观前移后可进 hook）。"""
+    if not macro_meta:
+        return []
+    symbols = macro_meta.get("missing_symbols")
+    if not isinstance(symbols, list):
+        return []
+    reason = macro_meta.get("reason") or "macro symbol missing"
+    return [{"item": str(sym), "reason": str(reason)} for sym in symbols]
+
+
+def _run_log_enabled(run_log: bool) -> bool:
+    """逃生门双通道：函数参数 run_log=False 或 env RUN_LOG_DISABLE=1（spec §3.3）。"""
+    if not run_log:
+        return False
+    return os.environ.get("RUN_LOG_DISABLE", "").strip() != "1"
+
+
+def _ledger_target_spec(data_root: Path, path: Path, anchor_date: str) -> str:
+    """series 目标 → 账本 `path#date` 串；路径取 data_root 父目录（仓库根）相对，出界用绝对路径。"""
+    try:
+        rel = path.resolve().relative_to(Path(data_root).resolve().parent)
+        spec = str(Path(*rel.parts))
+    except ValueError:
+        spec = str(path.resolve())
+    return f"{spec}#{anchor_date}"
+
+
+def run_persist_hook(market_data: dict[str, Any], data_root: Path | None = None,
+                     run_log: bool = True,
+                     macro_meta: dict[str, Any] | None = None) -> None:
+    """generate_daily_report 调用入口；持久化失败永不阻塞日报（spec §3）。
+
+    run_log=True 时写运行账本：进入即 open（kind=watch，started_at=persist 被调时刻），
+    snapshot+series 落盘成功后 data-close（series 行锚定三元组 / sources 从行内 source
+    汇总 / missing 从 meta 降级清单+宏观 missing_symbols 透传）。账本子步骤单独捕获，
+    失败只写 sentinel 不抛；macro_meta 为 4c 宏观前移后传入的 fetch_macro_data meta。
+    """
     try:
         root = data_root or resolve_data_root()
-        save_daily_snapshot(market_data, root)
-        append_series_from_snapshot(market_data, root)
     except Exception as exc:  # noqa: BLE001 — 设计要求吞掉一切
         log(f"Warning: 持久化钩子失败（不阻塞日报）: {exc}")
+        return
+
+    run_id: str | None = None
+    if _run_log_enabled(run_log):
+        try:
+            archive = _load_run_archive()
+            trade_date = _fetched_day(market_data) or datetime.now().strftime("%Y-%m-%d")
+            run_id = archive.append_open(root, kind="watch", trade_date=trade_date)
+        except Exception as exc:  # noqa: BLE001 — 账本失败不吞：stderr+sentinel
+            _ledger_failed(root, "open", exc)
+
+    written: list[tuple[Path, str, str]] = []
+    try:
+        save_daily_snapshot(market_data, root)
+        append_series_from_snapshot(market_data, root, written=written)
+    except Exception as exc:  # noqa: BLE001 — 设计要求吞掉一切
+        log(f"Warning: 持久化钩子失败（不阻塞日报）: {exc}")
+        return  # 落盘失败不写 data-close：open 留给 verify 的孤儿判定（spec §3.2 I3）
+
+    if run_id:
+        try:
+            archive = _load_run_archive()
+            targets: dict[Path, str] = {}
+            for path, row_date, _source in written:
+                targets[path] = max(targets.get(path, row_date), row_date)
+            archive.append_data_close(
+                root, run_id,
+                [_ledger_target_spec(root, path, anchor) for path, anchor in targets.items()],
+                sorted({source for _p, _d, source in written}),
+                _degradations_from_meta(market_data) + _macro_missing(macro_meta),
+            )
+        except Exception as exc:  # noqa: BLE001 — 账本失败不吞：stderr+sentinel
+            _ledger_failed(root, "data-close", exc)
 
 
 def main(argv: list[str] | None = None) -> int:

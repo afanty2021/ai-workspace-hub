@@ -6,14 +6,16 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import dotenv_values
 
+from market_data_io import parse_trade_date
 from workspace_paths import (
     find_workspace_root,
     resolve_config_dir,
@@ -85,12 +87,17 @@ def run_json_script(workspace_root: Path, script_name: str) -> dict[str, Any]:
         raise RuntimeError(f"{script_name} did not produce valid JSON: {exc}") from exc
 
 
-def _persist_market_data_hook(market_data: dict[str, Any]) -> None:
-    """持久化钩子（spec §3：失败永不阻塞日报，只 log warning）。"""
+def _persist_market_data_hook(market_data: dict[str, Any],
+                              macro_meta: dict[str, Any] | None = None) -> None:
+    """持久化钩子（spec §3：失败永不阻塞日报，只 log warning）。
+
+    macro_meta = fetch_macro_data 的 meta（4c 宏观调用序前移后传入，其
+    missing_symbols 能进运行账本 data-close 的 missing；None/未启用宏观察时省略）。
+    """
     try:
         import persist_market_data
 
-        persist_market_data.run_persist_hook(market_data)
+        persist_market_data.run_persist_hook(market_data, macro_meta=macro_meta)
     except Exception as exc:  # noqa: BLE001
         log(f"Warning: persist hook failed (report continues): {exc}")
 
@@ -483,6 +490,10 @@ def collect_hypothesis_signals(
                     "hypothesis_title": hypothesis["title"],
                     "signal_type": "mover",
                     "ref": ticker,
+                    # 三时点接线（spec §2.1/C6）：业务时点取 quote 的 tradeDate，
+                    # 市场口径决定 available_at 的收盘换算规则
+                    "observed_trade_date": mover.get("tradeDate"),
+                    "market": mover.get("market", ""),
                     "display": (
                         f"- {hypothesis['id']} `{hypothesis['title']}` "
                         f"<- {ticker} {change}，建议补充今日异动原因和证据判断。"
@@ -514,6 +525,9 @@ def collect_hypothesis_signals(
                     "hypothesis_title": hypothesis["title"],
                     "signal_type": "earnings",
                     "ref": ticker,
+                    # 财报业务时点 = 披露日（FMP earning_calendar 的 date 字段）
+                    "observed_trade_date": earning.get("date"),
+                    "market": earning.get("market", ""),
                     "display": (
                         f"- {hypothesis['id']} `{hypothesis['title']}` "
                         f"<- {ticker} 财报事件，建议核对财报是否强化或削弱原假设。"
@@ -672,6 +686,29 @@ def build_evidence_id(date_text: str, signal: dict[str, Any]) -> str:
     return f"E-{date_text.replace('-', '')}-{signal_type}-{ref}-{hypothesis_id}"
 
 
+_BEIJING = ZoneInfo("Asia/Shanghai")
+_US_EAST = ZoneInfo("America/New_York")
+
+
+def _available_at_for(observed_day: str, market: str) -> tuple[str, str | None]:
+    """按 object-model 三时点规范生成 available_at（收盘即可得）。
+
+    A 股（CN）：当地日历日 15:00+08:00 收盘；美股个股与美股指数（US/INDEX）：
+    美东 16:00 收盘按当期实际偏移（ZoneInfo 处理 EST/EDT）换算成 +08:00。
+    其余市场（KR/FX/CMDTY/未知）判定不了收盘口径：A 股口径保守填写并返回注记。
+    返回 (available_at, 注记或 None)。
+    """
+    market_upper = (market or "").strip().upper()
+    if market_upper in ("US", "INDEX"):
+        close_et = datetime.fromisoformat(f"{observed_day}T16:00:00").replace(tzinfo=_US_EAST)
+        return close_et.astimezone(_BEIJING).isoformat(timespec="seconds"), None
+    note = None
+    if market_upper != "CN":
+        note = (f"市场 {market_upper or '未知'} 无法判定收盘口径，"
+                "available_at 按 A 股 15:00+08:00 保守填写")
+    return f"{observed_day}T15:00:00+08:00", note
+
+
 def write_signal_evidence(
     workspace_root: Path,
     date_text: str,
@@ -688,11 +725,27 @@ def write_signal_evidence(
     signal_type = str(signal["signal_type"])
     ref = str(signal["ref"]).upper()
     metric = "price_change" if signal_type == "mover" else "earnings"
+
+    # 三时点（spec §2.1/C6）：observed_at = 业务时点（quote tradeDate / 财报披露日），
+    # 取不到回退报告日并正文注记；available_at = 收盘即可得（市场口径见 _available_at_for）；
+    # recorded_at = 证据写入时刻（带时区）。
+    notes: list[str] = []
+    observed_day = parse_trade_date(signal.get("observed_trade_date"))
+    if observed_day is None:
+        observed_day = date_text
+        notes.append(f"observed_at 未能从信号数据取得业务时点（tradeDate/date 缺失或不可解析："
+                     f"{signal.get('observed_trade_date')!r}），回退报告日 {date_text}")
+    available_at, available_note = _available_at_for(observed_day, str(signal.get("market") or ""))
+    if available_note:
+        notes.append(available_note)
+    recorded_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
     frontmatter = {
         "id": evidence_id,
         "type": "evidence",
-        "observed_at": date_text,
-        "recorded_at": date_text,
+        "observed_at": observed_day,
+        "available_at": available_at,
+        "recorded_at": recorded_at,
         "source_type": "daily-watch",
         "source_path": report_relpath,
         "source_url": None,
@@ -707,10 +760,13 @@ def write_signal_evidence(
     yaml_text = yaml.safe_dump(
         frontmatter, allow_unicode=True, sort_keys=False, default_flow_style=False
     ).rstrip()
+    timing_note = ("\n## 时点注记\n\n" + "\n\n".join(f"- {n}" for n in notes) + "\n"
+                   if notes else "")
     content = (
         f"---\n{yaml_text}\n---\n\n"
         f"# {evidence_id}\n\n"
         f"## 观察\n\n{signal['summary']}\n\n"
+        f"{timing_note}"
         "## 与假设的关系\n\n"
         f"关联 `{signal['hypothesis_id']}`。这是自动采集的信号，方向和权重待复盘确认。\n\n"
         "## 来源\n\n"
@@ -940,11 +996,16 @@ def main() -> int:
     template_text = load_template(resolve_template_path(workspace_root))
 
     market_data = run_json_script(workspace_root, "fetch_market_data.py")
-    _persist_market_data_hook(market_data)
+    # 宏观调用序前移到 persist hook 之前（spec §3.3 拍板 #2 ②）：宏观降级清单
+    # （meta.missing_symbols）才能进 data-close 的 missing；macro_data 消费位置不变。
     macro_data = (
         run_json_script(workspace_root, "fetch_macro_data.py")
         if modules["macro"]
         else {}
+    )
+    _persist_market_data_hook(
+        market_data,
+        macro_meta=(macro_data.get("meta") or None) if modules["macro"] else None,
     )
     movers = market_data.get("movers") or []
     earnings = market_data.get("earnings") or []
