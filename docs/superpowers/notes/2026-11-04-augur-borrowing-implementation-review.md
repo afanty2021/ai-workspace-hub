@@ -71,3 +71,49 @@
 - **dayu pe=0 占位加分**（adapter #3 的本体侧）：vendored 声明式补丁（两处仅 `pe < 0`），锁测试对上游源应用同一字符串替换后对拍，其余 17 persona 保持逐字节。
 - **技术面补算**：adapter 从 series 日线补算 RSI/MACD 族/ATR/最大回撤/20 日波动率（公式注释 + 手工序列验值测试）；beta_1y 无基准指数序列、stoch 族/空头利息/股息率无源，保持 missing 并在报告声明。
 - **roe YTD 注记**：单票报告与汇总表在 roe 数值出现处标注口径与实际报告期（如「截至 2026 年三季报」），数值不动不年化。
+
+---
+
+# 复查评审（修复波 ea2ae2f..7fa7bfc，2026-11-04）
+
+> 规格：3 评审位（账本对靶 / masters+管线对靶 / 实测+变异验证）+ 协调者亲核。
+> **总裁决：修复波全部对靶闭环、无 Critical 回归，变异三发三红；遗留 3 新 Important（小改）建议合并前顺手修。**
+
+## 对靶结果（原始发现 → 验证方式 → 结论）
+
+| 原发现 | 验证 | 结论 |
+|---|---|---|
+| C1 锚点收缩 | monkeypatch 回旧覆盖式逻辑复现攻击（篡改后 clean）→ 新逻辑同场景抓获；合法锚扩展 clean、扩展后篡改被抓 | ✅ |
+| 宏观连坐 | macro 失败 hook 照常执行 + 三层非静默可见 + 端到端测试 | ✅ |
+| eps=0 缺数加分 | 四字段标 missing + deps 补 9 槽 + coverage×0.6 断言；eps<0 不误伤（缺回归测试，Minor） | ✅ |
+| 账本污染 | --missing 两步行收口，实跑 verify exit 0；冒烟隔离三态测试 | ✅ |
+| 并发无锁 | flock 后 10 进程×3 轮链 20/20 完整（但 run_id 分配在锁外 → 新 Important #2） | ✅ |
+| masters 路由+七/八槽 | 六处（AGENTS/CLAUDE/两模板/config 实例+模板）全命中；design+plan 回写 | ✅ |
+| 605016/对拍锁/dayu/roe 注记/技术面/快照哈希 | 605016 一行改对其余无误伤；锁断言 fail 非 skip；dayu 声明式补丁上游+同串替换逐字节对拍；技术面 Wilder 公式逐段复核 | ✅ |
+
+## 实测与变异
+
+- 463 passed + 16 subtests（2.49s）+ ruff 过；evidence_lint 全绿；verify「✓ 全部干净」。
+- 变异验证：锚逻辑回退→回归测试红；删 eps=0 标 missing→测试红；dayu 补丁还原→4 测试红。
+- 真实 --watchlist 产物：17+1 份报告，账本 5 条 close 的 sha256 与磁盘 shasum 逐一对上；gitignore 隔离正确。
+- 六项延后项处置表与代码交叉无虚记；AGENTS/CLAUDE 逐行对称；入库 +62+11=73 行口径一致无截断。
+
+## 新发现 Important（3 条，协调者亲核坐实）
+
+1. **`--missing` 不查文件存在性**（run_archive.py:472-479）：对仍存在的产物标 missing 即静默摘除保护，之后篡改不可见。修法：missing 分支加 `exists()` 校验，存在即拒绝并提示走普通 amend。
+2. **`_allocate_run_id` 在 flock 外**（run_archive.py:204-218）：10 进程同分钟并发实测 10/10 run_id 重复。修法：分配挪进 `_append` 锁内。
+3. **object-model.md:73「账本追加无互斥锁」与 flock 脱节**：改为「flock 排它锁，Windows/不支持时降级无锁」。
+
+## Minor（可延）
+
+verify 读无共享锁（瞬态半行误报，fail-loud）；负 eps 回归测试缺；对拍锁 skipif 盲区（augur 仓不存在静默丢覆盖）+ 不查上游工作树脏改；eps=0「降权不除分」vs dayu「本体除分」语义差异未显式声明；分歧 3 条候选（600079/600096/002545）待用户确认入 review-queue（边界纪律未自动写，如实）。
+
+## 处置记录（3 Important，2026-11-04 已修）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| I-1 | `--missing` 不查文件存在性 | 已修：missing 分支加 `exists()` 校验，产物仍存在即 ValueError 提示走普通 amend；测试断言拒绝后权威保护仍在（篡改仍被抓） |
+| I-2 | `_allocate_run_id` 在 flock 外 | 已修：新增 `_append_prepared`（prepare(rows) 锁内构造行），`append_open` 的 run_id 判重分配挪进锁内；16 线程同 `now` 并发 open 测试 16/16 唯一 |
+| I-3 | object-model「无互斥锁」声明过时 | 已修：改为 flock 现状（含 run_id 分配入锁、降级口径） |
+
+修后 465 passed + 16 subtests、ruff 过、真实账本 verify exit 0。Minor 段维持可延（verify 读共享锁 / 负 eps 回归测试 / 对拍锁 skipif 盲区 / 语义差异声明 / 分歧候选入队等用户确认）。

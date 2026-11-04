@@ -173,6 +173,16 @@ def _append(data_root, row: dict, guard=None) -> None:
     先读后写的 check-then-append 存在 TOCTOU 窗口（如 amend 锚 vs 权威锚检查），
     guard 让关键校验在拿到锁后对最新状态再跑一遍。
     """
+    _append_prepared(data_root, lambda rows: (guard(rows) if guard is not None else None, row)[1])
+
+
+def _append_prepared(data_root, prepare) -> None:
+    """锁内按最新账本行构造并追加一行：prepare(rows) -> row（在 flock 锁内调用）。
+
+    需要基于账本最新状态决定行内容的调用方（如 run_id 判重分配）用这个入口，
+    把「读最新行→算内容→写」整段收进锁内，消除 check-then-append 竞态。
+    锁与降级口径同 _append。
+    """
     ledger = ledger_path(data_root)
     ledger.parent.mkdir(parents=True, exist_ok=True)
     with ledger.open("a+", encoding="utf-8") as fh:
@@ -183,8 +193,7 @@ def _append(data_root, row: dict, guard=None) -> None:
                 pass
         fh.seek(0)
         rows, raws = _parse_ledger_text(fh.read())
-        if guard is not None:
-            guard(rows)
+        row = prepare(rows)
         row["prev_sha256"] = hashlib.sha256(raws[-1].encode("utf-8")).hexdigest() if raws else None
         fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
@@ -201,10 +210,13 @@ def _git_head(root: Path) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def _allocate_run_id(data_root, kind: str, now: datetime) -> str:
-    """RUN-YYYYMMDD-HHMM-<kind>；同 run_id 已存在且未终结（无 close/abort）时追加 -r2/-r3。"""
+def _allocate_run_id(rows: list[dict], kind: str, now: datetime) -> str:
+    """RUN-YYYYMMDD-HHMM-<kind>；同 run_id 已存在且未终结（无 close/abort）时追加 -r2/-r3。
+
+    入参改为已读行：分配必须在 _append 的 flock 锁内对最新账本行做（锁外读再判重，
+    同分钟并发 open 会 10/10 撞号——复查评审 Important #2）。
+    """
     base = f"RUN-{now:%Y%m%d-%H%M}-{kind}"
-    rows, _ = _read_rows_strict(ledger_path(data_root))
     terminated = {
         row["run_id"] for row in rows
         if row.get("type") in TERMINAL_TYPES and row.get("run_id")
@@ -334,16 +346,23 @@ def append_open(data_root, kind: str, trade_date: str, now: datetime | None = No
     except ValueError as exc:
         raise ValueError(f"trade_date 非法：{trade_date!r}（YYYY-MM-DD）") from exc
     started = now or _now()
-    run_id = _allocate_run_id(data_root, kind, started)
-    _append(data_root, {
-        "type": "open",
-        "run_id": run_id,
-        "kind": kind,
-        "trade_date": str(trade_date),
-        "started_at": _iso(started),
-        "git_head": _git_head(_repo_root(data_root)),
-    })
-    return run_id
+    result: dict[str, str] = {}
+
+    def _open_row(rows: list[dict]) -> dict:
+        # run_id 判重在锁内对最新账本行做（锁外读会撞号，复查评审 Important #2）
+        run_id = _allocate_run_id(rows, kind, started)
+        result["run_id"] = run_id
+        return {
+            "type": "open",
+            "run_id": run_id,
+            "kind": kind,
+            "trade_date": str(trade_date),
+            "started_at": _iso(started),
+            "git_head": _git_head(_repo_root(data_root)),
+        }
+
+    _append_prepared(data_root, _open_row)
+    return result["run_id"]
 
 
 def row_anchor_hash(path, anchor_date: str) -> str:
@@ -474,6 +493,13 @@ def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=
         if missing:
             if not reason:
                 raise ValueError("amend-done --missing 必须带 reason（产物为何消亡）")
+            resolved_missing = _resolve_target(data_root, target)
+            if resolved_missing.exists():
+                # 产物还在就不能摘除其保护（复查评审 Important #1）：--missing 只用于
+                # 产物已消亡的收口，仍存在时必须走普通 amend 记新哈希
+                raise ValueError(
+                    f"目标仍存在：{resolved_missing}——--missing 仅用于产物已消亡的收口，"
+                    f"产物存在请走普通 amend 记新哈希")
             entry["missing"] = True
             entry["reason"] = reason
             _append(data_root, entry)

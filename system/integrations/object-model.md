@@ -70,7 +70,7 @@ dedup_key: DW-2026-07-11-mover-ifx-de-H1
 
 `data/.state/run-log.jsonl`：追加式 JSONL，实例数据随 `.state/` gitignore。定位是**存在证明 + 修订痕迹**——不复制快照，对产物记哈希，改可以改但必须先记账。**不轮转不分区**（估算 <2MB/年）。写入分两级：数据侧 `open` / `data-close` 由持久化钩子自动写，报告侧 `close` / `amend` 走 `system/scripts/run_archive.py` 一步命令。
 
-**单写者假设**：账本追加无互斥锁；当前调用面（日报 persist 钩子、masters CLI）串行使用，并发双写会断链并由 verify 检出。
+**互斥**：账本追加在 `run-log.jsonl` 文件级 `fcntl.flock` 排它锁内完成（读最新行→算行内容→写回整段收进锁内，含 run_id 判重分配）；Windows/文件系统不支持 flock 时降级无锁（单写者假设兜底，verify 可检出断链）。
 
 | type | 写入者 | 语义 |
 |---|---|---|

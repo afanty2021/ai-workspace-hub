@@ -629,6 +629,36 @@ def test_amend_done_missing_requires_reason(data_root: Path) -> None:
         RA.append_amend(data_root, run_id, "output/r.md", done=True, missing=True)
 
 
+def test_amend_done_missing_rejects_existing_target(data_root: Path, tmp_path: Path) -> None:
+    """复查评审 I#1：产物仍存在时 --missing 拒绝——否则静默摘除保护、之后篡改不可见。"""
+    write_report(tmp_path)  # output/r.md 存在
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    RA.append_close(data_root, run_id, "output/r.md", [])
+    with pytest.raises(ValueError, match="仍存在"):
+        RA.append_amend(data_root, run_id, "output/r.md", done=True, missing=True,
+                        reason="想绕过哈希")
+    # 账本未写入 missing-done 行，权威保护仍在：篡改后 verify 报未申报
+    rows = [json.loads(line) for line in ledger_lines(data_root)]
+    assert not any(r["type"] == "amend-done" and r.get("missing") for r in rows)
+    write_report(tmp_path, text="# r\n改过的报告\n")
+    flagged = [u for u in RA.verify_ledger(data_root, now=LATER)["undeclared"]
+               if u.get("target") == "output/r.md"]
+    assert len(flagged) == 1  # 保护没有被摘掉
+
+
+def test_concurrent_open_allocates_unique_run_ids(data_root: Path) -> None:
+    """复查评审 I#2：run_id 判重分配在 flock 锁内——同分钟并发 open 不撞号。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _open_one(_: int) -> str:
+        return RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        run_ids = list(pool.map(_open_one, range(16)))
+    assert len(set(run_ids)) == 16  # 16/16 唯一（锁外判重时同 now 会大量撞号）
+    assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+
 def test_amend_missing_cli_roundtrip(data_root: Path, tmp_path: Path, capsys) -> None:
     """CLI：amend --done --missing 全链 exit 0，verify 回干净。"""
     write_report(tmp_path)
