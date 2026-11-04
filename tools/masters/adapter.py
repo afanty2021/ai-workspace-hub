@@ -45,6 +45,12 @@ ADAPTER_MISSING_FIELDS = (
     "atr", "stoch_k", "stoch_d", "dividend_yield", "payout_ratio",
 )
 
+# 固定汇率近似（USD/CNY）：MarketContext 的市值类字段（market_cap/ebitda/total_cash/
+# total_debt）口径是 **USD 十亿**，persona 阈值（lynch 小盘<10/大盘>100 等）按此调校——
+# 填人民币亿元会系统性错位规模档判定。适配层统一换算成 USD 十亿；报告侧换回人民币展示。
+# fcf 同口径（它进 fcf_yield 分母），本层数据面 fcf 缺省 0，恒等式下无需处理。
+USD_CNY = 7.2
+
 _ETF_PREFIXES = ("51", "56", "58")     # 沪市 ETF 代码段（513880/512000 等）
 _ETF_PREFIXES_SZ = ("15", "16", "18")  # 深市 ETF 代码段（watchlist 暂无，防御性收录）
 _A_SHARE_BOARD_FIRST = {"0": "SZ", "3": "SZ", "6": "SH"}  # 主板/创业板/科创板；北交所(4/8/9)未接入
@@ -241,8 +247,10 @@ def load_series(data_root: Path, code: str, suffix: str) -> list[dict]:
 def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool = True) -> MarketContext:
     """组装单票 MarketContext（spec §5.3 字段映射表）。
 
-    单位约定：market_cap 用**亿元人民币**（price × shares / 1e8）；roe / 增长字段
-    一律 0-1 小数（gpcw 的 % 值 /100）；profit_margins = 归母净利(TTM)/营收(TTM)。
+    单位约定：market_cap 用 **USD 十亿**（人民币市值 ÷ USD_CNY 固定汇率换算，与
+    persona 阈值口径对齐；报告侧换回人民币亿元展示）；roe / 增长字段一律 0-1 小数
+    （gpcw 的 % 值 /100）；profit_margins = 归母净利(TTM)/营收(TTM)；price/pe/pb/ps
+    等比率类与无单位字段不做汇率换算（分子分母同币种，汇率约掉）。
 
     shares 推导链（禁用净资产/bps 法，spec 拍板 #4）：
       shares = 归母净利(TTM) / eps_basic(TTM)
@@ -273,11 +281,12 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
     # shares / 估值推导链（见 docstring）
     eps_ttm = ttm["eps"]
     shares = ttm["net_profit_parent"] / eps_ttm if eps_ttm not in (0, None) else 0.0
-    market_cap_yi = price * shares / 1e8  # 亿元
+    market_cap_cny = price * shares                 # 元
+    market_cap_usd_bn = market_cap_cny / USD_CNY / 1e9  # USD 十亿（persona 阈值口径）
     pe = price / eps_ttm if eps_ttm else 0.0
     bps = float(latest.get("bps") or 0)
     pb = price / bps if bps else 0.0
-    ps = market_cap_yi / (ttm["revenue"] / 1e8) if ttm["revenue"] else 0.0
+    ps = market_cap_cny / ttm["revenue"] if ttm["revenue"] else 0.0  # 同币种比率，汇率约掉
     profit_margins = ttm["net_profit_parent"] / ttm["revenue"] if ttm["revenue"] else 0.0
     total_assets = float(latest.get("total_assets") or 0)
     debt_ratio = float(latest.get("total_liabilities") or 0) / total_assets if total_assets else 0.0
@@ -297,7 +306,7 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
         ticker=norm,
         price=price,
         change_pct=change_pct,
-        market_cap=market_cap_yi,
+        market_cap=market_cap_usd_bn,
         pe=pe,
         pb=pb,
         ps=ps,
@@ -327,6 +336,7 @@ def build_context(code: str, data_root: Path | str | None = None, *, fetch: bool
         "gpcw_report_date": ttm["latest_report_date"],
         "series_last_date": str(last["date"]),
         "shares": shares,
+        "market_cap_cny_yi": market_cap_cny / 1e8,  # 人民币亿元（报告展示口径）
         "industry": industry,
         "suffix": suffix,
     }

@@ -151,7 +151,8 @@ def render_report(ticker_label: str, context, results, consensus, industry, abst
         f"- 行情截至：{meta.get('series_last_date', 'N/A')}（series 末日收盘 {context.price}）",
         f"- shares = 归母净利(TTM)/eps(TTM) = {meta.get('shares', 0) / 1e8:.2f} 亿股"
         "（禁用 bps 法：净资产含少数股东权益）",
-        f"- 市值 {context.market_cap:.0f} 亿元（人民币）",
+        f"- 市值 {meta.get('market_cap_cny_yi', 0):.0f} 亿元（人民币；persona 口径按固定汇率"
+        f" USD/CNY={adapter.USD_CNY} 换算为 {context.market_cap:.1f}B USD 参与规模档判定）",
         "",
         "## missing 清单（半盲声明）",
         "",

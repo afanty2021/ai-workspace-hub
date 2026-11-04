@@ -151,7 +151,15 @@ def test_build_context_shares_pe_consistency(tmp_data_root):
     assert shares == pytest.approx(15e8 / 1.5)  # 手工：净利 15 亿 / eps 1.5
     assert ctx.eps == pytest.approx(1.5)
     assert ctx.pe * ctx.eps == pytest.approx(ctx.price, rel=1e-6)
-    assert ctx.market_cap * 1e8 == pytest.approx(ctx.price * shares, rel=1e-6)
+    # 市值口径（USD 十亿，persona 阈值按此调校）：人民币市值/固定汇率/1e9
+    assert ctx.market_cap == pytest.approx(ctx.price * shares / adapter.USD_CNY / 1e9)
+    # lynch 规模档判定等效断言：手工 USD 市值一致（<10B=小盘加分档）
+    manual_usd_bn = ctx.price * shares / 7.2 / 1e9
+    assert ctx.market_cap == pytest.approx(manual_usd_bn)
+    assert ctx.market_cap < 10  # 204.5 亿 CNY ≈ 2.84B USD → lynch 小盘档
+    # 报告展示口径保留人民币亿元
+    assert ctx.mcp_metrics["masters_adapter"]["market_cap_cny_yi"] == pytest.approx(
+        ctx.price * shares / 1e8)
     assert ctx.debt_ratio == pytest.approx(33.0 / 71.3)
     assert ctx.roe == pytest.approx(0.0883)          # gpcw % 值 → 小数
     assert ctx.revenue_growth == pytest.approx(0.3077)
