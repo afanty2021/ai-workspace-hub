@@ -17,7 +17,7 @@
     "300124.SZ": {"industry_key": "industrials", "sector_en": "Industrials", "industry_cn": "电力设备-工控"},
     "300274.SZ": {"industry_key": "industrials", "sector_en": "Industrials", "industry_cn": "电力设备-光伏储能"},
     "300476.SZ": {"industry_key": "technology", "sector_en": "Technology", "industry_cn": "电子-PCB"},
-    "605016.SH": {"industry_key": "consumer", "sector_en": "Consumer", "industry_cn": "食品饮料-食品配料"}
+    "605016.SH": {"industry_key": "materials", "sector_en": "Materials", "industry_cn": "基础化工-食品配料"}
   },
   "sw_industries": {
     "医药生物": {"industry_key": "healthcare", "sector_en": "Healthcare"},
