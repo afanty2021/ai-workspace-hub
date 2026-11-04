@@ -241,6 +241,60 @@ def test_evidence_status_migration_exempt_body_change_flagged(
     assert passthrough["evidence_registered"][0]["sha256"] == "deadbeef"
 
 
+def test_evidence_amend_done_updates_evidence_auth(data_root: Path, tmp_path: Path) -> None:
+    """evidence 两步修订端到端：close 注册 → amend intent → 改正文 → amend --done → verify
+    干净（evidence_auth 被同步更新，post_sha256 为归一化口径）；对照面：不走 amend 改正文仍被抓。"""
+    evidence = tmp_path / "evidence" / "2026-11" / "E-20261103-mover-300476-sz-h1.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        "---\n"
+        "id: E-20261103-mover-300476-sz-h1\n"
+        "review_status: pending\n"
+        "direction: pending\n"
+        "confidence: pending\n"
+        "---\n\n# 证据\n\n## 观察\n\n收盘 -9.12%。\n",
+        encoding="utf-8")
+    write_report(tmp_path)
+
+    run_id = RA.append_open(data_root, "watch", "2026-11-03", now=NOW)
+    assert RA.main(["--data-root", str(data_root), "close", "--run-id", run_id,
+                    "--report", "output/r.md",
+                    "--evidence", "E-20261103-mover-300476-sz-h1"]) == 0
+
+    # 第一步：amend intent（target = evidence 文件，仓库根相对路径）
+    ev_target = "evidence/2026-11/E-20261103-mover-300476-sz-h1.md"
+    assert RA.main(["--data-root", str(data_root), "amend", "--run-id", run_id,
+                    "--target", ev_target, "--reason", "观察段数值勘误"]) == 0
+    mid = RA.verify_ledger(data_root, now=LATER)
+    assert [u["target"] for u in mid["unfinished_amends"]] == [ev_target]
+    # intent 未 done 且正文尚未改：evidence_auth 仍是 close 时哈希，verify 干净
+    assert mid["undeclared"] == []
+
+    # 改正文，然后 amend --done
+    evidence.write_text(
+        evidence.read_text(encoding="utf-8").replace("收盘 -9.12%。", "收盘 -9.1%。"),
+        encoding="utf-8")
+    assert RA.main(["--data-root", str(data_root), "amend", "--done",
+                    "--run-id", run_id, "--target", ev_target]) == 0
+    done_row = json.loads(ledger_lines(data_root)[-1])
+    assert done_row["type"] == "amend-done"
+    assert done_row["post_sha256"] == RA.normalized_evidence_sha256(evidence)
+    result = RA.verify_ledger(data_root, now=LATER)
+    assert result["unfinished_amends"] == []
+    assert [u for u in result["undeclared"] if u["kind"] == "evidence"] == []
+    assert result["clean"] is True
+
+    # 对照面：再改正文但不走 amend → evidence 归一化哈希对不上，报未申报
+    evidence.write_text(
+        evidence.read_text(encoding="utf-8").replace("收盘 -9.1%。", "收盘 -1.0%。"),
+        encoding="utf-8")
+    flagged = RA.verify_ledger(data_root, now=LATER)
+    ev_flagged = [u for u in flagged["undeclared"] if u["kind"] == "evidence"]
+    assert len(ev_flagged) == 1
+    assert ev_flagged[0]["target"] == "E-20261103-mover-300476-sz-h1"
+    assert flagged["clean"] is False
+
+
 def test_sentinel_file_listed_by_verify(data_root: Path) -> None:
     """写失败 sentinel：存在 run-log.error 即列出，verify 退出码 1。"""
     RA.append_open(data_root, "watch", "2026-11-03", now=NOW)

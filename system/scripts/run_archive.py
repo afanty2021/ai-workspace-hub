@@ -58,7 +58,7 @@ import re
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -247,6 +247,15 @@ def _find_evidence_file(data_root, ev_id: str) -> Path | None:
     return matches[0] if matches else None
 
 
+def _evidence_id_from_target(target: str) -> str | None:
+    """target 形如 evidence/**/E-*.md（仓库根相对）时返回 E-ID（文件名约定 = id），否则 None。"""
+    p = PurePosixPath(str(target))
+    if (len(p.parts) >= 2 and p.parts[0] == "evidence"
+            and p.suffix == ".md" and p.stem.startswith("E-")):
+        return p.stem
+    return None
+
+
 def normalized_evidence_sha256(path) -> str:
     """I4 归一化哈希：frontmatter 三个状态字段值归一为 pending 后整文哈希。
 
@@ -396,7 +405,8 @@ def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=
 
     done=False 写 intent 行（data_targets 记 `path#date` 串，post_sha256=null，reason 必填）；
     done=True 写 amend-done 行——series 目标（.jsonl）按 intent 声明（或 data_targets 显式
-    传入）的锚定日期算行锚定哈希并记入 anchor_date，其余目标记整文件哈希。
+    传入）的锚定日期算行锚定哈希并记入 anchor_date，evidence 目标（evidence/**/E-*.md）
+    按 I4 归一化口径记哈希（verify 据此同步 evidence_auth），其余目标记整文件哈希。
     """
     rows, _ = _read_rows_strict(ledger_path(data_root))
     _require_run(rows, run_id)
@@ -419,7 +429,12 @@ def append_amend(data_root, run_id: str, target: str, reason=None, data_targets=
             entry["anchor_date"] = anchor
             entry["post_sha256"] = row_anchor_hash(_resolve_target(data_root, target), anchor)
         else:
-            entry["post_sha256"] = file_sha256(_resolve_target(data_root, target))
+            resolved = _resolve_target(data_root, target)
+            if _evidence_id_from_target(target) is not None:
+                # evidence 目标：按 I4 归一化口径记哈希（与 close 注册 / verify 比对一致）
+                entry["post_sha256"] = normalized_evidence_sha256(resolved)
+            else:
+                entry["post_sha256"] = file_sha256(resolved)
         if reason:
             entry["reason"] = reason
         _append(data_root, entry)
@@ -517,7 +532,13 @@ def verify_ledger(data_root, now: datetime | None = None) -> dict:
                 series_auth[str(row.get("target"))] = {
                     "anchor_date": str(row["anchor_date"]), "sha256": row.get("post_sha256")}
             elif row.get("target"):
-                report_auth[str(row["target"])] = row.get("post_sha256")
+                ev_id = _evidence_id_from_target(str(row["target"]))
+                if ev_id is not None:
+                    # evidence 目标的 amend-done：同步权威表三键空间的 evidence_auth 键，
+                    # 哈希口径与 close 注册一致（normalized_evidence_sha256）
+                    evidence_auth[ev_id] = row.get("post_sha256")
+                else:
+                    report_auth[str(row["target"])] = row.get("post_sha256")
 
     # -- ① 未申报修订
     for path, expected in report_auth.items():
