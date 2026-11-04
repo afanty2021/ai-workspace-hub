@@ -10,6 +10,7 @@
 """
 
 import importlib.util
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -19,6 +20,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AUGUR_REPO = Path("/Users/berton/Github/Invest/augur")
 AUGUR_PERSONAS = AUGUR_REPO / "src" / "augur" / "personas"
+# 对拍锁（实施评审 I-A）：vendored 引擎声明对齐上游 0c721ac；对拍读的是上游**工作树**，
+# 一旦 pull/checkout 移动 HEAD，对拍锁即失效——这里 fail（不是 skip），强制要么把上游
+# checkout 回 0c721ac，要么 re-vendor 并同步更新全部 vendored 文件头注锁与本断言。
+AUGUR_LOCKED_SHA = "0c721ac"
 
 sys.path.insert(0, str(REPO_ROOT / "tools" / "masters"))
 
@@ -153,6 +158,27 @@ def _make_response(agent_id: str, name: str, signal: SignalType, score: float, c
         score=score,
         reasoning="test",
         coverage_confidence=1.0,
+    )
+
+
+# ---------------------------------------------------------------- 对拍锁：上游 HEAD 必须停在 0c721ac
+
+@pytest.mark.skipif(not AUGUR_REPO.is_dir(), reason="augur 原仓不存在")
+def test_augur_upstream_locked_at_parity_sha():
+    """对拍读的是上游工作树——上游一 pull 对拍锁即失效，故先断言 HEAD == 0c721ac。
+
+    fail（不是 skip）：要么 `git -C /Users/berton/Github/Invest/augur checkout 0c721ac`，
+    要么 re-vendor 并同步更新全部 vendored 头注锁 + 本处 AUGUR_LOCKED_SHA。
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(AUGUR_REPO), "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert proc.returncode == 0, f"rev-parse 失败: {proc.stderr.strip()}"
+    head = proc.stdout.strip()
+    assert head == AUGUR_LOCKED_SHA, (
+        f"上游已移动：HEAD={head}，对拍锁声明的基线是 {AUGUR_LOCKED_SHA}。"
+        "要么 checkout 0c721ac，要么 re-vendor 并更新全部头注锁与 AUGUR_LOCKED_SHA。"
     )
 
 
