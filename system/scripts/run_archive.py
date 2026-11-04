@@ -59,6 +59,11 @@ import json
 import re
 import subprocess
 import sys
+
+try:  # POSIX 排它锁（账本追加并发防护）；Windows 无 fcntl 时降级保持无锁现状
+    import fcntl
+except ImportError:  # pragma: no cover - 非 POSIX 平台
+    fcntl = None
 from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
 
@@ -158,11 +163,27 @@ def _append(data_root, row: dict) -> None:
     """
     ledger = ledger_path(data_root)
     ledger.parent.mkdir(parents=True, exist_ok=True)
-    _, raws = _read_rows_strict(ledger)
-    row["prev_sha256"] = hashlib.sha256(raws[-1].encode("utf-8")).hexdigest() if raws else None
-    line = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
-    with ledger.open("a", encoding="utf-8") as fh:
-        fh.write(line)
+    with ledger.open("a+", encoding="utf-8") as fh:
+        if fcntl is not None:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            except OSError:  # pragma: no cover - 文件系统不支持 flock（如部分网络盘）
+                pass
+        fh.seek(0)
+        text = fh.read()
+        raws: list[str] = []
+        for lineno, raw in enumerate(text.splitlines(keepends=True), 1):
+            if not raw.strip():
+                continue
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"账本第 {lineno} 行不是合法 JSON：{exc.msg}") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"账本第 {lineno} 行不是 JSON 对象")
+            raws.append(raw)
+        row["prev_sha256"] = hashlib.sha256(raws[-1].encode("utf-8")).hexdigest() if raws else None
+        fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def _git_head(root: Path) -> str | None:

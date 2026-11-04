@@ -701,3 +701,25 @@ def test_amend_done_same_or_later_anchor_unchanged(data_root: Path, tmp_path: Pa
                  if json.loads(line)["type"] == "amend-done"]
     assert [r["anchor_date"] for r in done_rows] == ["2026-11-03", "2026-11-04"]
     assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
+
+
+def test_concurrent_appends_keep_chain_intact(data_root: Path) -> None:
+    """flock 并发防护：多线程并发追加 N 行后尾链完整（无丢行 / 无断链），verify 通过。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _append_one(i: int) -> None:
+        RA.append_open(data_root, "watch", "2026-11-03", now=NOW + timedelta(seconds=i))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(_append_one, range(16)))
+
+    lines = [ln for ln in ledger_lines(data_root) if ln.strip()]
+    assert len(lines) == 16  # 无丢行
+    prev_digest = None
+    for line in lines:  # 尾链逐行重算完整
+        assert json.loads(line)["prev_sha256"] == prev_digest
+        prev_digest = hashlib.sha256(line.encode("utf-8")).hexdigest()
+    # verify：同 run 互不背锅——16 个 open 均无下文且 <24h，不触发孤儿；链完整即干净
+    result = RA.verify_ledger(data_root, now=NOW + timedelta(hours=1))
+    assert result["chain_breaks"] == []
+    assert result["clean"] is True
