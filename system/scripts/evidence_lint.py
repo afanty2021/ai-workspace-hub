@@ -55,11 +55,12 @@ TZ_SUFFIX_RE = re.compile(r"(Z|[+-]\d{2}:?\d{2})$")
 def parse_frontmatter(text: str) -> dict[str, str]:
     """取 ``---`` 闭合块的顶层 ``key: value`` 标量，值剥引号。
 
-    不在闭合块内、带缩进（列表项/嵌套）、或空值的行一律跳过——本脚本只用三时点
-    这类顶层标量字段。无闭合 frontmatter 返回空 dict（由调用方按缺字段处理）。
+    不在闭合块内、带缩进（列表项/嵌套）、或空值的行一律跳过——``key:`` 空值与
+    键缺失同口径（available_at 空值同样落「未核实」清单）。首行 BOM（\\ufeff）
+    容忍。无闭合 frontmatter 返回空 dict（由调用方按缺字段处理）。
     """
     lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
+    if not lines or lines[0].lstrip("\ufeff").strip() != "---":
         return {}
     fields: dict[str, str] = {}
     for line in lines[1:]:
@@ -113,8 +114,10 @@ def lint_file(path: Path) -> tuple[list[dict], bool]:
     fields = parse_frontmatter(path.read_text(encoding="utf-8"))
     errors: list[dict] = []
     unverified = False
+    observed_ok = False  # 形状与日期都合法才进单调性分支，避免同一字段重复报错
 
-    # observed_at：必填，必须是日历日（裸 date 或引号串等价）
+    # observed_at：必填，必须是合法日历日（裸 date 或引号串等价；形状对但日期非法
+    # 如 2026-99-99 同样是 error，不能让单个畸形文件崩掉整个 lint）
     observed = fields.get("observed_at")
     if not observed:
         errors.append({"file": rel, "field": "observed_at", "reason": "缺失"})
@@ -122,6 +125,12 @@ def lint_file(path: Path) -> tuple[list[dict], bool]:
         errors.append(
             {"file": rel, "field": "observed_at", "reason": f"应为 YYYY-MM-DD 日历日，实际 {observed!r}"}
         )
+    else:
+        try:
+            date.fromisoformat(observed)
+            observed_ok = True
+        except ValueError:
+            errors.append({"file": rel, "field": "observed_at", "reason": f"无法解析：{observed!r}"})
 
     # recorded_at：必填，裸日期或带时区时刻
     recorded = fields.get("recorded_at")
@@ -142,7 +151,7 @@ def lint_file(path: Path) -> tuple[list[dict], bool]:
         )
 
     # 单调性：日粒度包含 date(observed) ≤ date(available→+08) ≤ date(recorded→+08)
-    if observed and DATE_RE.match(observed) and recorded and (
+    if observed_ok and observed and recorded and (
         DATE_RE.match(recorded) or has_timezone(recorded)
     ):
         try:
@@ -161,7 +170,13 @@ def lint_file(path: Path) -> tuple[list[dict], bool]:
                 )
                 av_date = None
             if av_date is not None:
-                obs_date = date.fromisoformat(observed)
+                try:
+                    obs_date = date.fromisoformat(observed)
+                except ValueError:
+                    errors.append(
+                        {"file": rel, "field": "observed_at", "reason": f"无法解析：{observed!r}"}
+                    )
+                    return errors, unverified
                 if obs_date > av_date:
                     errors.append({
                         "file": rel,

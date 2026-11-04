@@ -125,6 +125,30 @@ def test_timezone_conversion_uses_plus8_day(tmp_path: Path):
     assert [e["field"] for e in result["errors"]] == ["available_at/recorded_at"]
 
 
+def test_malformed_observed_date_is_error_not_crash(tmp_path: Path):
+    """形状合法但日期非法（2026-99-99）：产出单文件 error 项，不能崩掉整个 lint。"""
+    fm_bad = BASE_QUOTED.replace("observed_at: '2026-11-03'", "observed_at: '2026-99-99'")
+    make_evidence(tmp_path, "2026-11", "bad-obs-date", fm_bad)
+    result = EL.lint_tree(tmp_path)
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "observed_at"
+    assert "无法解析" in result["errors"][0]["reason"]
+    # 缺 available（未核实路径）时畸形 observed 同样报 error，不静默通过
+    fm_bad_old = "\n".join(
+        line for line in fm_bad.splitlines() if not line.startswith("available_at"))
+    make_evidence(tmp_path, "2026-11", "bad-obs-old", fm_bad_old)
+    result2 = EL.lint_tree(tmp_path)
+    assert len(result2["errors"]) == 2
+    assert result2["unverified"] == [str(tmp_path / "2026-11" / "bad-obs-old.md")]
+
+
+def test_bom_prefixed_frontmatter_is_parsed(tmp_path: Path):
+    """UTF-8 BOM 不应让文件被误判为无 frontmatter。"""
+    text = "---\n" + BASE_QUOTED + "\n---\n"
+    fields = EL.parse_frontmatter("\ufeff" + text)
+    assert fields.get("observed_at") == "2026-11-03"
+
+
 def test_empty_tree_is_clean(tmp_path: Path):
     result = EL.lint_tree(tmp_path)
     assert result == {"scanned": 0, "errors": [], "unverified": []}
