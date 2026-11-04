@@ -211,12 +211,16 @@ def _run_log_enabled(run_log: bool) -> bool:
 
 def _ledger_target_spec(data_root: Path, path: Path, anchor_date: str) -> str:
     """series 目标 → 账本 `path#date` 串；路径取 data_root 父目录（仓库根）相对，出界用绝对路径。"""
+    return f"{_ledger_repo_rel(data_root, path)}#{anchor_date}"
+
+
+def _ledger_repo_rel(data_root: Path, path: Path) -> str:
+    """账本路径归一：data_root 父目录（仓库根）相对；出界（tmp 冒烟等）用绝对路径。"""
     try:
         rel = path.resolve().relative_to(Path(data_root).resolve().parent)
-        spec = str(Path(*rel.parts))
+        return str(Path(*rel.parts))
     except ValueError:
-        spec = str(path.resolve())
-    return f"{spec}#{anchor_date}"
+        return str(path.resolve())
 
 
 def run_persist_hook(market_data: dict[str, Any], data_root: Path | None = None,
@@ -245,8 +249,9 @@ def run_persist_hook(market_data: dict[str, Any], data_root: Path | None = None,
             _ledger_failed(root, "open", exc)
 
     written: list[tuple[Path, str, str]] = []
+    snapshot_files: list[Path] = []
     try:
-        save_daily_snapshot(market_data, root)
+        snapshot_files.append(save_daily_snapshot(market_data, root))
         append_series_from_snapshot(market_data, root, written=written)
     except Exception as exc:  # noqa: BLE001 — 设计要求吞掉一切
         log(f"Warning: 持久化钩子失败（不阻塞日报）: {exc}")
@@ -258,9 +263,13 @@ def run_persist_hook(market_data: dict[str, Any], data_root: Path | None = None,
             targets: dict[Path, str] = {}
             for path, row_date, _source in written:
                 targets[path] = max(targets.get(path, row_date), row_date)
+            # 快照 .json（market/daily/<day>.json）随 data-close 记整文件 sha256
+            # （非 .jsonl 不带锚）：同日重跑会先重写快照再记账，后写哈希天然覆盖。
+            specs: list = [{"path": _ledger_repo_rel(root, path)} for path in snapshot_files]
+            specs += [_ledger_target_spec(root, path, anchor) for path, anchor in targets.items()]
             archive.append_data_close(
                 root, run_id,
-                [_ledger_target_spec(root, path, anchor) for path, anchor in targets.items()],
+                specs,
                 sorted({source for _p, _d, source in written}),
                 _degradations_from_meta(market_data) + _macro_missing(macro_meta),
             )

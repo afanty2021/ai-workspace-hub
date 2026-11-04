@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -311,11 +312,33 @@ class RunLedgerHookTests(unittest.TestCase):
         self.assertEqual(close_row["missing"], [  # meta 降级清单透传
             {"ticker": "NVDA", "source_tried": "nasdaq", "reason": "timeout",
              "fallback": "finnhub"}])
-        (target,) = close_row["data_targets"]
+        (target,) = [t for t in close_row["data_targets"] if t.get("anchor_date")]
         self.assertTrue(target["path"].endswith("market/series/600276.SH.jsonl"),
                         msg=target["path"])
         self.assertEqual(target["anchor_date"], "2026-11-02")
         self.assertRegex(target["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_snapshot_json_hash_covered_by_data_close(self) -> None:
+        """快照哈希覆盖（设计留白收口）：market/daily/<day>.json 随 data-close 记
+        整文件 sha256（不带锚）；篡改快照 → verify 报未申报。"""
+        pmd.run_persist_hook(_snapshot([_quote("600276.SH")]), self.root)
+        close_row = self._ledger_rows()[1]
+        (snap_target,) = [t for t in close_row["data_targets"] if not t.get("anchor_date")]
+        self.assertTrue(snap_target["path"].endswith("market/daily/2026-11-02.json"),
+                        msg=snap_target["path"])
+        daily = self.root / "market" / "daily" / "2026-11-02.json"
+        self.assertEqual(snap_target["sha256"],
+                         hashlib.sha256(daily.read_bytes()).hexdigest())
+
+        archive = pmd._load_run_archive()
+        self.assertTrue(archive.verify_ledger(self.root)["clean"])
+
+        daily.write_text(daily.read_text(encoding="utf-8").replace("71.54", "99.99"),
+                         encoding="utf-8")  # 篡改快照价格
+        result = archive.verify_ledger(self.root)
+        flagged = [u for u in result["undeclared"] if u["target"] == snap_target["path"]]
+        self.assertEqual(len(flagged), 1)
+        self.assertFalse(result["clean"])
 
     def test_macro_meta_missing_flows_into_data_close(self) -> None:
         pmd.run_persist_hook(
