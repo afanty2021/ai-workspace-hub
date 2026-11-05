@@ -179,10 +179,16 @@ def main(argv: list[str] | None = None) -> int:
               if not args.exploratory else "探索性变体——只报告不判定")
     text = render_report(results, tests, level=args.level, tag=tag,
                          tier_notes={"base": "10bp", "stress": "20bp"},
-                         prereg=prereg, exploratory=args.exploratory, n_oos=n_oos)
+                         prereg=prereg, exploratory=args.exploratory,
+                         n_oos=None if args.pre_oos else n_oos)
     start_row = run_kw.get("start", start)
-    oos_note = (f"OOS 起点 {wf.fridays[start_row]}（oos-start={args.oos_start} 与"
-                f"可用行业数 ≥50 首周取大（S5），评审 C9），样本外 {n_oos} 周")
+    if args.pre_oos:  # 终审 Should-fix 2：选择窗不是 OOS，功效注释不适用
+        oos_note = (f"选择窗 {wf.fridays[start_row]} → {wf.fridays[run_kw['end'] - 1]}"
+                    f"（pre-oos，S5 裁定：确认窗起点前全部可用数据），共 {n_oos} 周"
+                    "——选择窗行业数 1-49 薄覆盖，仅探索性选配置，不判定")
+    else:
+        oos_note = (f"OOS 起点 {wf.fridays[start_row]}（oos-start={args.oos_start} 与"
+                    f"可用行业数 ≥50 首周取大（S5），评审 C9），样本外 {n_oos} 周")
     out = args.out / f"{date.today():%Y-%m}" / f"backtest-{tag}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text + "\n\n" + oos_note + "\n", encoding="utf-8")
