@@ -167,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
             results = tier_res
         else:
             results.update({f"{n}·压力档": r for n, r in tier_res.items()})
-    tag = f"{args.level}-k{args.k}-lb{args.lookback}"
+    # 修根（2026-11-05，阶段 A 实测）：tag 必须含 direction——momentum/reversal 同
+    # k·lb 的两格会写同一文件名互相覆盖（brief 原 tag 只到 lb）。方向维度进文件名。
+    tag = f"{args.level}-{args.direction}-k{args.k}-lb{args.lookback}"
     if args.slice:
         tag += f"-slice-{args.slice.replace(':', '_')}"
     if args.pre_oos:
