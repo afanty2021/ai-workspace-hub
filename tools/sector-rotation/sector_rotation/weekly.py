@@ -13,14 +13,21 @@ def weekly_gross_returns(wf: WeeklyFrame) -> np.ndarray:
     return np.where(np.isfinite(r), r, np.nan)
 
 
-def window_blocks(wf: WeeklyFrame, *, window: int = 13
+def window_blocks(wf: WeeklyFrame, *, window: int = 13, cols=None, upto=None
                   ) -> tuple[np.ndarray, np.ndarray]:
-    ok = np.isfinite(wf.index_close).all(axis=1)
+    """cols：资产子集（None=全体）；upto：只取 tj < upto（None=全帧）。
+
+    v2（R20261105-02）子集口径：全市场口径在 point-in-time 覆盖增长宇宙
+    （416 成员 10→416 增长、峰值 65%）下无任何一行全体齐备 → t_idx 恒空
+    → L1 策略恒 {}（真实数据冒烟实测）——消费端按当周 M_t 子集调用。"""
+    mat = wf.index_close if cols is None else wf.index_close[:, cols]
+    ok = np.isfinite(mat).all(axis=1)
+    stop = len(wf.fridays) if upto is None else upto
     feats, t_index = [], []
-    for t in range(window, len(wf.fridays)):
+    for t in range(window, stop):
         rows = np.arange(t - window, t)
         if ok[rows].all():
-            feats.append(wf.index_close[rows, :].reshape(-1))
+            feats.append(mat[rows, :].reshape(-1))
             t_index.append(t)
     return np.array(feats, dtype=float), np.array(t_index, dtype=int)
 

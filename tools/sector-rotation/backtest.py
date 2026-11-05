@@ -111,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--lookback", type=int, default=1, choices=[1, 4])
     ap.add_argument("--window", type=int, default=13, choices=[8, 13, 26, 52])
+    ap.add_argument("--l1-variant", choices=["joint", "independent"], default="joint",
+                    help="L1 双版（评审 I4）：joint 联合 multi-label / independent "
+                         "每行业独立 sigmoid+BCE（R20261105-02 v2 网格维度）")
     ap.add_argument("--tier", choices=["base", "stress", "both"], default="both")
     ap.add_argument("--oos-start", default="2019-06-01",    # C9
                     help="样本外起点（实际起点 = max(此值首周, 可用行业数≥50 首周（S5）)）")
@@ -167,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.level in ("L1", "L2"):
             from sector_rotation.models import make_strategy
             strategies[args.level] = make_strategy(args.level, k=args.k,
-                                                   window=args.window)
+                                                   window=args.window,
+                                                   l1_variant=args.l1_variant)
         main_name = args.level if args.level in ("L1", "L2") \
             else f"L0-{args.direction}-lb{args.lookback}"
         tier_res = {}
@@ -214,14 +218,20 @@ def main(argv: list[str] | None = None) -> int:
             diag[f"halt_rejects_{tier}"] = rk.halt_rejects
     # 修根（2026-11-05，阶段 A 实测）：tag 必须含 direction——momentum/reversal 同
     # k·lb 的两格会写同一文件名互相覆盖（brief 原 tag 只到 lb）。方向维度进文件名。
+    # v2（R20261105-02）同款：L1 的 window×variant 网格维度也进文件名。
     tag = f"{args.level}-{args.direction}-k{args.k}-lb{args.lookback}"
+    if args.level in ("L1", "L2"):
+        tag += f"-w{args.window}-{args.l1_variant}"
     if args.slice:
         tag += f"-slice-{args.slice.replace(':', '_')}"
     if args.pre_oos:
         tag += "-preoos"
-    prereg = (f"k={args.k} / 方向={args.direction} / lookback={args.lookback} / "
-              f"window={args.window} / 判定档=基准+压力双档"
-              if not args.exploratory else "探索性变体——只报告不判定")
+    cfg = [f"k={args.k}", f"方向={args.direction}", f"lookback={args.lookback}",
+           f"window={args.window}"]            # v2：探索性也带全配置（网格报告自包含）
+    if args.level in ("L1", "L2"):
+        cfg.append(f"l1_variant={args.l1_variant}")
+    prereg = " / ".join(cfg) + (" / 判定档=基准+压力双档"
+                                if not args.exploratory else " / 探索性变体——只报告不判定")
     text = render_report(results, tests, level=args.level, tag=tag,
                          tier_notes={"base": "10bp", "stress": "20bp"},
                          prereg=prereg, exploratory=args.exploratory,
