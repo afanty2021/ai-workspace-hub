@@ -1,0 +1,4 @@
+# 可选依赖：L1/L2 需要（spec §6 拍板 3）。安装：
+#   conda run -n Quant-3.11 python -m pip install "torch>=2.2"
+# CPU/MPS 轮子即可，模型为小型 MLP，无需 GPU。
+torch>=2.2
