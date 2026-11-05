@@ -40,3 +40,24 @@ def test_cluster_by_correlation_groups_high_corr():
                             rng.normal(size=104)])
     cl = build_universe.cluster_by_correlation(rets, ["A", "B", "C"])
     assert cl["A"] == cl["B"] != cl["C"]
+
+
+def test_filter_excludes_sz_bond_segment_and_broad_abbrev():
+    # Minor#2（评审）：深市 520-563 债券段与沪市 ETF 段撞号——market=0 只认 158/159；
+    # 双向对照：深/沪真行业票必须仍通过，证明市场判没有误伤。
+    listing = [
+        {"code": "520109", "name": "26振业01", "market": 0},   # 深市债
+        {"code": "159995", "name": "芯片ETF", "market": 0},     # 深市行业票 → 保留
+        {"code": "516010", "name": "游戏ETF", "market": 1},     # 沪市行业票 → 保留
+        # Important#1（评审）：TDX 缩写名宽基族，绕过 ETF 字样判的漏网类
+        {"code": "588120", "name": "科100ETF"}, {"code": "589300", "name": "科综嘉实"},
+        {"code": "589980", "name": "科基100"}, {"code": "159627", "name": "中证100"},
+        {"code": "512910", "name": "100ETF"}, {"code": "159571", "name": "创200"},
+        {"code": "159923", "name": "D100ETF"}, {"code": "515860", "name": "科技100"},
+        {"code": "159808", "name": "创100RT"}, {"code": "159592", "name": "中证50"},
+    ]
+    kept = set(build_universe.filter_etf_candidates(listing))
+    assert {"159995.SZ", "516010.SH"} <= kept
+    assert not ({"520109.SH", "588120.SH", "589300.SH", "589980.SH", "159627.SZ",
+                 "512910.SH", "159571.SZ", "159923.SZ", "515860.SH", "159808.SZ",
+                 "159592.SZ"} & kept)
