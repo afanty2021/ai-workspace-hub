@@ -78,3 +78,24 @@ def cluster_for(spec: UniverseSpec, friday: str) -> dict[str, str] | None:
     year = int(friday[:4])
     usable = [g for g in spec.clusters if g + 2 <= year]
     return spec.clusters[max(usable)] if usable else None
+
+
+def point_in_time_pick(candidates: list[str], bars: dict[str, list[dict]],
+                       week_end: str, *, min_list_years: int = 2,
+                       min_amount_wan: float = 10000.0) -> str | None:
+    """当时达标者：上市满 2 年 + trailing 20 日均额 ≥ 1 亿；多只取均额最大
+    （规模 proxy 近似，spec §8 待验证——README 声明；上市年满 2 年按年整数差
+    近似，误差 ±数日，评审 M2 注记）。"""
+    best, best_amt = None, 0.0
+    for sym in candidates:
+        rows = [r for r in bars.get(sym, []) if r["date"] <= week_end]
+        if len(rows) < 20:
+            continue
+        first, recent = rows[0]["date"], rows[-20:]
+        listed_years = (int(week_end[:4]) - int(first[:4]))
+        if listed_years < min_list_years:
+            continue
+        amt = sum(r["amount"] for r in recent) / 20
+        if amt >= min_amount_wan * 1e4 and amt > best_amt:
+            best, best_amt = sym, amt
+    return best

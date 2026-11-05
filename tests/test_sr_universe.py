@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from sector_rotation.universe import (Member, UniverseSpec, cluster_for,
-                                      load_universe, write_universe)
+                                      load_universe, point_in_time_pick,
+                                      write_universe)
 
 
 def _spec():
@@ -37,3 +38,18 @@ def test_load_rejects_bad_header(tmp_path: Path):
     p.write_text("---\ntype: sector-rotation-universe\n---\n", encoding="utf-8")
     with pytest.raises(ValueError, match="未解析到任何成员"):
         load_universe(p)
+
+
+def _bar(d, amount):
+    return {"date": d, "amount": amount}
+
+
+def test_point_in_time_pick_respects_listing_age_and_liquidity():
+    # （Task 4 下沉：随 point_in_time_pick 自 tests/test_sr_universe_build.py 搬来）
+    old = [_bar(f"2024-01-{i:02d}", 3e8) for i in range(2, 22)]     # 2024 起，>2 年史
+    young = [_bar(f"2025-06-{i:02d}", 5e8) for i in range(2, 22)]   # 上市 <2 年
+    thin = [_bar(f"2024-01-{i:02d}", 2e7) for i in range(2, 22)]    # 均额 2000 万 <1 亿
+    bars = {"528030.SH": old, "516810.SH": young, "159999.SZ": thin}
+    assert point_in_time_pick(
+        ["528030.SH", "516810.SH", "159999.SZ"], bars, "2026-11-06") == "528030.SH"
+    assert point_in_time_pick(["516810.SH"], bars, "2026-11-06") is None

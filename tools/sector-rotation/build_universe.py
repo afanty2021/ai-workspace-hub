@@ -17,7 +17,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "daily-watch" / "scripts"))
 
-from sector_rotation.universe import Member, UniverseSpec, write_universe  # noqa: E402
+# point_in_time_pick 已下沉 sector_rotation/universe.py（Task 4：包内 data.py 复用，
+# 避免 tools 顶层脚本被包内 import）；此处导入仅为 coverage 曲线使用。
+from sector_rotation.universe import (Member, UniverseSpec,  # noqa: E402
+                                      point_in_time_pick, write_universe)
 from mootdx_source import _mootdx_call  # noqa: E402
 
 EXCLUDE = re.compile(
@@ -236,27 +239,6 @@ def load_bars(data_root: Path, symbol: str) -> list[dict]:
         return []
     return [json.loads(ln) for ln in
             path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-
-
-def point_in_time_pick(candidates: list[str], bars: dict[str, list[dict]],
-                       week_end: str, *, min_list_years: int = 2,
-                       min_amount_wan: float = 10000.0) -> str | None:
-    """当时达标者：上市满 2 年 + trailing 20 日均额 ≥ 1 亿；多只取均额最大
-    （规模 proxy 近似，spec §8 待验证——README 声明；上市年满 2 年按年整数差
-    近似，误差 ±数日，评审 M2 注记）。"""
-    best, best_amt = None, 0.0
-    for sym in candidates:
-        rows = [r for r in bars.get(sym, []) if r["date"] <= week_end]
-        if len(rows) < 20:
-            continue
-        first, recent = rows[0]["date"], rows[-20:]
-        listed_years = (int(week_end[:4]) - int(first[:4]))
-        if listed_years < min_list_years:
-            continue
-        amt = sum(r["amount"] for r in recent) / 20
-        if amt >= min_amount_wan * 1e4 and amt > best_amt:
-            best, best_amt = sym, amt
-    return best
 
 
 def cluster_by_correlation(returns: np.ndarray, codes: list[str],
