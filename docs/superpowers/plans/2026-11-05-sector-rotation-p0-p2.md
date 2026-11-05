@@ -23,7 +23,7 @@
 9. **成本两档制（spec §3.7，评审 C1 修正口径）**：**单边成本 = 佣金 1bp + 单边点差档（基准 10bp / 压力 20bp）**，即单边 11/21bp、**roundtrip 基准档 22bp / 压力档 42bp**（与 spec §7「单边 10 × 2 = 22bp/周·全换手」算术一致；spread_bps 语义 = 单边点差，不是全宽半宽）；冲击 0 参数化预留；**所有出口闸门两档都必须通过**；成本拖累占比两档各一列；α 永远只报成本后。**计费按净换手**（评审 C5）：逐资产 |新权重 − 旧权重(漂移调整后)| × 单边成本，重复入选资产持有过周末不重复付点差（spec §3.7「每笔成交计」+ §7 重叠率口径；论文的"每周全清"退化为信号语义，执行层持有等价敞口）。
 10. **执行闸门与迟滞（spec §3.5/§3.1）**：周一开盘涨停（`open ≥ prev_close × (1 + limit_pct × 0.995)`）弃买；周五清仓跌停顺延下周一开盘卖（首版简化口径见 T9 注）；**入选严、周内宽**——入选 trailing 20d ≥ 1 亿（point-in-time），周内拦截线为执行周日均成交额 < 5000 万。
 11. **风控参数（spec §3.6 初值）**：单行业周亏 ≥5% 移出下周清单；组合连亏 4 周停一周；年内回撤 ≥8% 降半仓至新高；单行业滚动 8 周胜率 <45% 进两周观察期；组合绝对亏损 10% 全停；同簇 ≤2 截断**持币不顺延**（截断资金不重新分配）。
-12. **检验矩阵是唯一闸门口径（spec §3.8，别处只引用不另设数字）**：vs 随机 k=置换检验 ≥1000 次（单侧 p<0.1）；vs 等权 / vs 沪深300ETF / L1·L2 vs L0 = 配对周收益差 block bootstrap（块长 4 周 ≥1000 次，单侧 p<0.1，**H0 下重定心**，评审 C2）；n=1000 是下限，**禁止降档**——超时如实报告失败并停（评审 I6）。全部两档各过；预注册字段"判定点差档"语义 = **双档都过**（spec 补钉 S1）。**预注册在 T11 两段式进行**（评审 I1/C9 修正，不再在 T3）：引擎就绪后先在**样本外前窗口**跑探索性网格选配置 → 预注册行写死进 spec 实施记录并单独 commit → 样本外窗口只对该配置做一次确认性检验。**样本外边界 OOS 起点 = max(2019-06 首个决策周, 覆盖率 ≥80% 首周)**，选择窗与确认窗不相交（评审 C9）；OOS 实际周数写入报告与 spec 实施记录。功效重估按 spec 补钉 S3：OOS 周数 n 时可检出年化 α ≈ (5-7%)×√(370/n)，随实际周数动态生成并披露。其余变体标"探索性"只报告不判定（**不打印闸门结论行**，评审 I10）。
+12. **检验矩阵是唯一闸门口径（spec §3.8，别处只引用不另设数字）**：vs 随机 k=置换检验 ≥1000 次（单侧 p<0.1）；vs 等权 / vs 沪深300ETF / L1·L2 vs L0 = 配对周收益差 block bootstrap（块长 4 周 ≥1000 次，单侧 p<0.1，**H0 下重定心**，评审 C2）；n=1000 是下限，**禁止降档**——超时如实报告失败并停（评审 I6）。全部两档各过；预注册字段"判定点差档"语义 = **双档都过**（spec 补钉 S1）。**预注册在 T11 两段式进行**（评审 I1/C9 修正，不再在 T3）：引擎就绪后先在**样本外前窗口**跑探索性网格选配置 → 预注册行写死进 spec 实施记录并单独 commit → 样本外窗口只对该配置做一次确认性检验。**样本外边界 OOS 起点 = max(2019-06 首个决策周, point-in-time 可用行业数 ≥50 首周)**（spec 补钉 S5，2026-11-05 宇宙确认拍板：416 成员宇宙覆盖率峰值 65%，80% 百分比口径不可达，改绝对数 50——起点≈2020 年中、OOS≈335 周），选择窗与确认窗不相交（评审 C9）；OOS 实际周数写入报告与 spec 实施记录。功效重估按 spec 补钉 S3：OOS 周数 n 时可检出年化 α ≈ (5-7%)×√(370/n)，随实际周数动态生成并披露。其余变体标"探索性"只报告不判定（**不打印闸门结论行**，评审 I10）。
 13. **功效边界（spec §3.8 功效注释 + 补钉 S3，写进 P1 出口一起读）**：基准样本外约 370 周，单侧 p<0.1 稳定检出年化 α ≈5-7%；**实际 OOS 周数 n 时按 √(370/n) 缩放动态生成（T11 `power_note`），起点晚于 2019-06 时该行为必填**——P1 证伪的结案报告必须写"未检出（缩放后阈值）/年的 α"，不得写成"A 股周频轮动无 α"的全称否定。
 14. **闸门失败即停**：P1 未过 → 停 T12-15，写结案报告（含功效局限声明），单独 commit；P2 未过 → 停 T15，同样处理。
 
@@ -46,7 +46,7 @@ tools/sector-rotation/
     metrics.py                 # 指标集 + 同簇触发频率
     baselines.py               # point-in-time 等权/动量/反转/随机（统一 select 协议）
     portfolio.py               # 执行闸门（含周内流动性迟滞）+ 风控 + 持币式同簇截断
-    walkforward.py             # 引擎（覆盖率 ≥80% 起点）
+    walkforward.py             # 引擎（可用行业数 ≥50 起点，spec 补钉 S5）
     permtest.py                # 置换检验 + block bootstrap 配对检验
     models.py                  # L1 torch 线性 + L2 MIMO（训练窗标准化/MC dropout/ROC trailing）
 config/sector-rotation-universe.md   # 宇宙 spec（候选集映射 + 全部簇代表，tracked）
@@ -1819,8 +1819,8 @@ class WalkResult:
     t_rows: list[int]     # 每个周收益对应的决策帧行号（评审 C4：配对基准按此对齐）
     metrics: dict[str, float]; trades: list[dict]
 
-def coverage_start(wf: WeeklyFrame, *, min_coverage: float = 0.8) -> int
-    # spec §3.8 I-5：覆盖率（valid 列占比）首次 ≥80% 的行号
+def coverage_start(wf: WeeklyFrame, *, min_universe: int = 50) -> int
+    # spec §3.8 I-5 + 补钉 S5：point-in-time 可用行业数（valid 列计数）首次 ≥50 的行号
 
 def run_walkforward(wf, strategy, *, cost: CostModel, start: int | None = None,
                     end: int | None = None, oos_start: int | None = None,
@@ -1867,10 +1867,10 @@ def _wf(T=30, seed=5, valid=None):
                        np.full((T, 2), 2e8), M2, SPEC, v, v.copy(), np.full(T, 0.001))
 
 
-def test_coverage_start_finds_first_80pct_week():
+def test_coverage_start_finds_first_week_meeting_min_universe():
     v = np.zeros((20, 2), bool)
-    v[10:, :] = True                        # 第 10 周起覆盖率 100%
-    assert coverage_start(_wf(T=20, valid=v)) == 10
+    v[10:, :] = True                        # 第 10 周起 2 行业全部可用
+    assert coverage_start(_wf(T=20, valid=v), min_universe=2) == 10
 
 
 def test_walkforward_uses_coverage_start_and_runs():
@@ -1900,7 +1900,7 @@ def test_perm_test_p_in_range():
 
 ```python
 # tools/sector-rotation/sector_rotation/walkforward.py
-"""walk-forward 引擎（spec §3.8：覆盖率 ≥80% 起点，起点晚于 2019-06 功效重估）。"""
+"""walk-forward 引擎（spec §3.8 + 补钉 S5：可用行业数 ≥50 起点，起点晚于 2019-06 功效重估）。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -1923,9 +1923,9 @@ class WalkResult:
     trades: list[dict] = field(default_factory=list)
 
 
-def coverage_start(wf: WeeklyFrame, *, min_coverage: float = 0.8) -> int:
-    cov = wf.valid.mean(axis=1)
-    hits = np.flatnonzero(cov >= min_coverage)
+def coverage_start(wf: WeeklyFrame, *, min_universe: int = 50) -> int:
+    counts = wf.valid.sum(axis=1)
+    hits = np.flatnonzero(counts >= min_universe)
     return int(hits[0]) if len(hits) else len(wf.fridays) - 1
 
 
@@ -2106,7 +2106,7 @@ def test_render_report_level_param_and_exploratory_no_gate():
 
 预注册两段式（I1/C9）：--pre-oos 在样本外前窗口（end=oos_start）跑探索性网格
 → 预注册行写 spec 实施记录并单独 commit → 不带 --pre-oos 跑确认性检验
-（start = max(覆盖率80%首周, oos_start 行)，选择窗与确认窗不相交）。
+（start = max(可用行业数 ≥50 首周（S5）, oos_start 行)，选择窗与确认窗不相交）。
 """
 from __future__ import annotations
 
@@ -2192,7 +2192,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--window", type=int, default=13, choices=[8, 13, 26, 52])
     ap.add_argument("--tier", choices=["base", "stress", "both"], default="both")
     ap.add_argument("--oos-start", default="2019-06-01",    # C9
-                    help="样本外起点（实际起点 = max(此值首周, 覆盖率80%首周)）")
+                    help="样本外起点（实际起点 = max(此值首周, 可用行业数≥50 首周（S5）)）")
     ap.add_argument("--pre-oos", action="store_true",
                     help="预注册选择窗：只跑 oos_start 之前（I1 阶段 A）")
     ap.add_argument("--slice", default=None, metavar="FROM:TO",
@@ -2278,7 +2278,7 @@ def main(argv: list[str] | None = None) -> int:
                          prereg=prereg, exploratory=args.exploratory, n_oos=n_oos)
     start_row = run_kw.get("start", start)
     oos_note = (f"OOS 起点 {wf.fridays[start_row]}（oos-start={args.oos_start} 与"
-                f"覆盖率 80% 首周取大，评审 C9），样本外 {n_oos} 周")
+                f"可用行业数 ≥50 首周取大（S5），评审 C9），样本外 {n_oos} 周")
     out = args.out / f"{date.today():%Y-%m}" / f"backtest-{tag}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text + "\n\n" + oos_note + "\n", encoding="utf-8")

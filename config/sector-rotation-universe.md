@@ -1,6 +1,8 @@
 ---
 type: sector-rotation-universe
-status: draft
+status: confirmed
+# 2026-11-05 用户确认（Q-20261105-02）：416 成员 / 754 候选 / 簇代 5/5 照单接受；
+# 边角项（51 unmatched、创精选88/创新100、20 只 TDX 空返回码）记 P0 数据现实报告，复牌时增量修订。
 ---
 
 ## 成员（指数 → ETF 候选集，point-in-time 引擎每周择一）
