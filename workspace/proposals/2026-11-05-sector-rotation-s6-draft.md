@@ -1,9 +1,9 @@
 ---
 id: R20261105-S6-DRAFT
 title: spec 补钉 S6 草案——风控-锚点互斥消解（v2 协议，四方向参数化对比）
-status: draft（待用户拍板）
+status: decided（2026-11-05 用户拍板 A+C，Q-20261105-04；已折叠进 spec v1.2.3，本文留档）
 created: 2026-11-05
-parent: workspace/proposals/2026-11-05-sector-rotation-design.md（v1.2.2）
+parent: workspace/proposals/2026-11-05-sector-rotation-design.md（v1.2.3）
 related: workspace/proposals/2026-11-05-sector-rotation-p1-closure.md（§6.1 发现源）
 ---
 
@@ -126,4 +126,4 @@ related: workspace/proposals/2026-11-05-sector-rotation-p1-closure.md（§6.1 �
 拍板后执行：spec §6.2 补 S6 行 + 对应小节修订 + v2 协议块（含公共条款 1-4），单独 commit；v2 步骤 0（halt 日志+选择窗实证）先行。
 
 ---
-<!-- 文件说明：S6 补钉草案（draft，待拍板）。拍板后由执行会话折叠进 spec v1.2.3 并启动 v2 协议。 -->
+<!-- 文件说明：S6 补钉草案（已拍板 A+C，折叠进 spec v1.2.3 §3.6/§3.8/§6.2/§6.3；本文留档供追溯四方向对比依据）。 -->
