@@ -2044,7 +2044,7 @@ git commit -m "feat(sector-rotation): 覆盖率起点引擎 + 检验矩阵统计
 
 **Interfaces:**
 - Consumes: Task 1-10。
-- Produces: CLI `backtest.py --level L0|L1|L2 --direction momentum|reversal（评审 I12） --k 3 --lookback {1,4}（L0 排名回看，区别于特征窗 --window {8,13,26,52}，评审 I3） --tier base|stress|both --oos-start YYYY-MM-DD（默认 2019-06-01，评审 C9） --pre-oos（预注册选择窗：end=oos_start，评审 I1） --slice FROM:TO（稳健切片，评审 I7） --exploratory（只报告不判定，评审 I10）`；`render_report(results, tests, *, level, tag, tier_notes, prereg, exploratory=False, n_oos=None) -> str`（评审 C6：矩阵键用 level 参数，禁硬编码）；`power_note(n_oos) -> str`（评审 C9：功效注释按实际样本外周数动态生成）。报告落 `output/sector-rotation/YYYY-MM/backtest-{tag}.md`：检验矩阵表（行=检验，列=两档 p 与判定）、指标表（**两档成本拖累各一列**，M8）、同簇触发频率、OOS 起点与周数。**配对基准一律 `wf.bench_300[t] for t in res.t_rows`（评审 C4：禁止固定切片）。**
+- Produces: CLI `backtest.py --level L0|L1|L2 --direction momentum|reversal（评审 I12） --k 3 --lookback {1,4}（L0 排名回看，区别于特征窗 --window {8,13,26,52}，评审 I3） --tier base|stress|both --oos-start YYYY-MM-DD（默认 2019-06-01，评审 C9） --pre-oos（预注册选择窗：[首个有可用行业周, 确认窗起点)——S5 下确认窗起点=max(oos_start 行, ≥50 首周)，2026-11-05 裁定防选择窗恒空；评审 I1） --slice FROM:TO（稳健切片，评审 I7） --exploratory（只报告不判定，评审 I10）`；`render_report(results, tests, *, level, tag, tier_notes, prereg, exploratory=False, n_oos=None) -> str`（评审 C6：矩阵键用 level 参数，禁硬编码）；`power_note(n_oos) -> str`（评审 C9：功效注释按实际样本外周数动态生成）。报告落 `output/sector-rotation/YYYY-MM/backtest-{tag}.md`：检验矩阵表（行=检验，列=两档 p 与判定）、指标表（**两档成本拖累各一列**，M8）、同簇触发频率、OOS 起点与周数。**配对基准一律 `wf.bench_300[t] for t in res.t_rows`（评审 C4：禁止固定切片）。**
 
 - [ ] **Step 1: 写失败测试**
 
@@ -2104,9 +2104,10 @@ def test_render_report_level_param_and_exploratory_no_gate():
 # tools/sector-rotation/backtest.py
 """检验矩阵回测 CLI（spec §3.8 v1.2 + 评审 C4/C6/C9/I1/I3/I10/I12 修正）。
 
-预注册两段式（I1/C9）：--pre-oos 在样本外前窗口（end=oos_start）跑探索性网格
-→ 预注册行写 spec 实施记录并单独 commit → 不带 --pre-oos 跑确认性检验
-（start = max(可用行业数 ≥50 首周（S5）, oos_start 行)，选择窗与确认窗不相交）。
+预注册两段式（I1/C9+S5 裁定）：--pre-oos 在样本外前窗口（首个有可用行业周 →
+确认窗起点）跑探索性网格 → 预注册行写 spec 实施记录并单独 commit →
+不带 --pre-oos 跑确认性检验（start = max(可用行业数 ≥50 首周（S5）,
+oos_start 行)，选择窗与确认窗不相交）。
 """
 from __future__ import annotations
 
@@ -2213,8 +2214,8 @@ def main(argv: list[str] | None = None) -> int:
         run_kw = {"start": next(t for t, f in enumerate(wf.fridays) if f >= lo),
                   "end": next((t for t, f in enumerate(wf.fridays) if f > hi),
                               len(wf.fridays))}
-    elif args.pre_oos:                                       # I1：选择窗 end=OOS 起点
-        run_kw = {"start": coverage_start(wf), "end": oos_row}
+    elif args.pre_oos:  # I1+S5 裁定：选择窗=[首个有可用行业周, 确认窗起点)，防 start>end 恒空
+        run_kw = {"start": int(np.flatnonzero(wf.valid.any(axis=1))[0]), "end": start}
     else:
         run_kw = {"start": start}
     tiers = ["base", "stress"] if args.tier == "both" else [args.tier]
@@ -2248,9 +2249,10 @@ def main(argv: list[str] | None = None) -> int:
             else f"L0-{args.direction}-lb{args.lookback}"
         main_res = tier_res[main_name]
         n_oos = len(main_res.weekly)                         # C9：实际样本外周数
-        tests[(args.level, "vs 随机", tier)] = perm_test_vs_random(
-            wf, cost, k=args.k, n=1000, strategy=strategies[main_name],
-            start=run_kw.get("start"), end=run_kw.get("end"))["p_value"]
+        if not args.exploratory:  # 2026-11-05 裁定：探索性跳过 1001 次置换（只按净指标选配置）
+            tests[(args.level, "vs 随机", tier)] = perm_test_vs_random(
+                wf, cost, k=args.k, n=1000, strategy=strategies[main_name],
+                start=run_kw.get("start"), end=run_kw.get("end"))["p_value"]
         eq_weekly = tier_res["等权持有"].weekly
         bench_weekly = np.array([wf.bench_300[t]              # C4：t_rows 对齐
                                  for t in main_res.t_rows])
@@ -2293,7 +2295,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 通过**
 
 Run: `conda run -n Quant-3.11 python -m pytest tests/test_sr_backtest.py -v`
-Expected: PASS（3 用例：矩阵+动态功效 / C6 level 参数 / I10 探索性无闸门行）
+Expected: PASS（2 用例，覆盖：矩阵+动态功效 / C6 level 参数 / I10 探索性无闸门行）
 
 - [ ] **Step 5: P1 闸门——两段式预注册 + 确认性检验（评审 I1/C9 修正；预注册已从 T3 重排至此）**
 
@@ -2304,7 +2306,7 @@ for k in 2 3 4; do for d in momentum reversal; do for lb in 1 4; do
     --level L0 --k $k --direction $d --lookback $lb --exploratory --pre-oos
 done; done; done
 ```
-- 阶段 A 产出 16 份探索性报告（选择窗内对比，不判定）。按结果选定主配置（k/方向/lookback），**把预注册行追加进 spec 实施记录段并单独 commit**：`预注册（P1, 2026-11-XX）：k=? / 方向=? / lookback=? / window=13 / 判定档=基准+压力双档`。
+- 阶段 A 产出 16 份探索性报告（选择窗内对比，不判定；选择窗覆盖薄——S5 裁定下行业数 1-49，预注册行须披露该现实）。按结果选定主配置（k/方向/lookback），**把预注册行追加进 spec 实施记录段并单独 commit**：`预注册（P1, 2026-11-XX）：k=? / 方向=? / lookback=? / window=13 / 判定档=基准+压力双档 / 选择窗=<起止周五> 行业数 1-49（S5 裁定，探索性选择噪声披露）`。
 - 阶段 B（确认性：样本外窗口、只跑预注册配置、两档）：
 
 ```bash
