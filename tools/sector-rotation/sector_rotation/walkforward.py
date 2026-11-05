@@ -56,8 +56,11 @@ def run_walkforward(wf: WeeklyFrame, strategy, *, cost: CostModel,
         gross_acc += detail["gross"]
         last_pos_returns = gross_pos or None
         total = 1 + detail["gross"]                  # 评审 C5：上周权重漂移调整
+        # 修复轮1（Critical）：漂移只对 executed（gross_pos）成员计——blocked 成员
+        # （涨停/低流动/缺数）不在 gross_pos，下周 weights_prev 不含它、按全额买卖
+        # 计换手（T9 裁定口径）；total≤0（≤-100% 周）病理情形等价全灭。
         weights_prev = ({i: weights_new[i] * (1 + gross_pos[i]) / total
-                         for i in weights_new} if total > 0 else dict(weights_new))
+                         for i in gross_pos} if total > 0 else {})
         t_rows.append(t)
         trades.append({"friday": wf.fridays[t], "holdings": sorted(weights_new),
                        "blocked": detail["blocked"], "detail": detail})
