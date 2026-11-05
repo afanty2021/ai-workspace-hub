@@ -15,12 +15,14 @@ WEEKLY_MIN_AMOUNT_WAN = 5000.0
 
 class RiskState:
     def __init__(self, spec: UniverseSpec, *, enabled: bool = True,
-                 halt_wait_weeks: int = 8, probe_frac: float = 0.5,
+                 halt_wait_weeks: int = 13, probe_frac: float = 0.5,
                  probe_confirm_weeks: int = 4):
         # S6-A（spec v1.2.3 §3.6）：全停从吸收态改探针重启滞回态——
         # 触发后持币 halt_wait_weeks 周（触发当周计入）→ probe_frac 仓探针
         # probe_confirm_weeks 周 → 探针期收益 ≥0 确认恢复满仓 / <0 否决回到停机，
         # 循环不限次。触发条件只在正常态评估（滞回：探针期内不看绝对线）。
+        # 默认参数 = 选择窗网格冻结值（N=13/f=0.5/M=4，spec §6.3 2026-11-05），
+        # 取代草案先验 N=8——引擎默认行为与预注册参数保持一致。
         self.spec = spec
         self.enabled = enabled
         self.halt_wait_weeks = halt_wait_weeks
