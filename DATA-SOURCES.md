@@ -48,7 +48,7 @@ A 股主源是 mootdx（通达信 TCP 7709 直连，实时快照，覆盖 ETF）
 python3 -m pip install -r tools/daily-watch/requirements-mootdx.txt
 ```
 
-mootdx 首次取数会逐台验证通达信服务器（TCP 通不等于协议通），全部失败时记 5 分钟负缓存并自动降级 tushare / 东财 / 腾讯 / 新浪，不会让日报失败。`DISABLE_MOOTDX=1` 写入环境可整体停用。
+mootdx 首次取数会逐台验证通达信服务器（TCP 通不等于协议通），全部失败时记 5 分钟负缓存并自动降级 tushare / 东财 / 腾讯 / 新浪，不会让日报失败。`DISABLE_MOOTDX=1` 写入环境可整体停用。watchlist 里 880/881 段板块指数用 `.TDX` 后缀接入（如 `881075.TDX` 贵金属），走 index_bars 日线，volume 为板块成分合计。
 
 通达信协议走 TCP 7709 **明文传输、无加密**，且数据非交易所官方授权口径——行情仅供个人研究参考。
 

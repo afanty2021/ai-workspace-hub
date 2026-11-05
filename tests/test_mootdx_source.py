@@ -261,5 +261,123 @@ class UnavailableContractTests(unittest.TestCase):
                 fetch_mootdx_quotes(["600276.SH"])
 
 
+class _StubIndexFrame:
+    """最小 DataFrame 桩：index_bars 返回形状（行字典 + iloc + 长度）。"""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.empty = not rows
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def __getitem__(self, pos: int) -> dict:
+        return self._rows[pos]
+
+    @property
+    def iloc(self):
+        return self
+
+
+class TdxIndexTests(unittest.TestCase):
+    """880/881 板块指数（.TDX 后缀，2026-11-05 接入）：资格闸门 + 日线装配 + 批量混跑。"""
+
+    def test_tdx_suffix_gate(self) -> None:
+        for ticker in ("881075.TDX", "881386.TDX", "880301.TDX"):
+            self.assertTrue(is_mootdx_ticker(ticker), ticker)
+        for ticker in (
+            "881075",  # 缺 .TDX 后缀
+            "881075.SH",  # 板块指数不是交易所证券，约定必须 .TDX 显式标识
+            "888880.TDX",  # 总市值占位段（888 开头），明确不接
+            "88107.TDX",  # 5 位数字
+            "8810755.TDX",  # 7 位数字
+        ):
+            self.assertFalse(is_mootdx_ticker(ticker), ticker)
+
+    def test_index_quote_from_two_bars(self) -> None:
+        bars = _StubIndexFrame([
+            {"datetime": "2026-11-04 15:00", "close": 2071.28, "open": 2050.0,
+             "high": 2080.0, "low": 2040.0, "volume": 100000},
+            {"datetime": "2026-11-05 15:00", "close": 2177.29, "open": 2168.46,
+             "high": 2212.53, "low": 2134.16, "volume": 115820},
+        ])
+        quote = mootdx_source._index_quote_from_bars("881075.TDX", bars)
+        self.assertEqual(quote["symbol"], "881075.TDX")
+        self.assertEqual(quote["price"], 2177.29)
+        self.assertEqual(quote["previousClose"], 2071.28)
+        self.assertAlmostEqual(quote["changesPercentage"], 5.118091)
+        self.assertEqual(quote["tradeDate"], "2026-11-05")
+        self.assertEqual(quote["volume"], 115820)
+        self.assertEqual(quote["source"], "mootdx")
+
+    def test_index_quote_single_bar_keeps_price_without_change(self) -> None:
+        bars = _StubIndexFrame([
+            {"datetime": "2026-11-05 15:00", "close": 2006.81, "volume": 1},
+        ])
+        quote = mootdx_source._index_quote_from_bars("881386.TDX", bars)
+        self.assertEqual(quote["price"], 2006.81)
+        self.assertIsNone(quote["change"])
+        self.assertIsNone(quote["changesPercentage"])
+
+    def test_index_quote_empty_or_bad_price_returns_none(self) -> None:
+        self.assertIsNone(mootdx_source._index_quote_from_bars("881075.TDX", _StubIndexFrame([])))
+        self.assertIsNone(mootdx_source._index_quote_from_bars(
+            "881075.TDX", _StubIndexFrame([{"datetime": "2026-11-05 15:00", "close": 0.0}])))
+        # datetime 与 year/month/day 全缺：拿不到交易日，宁缺毋滥
+        self.assertIsNone(mootdx_source._index_quote_from_bars(
+            "881075.TDX", _StubIndexFrame([{"close": 2177.29}])))
+
+    def test_mixed_batch_stocks_via_quotes_and_index_via_index_bars(self) -> None:
+        snapshots = _StubSnapshotFrame(
+            [{"code": "300750", "price": 264.06, "last_close": 252.88, "vol": 693511}]
+        )
+        index_calls: list[dict] = []
+
+        class StubClient:
+            def quotes(self, symbol):
+                return snapshots
+
+        def fake_call(method, **kw):
+            index_calls.append({"method": method, **kw})
+            return _StubIndexFrame([
+                {"datetime": "2026-11-04 15:00", "close": 2071.28, "volume": 1},
+                {"datetime": "2026-11-05 15:00", "close": 2177.29, "open": 2168.46,
+                 "high": 2212.53, "low": 2134.16, "volume": 115820},
+            ])
+
+        with (
+            patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
+            patch.object(mootdx_source, "_bars_trade_date", return_value="2026-11-05"),
+            patch.object(mootdx_source, "_mootdx_call", side_effect=fake_call),
+        ):
+            quotes = fetch_mootdx_quotes(["300750.SZ", "881075.TDX"])
+
+        # 个股走快照、指数走 index_bars（不进快照请求）
+        self.assertEqual(index_calls, [
+            {"method": "index_bars", "symbol": "881075", "frequency": 9, "offset": 2}
+        ])
+        self.assertEqual([q["symbol"] for q in quotes], ["300750.SZ", "881075.TDX"])
+        self.assertEqual(quotes[1]["tradeDate"], "2026-11-05")
+
+    def test_index_failure_degrades_only_that_ticker(self) -> None:
+        class StubClient:
+            def quotes(self, symbol):
+                return _StubSnapshotFrame(
+                    [{"code": "300750", "price": 264.06, "last_close": 252.88, "vol": 1}]
+                )
+
+        with (
+            patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
+            patch.object(mootdx_source, "_bars_trade_date", return_value="2026-11-05"),
+            patch.object(
+                mootdx_source, "_mootdx_call",
+                side_effect=RuntimeError("index_bars 挂了"),
+            ),
+        ):
+            quotes = fetch_mootdx_quotes(["300750.SZ", "881075.TDX"])
+
+        self.assertEqual([q["symbol"] for q in quotes], ["300750.SZ"])
+
+
 if __name__ == "__main__":
     unittest.main()

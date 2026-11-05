@@ -19,6 +19,8 @@ TradingAgents-astock `tradingagents/dataflows/a_stock.py`（本机已长期验�
   与 tushare `vol`、腾讯源字段 6 同口径；`servertime` 只有时刻没有日期。
 - `bars(frequency=9)`：日线，`datetime` 索引同时重复出现为列，另附
   year/month/day/hour/minute 冗余列；盘中时最新一根就是当日实时快照。
+- `index_bars(frequency=9)`：880/881 板块指数日线（.TDX 后缀走这里，快照接口
+  不覆盖）；末根收盘当最新、倒数第二根收盘当昨收，volume 为板块成分合计。
 - 昨收用 `last_close`（交易所官方昨收，除权日口径正确），不用前一根日线收盘。
 """
 
@@ -70,11 +72,32 @@ CN_QUOTE_SUFFIXES = ("SH", "SZ")
 # 600276.SH -> 600276；非 6 位数字一律不认（ETF 51/52/56/58、15/16/18 也是 6 位数字）。
 _CN_CODE_RE = re.compile(r"^\d{6}$")
 
+# 通达信自编板块指数（880 细分段 / 881 申万行业段，如 881075 贵金属）。
+# 不在交易所上市，无交易所后缀——用 .TDX 显式标识，避免与任何真实证券混淆；
+# quotes() 快照接口不覆盖它们，取数走 index_bars 日线（见 _index_quote_from_bars）。
+CN_INDEX_SUFFIXES = ("TDX",)
+# 880xxx / 881xxx 六位板块指数码（888880 总市值占位段也以 888 开头，不在此列，不接）。
+_CN_INDEX_RE = re.compile(r"^88[01]\d{3}$")
+
 
 def is_mootdx_ticker(ticker: str) -> bool:
-    """该 ticker 是否属于 mootdx 覆盖范围（沪深 A 股 + ETF，.SH/.SZ 6 位数字）。"""
+    """该 ticker 是否属于 mootdx 覆盖范围。
+
+    沪深 A 股 + ETF（.SH/.SZ 6 位数字），以及通达信自编板块指数
+    （880/881 段 6 位数字 + .TDX 后缀，如 881075.TDX 贵金属）。
+    """
     base, sep, suffix = ticker.strip().upper().rpartition(".")
-    return bool(sep and suffix in CN_QUOTE_SUFFIXES and _CN_CODE_RE.match(base))
+    if not sep:
+        return False
+    if suffix in CN_QUOTE_SUFFIXES:
+        # 880/881 板块指数配交易所后缀 = 配置错位（板块指数必须 .TDX），显式拒绝
+        # 而不是形状放行后静默缺数走降级链。
+        if _CN_INDEX_RE.match(base):
+            return False
+        return bool(_CN_CODE_RE.match(base))
+    if suffix in CN_INDEX_SUFFIXES:
+        return bool(_CN_INDEX_RE.match(base))
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -337,11 +360,57 @@ def _to_float(value: Any) -> float | None:
 _TDX_MAX_BATCH = 80
 
 
-def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
-    """批量取沪深 A 股/ETF 实时快照（主源路径）。
+def _index_quote_from_bars(ticker: str, bars) -> dict[str, Any] | None:
+    """把 880/881 板块指数的最近两根日线装配成与个股同形的 quote dict。
 
-    `quotes()` 按 `_TDX_MAX_BATCH` 分块拉取，再逐票拉一根日线定交易日
-    （停牌个股的交易日各自正确）。整体持锁串行，21 只票约 1 秒。
+    板块指数不在 quotes() 快照覆盖内：取最近两根日线，末根当「最新」、
+    倒数第二根收盘当「昨收」。盘中 index_bars 末根即当日实时（与个股 bars 同）。
+    volume 为板块内成分合计（通达信口径），与个股的「手」不同口径。
+    """
+    if bars is None or bars.empty or len(bars) < 1:
+        return None
+    last = bars.iloc[-1]
+    price = _to_float(last.get("close"))
+    if price is None or price <= 0:
+        return None
+    previous_close = _to_float(bars.iloc[-2].get("close")) if len(bars) >= 2 else None
+    change = (
+        round(price - previous_close, 6) if previous_close not in (None, 0) else None
+    )
+    change_pct = (
+        round(change / previous_close * 100, 6)
+        if change is not None and previous_close
+        else None
+    )
+    # 末根日期：datetime 列（"2026-11-05 15:00"）优于 year/month/day 冗余列
+    trade_date = str(last.get("datetime", ""))[:10]
+    if not trade_date or trade_date.startswith("Na"):
+        y, m, d = last.get("year"), last.get("month"), last.get("day")
+        if y and m and d:
+            trade_date = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+        else:
+            return None
+    return {
+        "symbol": ticker,
+        "price": price,
+        "change": change,
+        "changesPercentage": change_pct,
+        "previousClose": previous_close,
+        "open": _to_float(last.get("open")),
+        "dayHigh": _to_float(last.get("high")),
+        "dayLow": _to_float(last.get("low")),
+        "volume": _to_float(last.get("volume")),
+        "tradeDate": trade_date,
+        "source": "mootdx",
+    }
+
+
+def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
+    """批量取沪深 A 股/ETF 实时快照 + 880/881 板块指数日线（主源路径）。
+
+    个股/ETF 走 `quotes()` 按 `_TDX_MAX_BATCH` 分块拉取，再逐票拉一根日线定
+    交易日（停牌个股的交易日各自正确）；板块指数（.TDX）不在快照覆盖内，
+    逐个走 index_bars 取最近两根日线装 quote。整体持锁串行，21 只票约 1 秒。
     单票失败只降级那一票，不影响其它票。
     """
     codes = [t for t in tickers if is_mootdx_ticker(t)]
@@ -351,9 +420,12 @@ def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
     quotes: list[dict[str, Any]] = []
     with _MOOTDX_LOCK:
         client = _get_mootdx_client()
+        stock_codes = [c for c in codes if not c.upper().endswith(CN_INDEX_SUFFIXES)]
+        index_codes = [c for c in codes if c.upper().endswith(CN_INDEX_SUFFIXES)]
         by_code: dict[str, dict[str, Any]] = {}
         batches = [
-            codes[i : i + _TDX_MAX_BATCH] for i in range(0, len(codes), _TDX_MAX_BATCH)
+            stock_codes[i : i + _TDX_MAX_BATCH]
+            for i in range(0, len(stock_codes), _TDX_MAX_BATCH)
         ]
         for batch in batches:
             try:
@@ -367,10 +439,8 @@ def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
             by_code.update(
                 {str(row["code"]): row for _, row in snapshots.iterrows()}
             )
-        if not by_code:
-            return []
 
-        for ticker in codes:
+        for ticker in stock_codes:
             code = ticker.split(".")[0]
             row = by_code.get(code)
             if row is None:
@@ -380,6 +450,20 @@ def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
             quote = _quote_from_snapshot(ticker, dict(row), trade_date)
             if quote:
                 quotes.append(quote)
+
+        for ticker in index_codes:
+            try:
+                bars = _mootdx_call(
+                    "index_bars", symbol=ticker.split(".")[0], frequency=9, offset=2
+                )
+            except Exception as exc:  # noqa: BLE001 — 单票降级不连坐整批
+                log(f"Warning: mootdx index_bars failed for {ticker}: {exc}")
+                continue
+            quote = _index_quote_from_bars(ticker, bars)
+            if quote:
+                quotes.append(quote)
+            else:
+                log(f"Warning: mootdx index bars missing {ticker}")
     return quotes
 
 

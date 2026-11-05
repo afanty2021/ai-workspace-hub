@@ -201,7 +201,7 @@ focus_areas:
 | Tier | 监控热度 | `HOT`（重点）/ `WARM`（跟踪）/ `COLD`（基准） |
 | Hypothesis | 关联假设 | 对应 `hypothesis/` 下的假设 ID，如 `H1`、`H2` |
 
-**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。后缀必须大写。
+**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。`.TDX` 走 mootdx 板块指数日线（880/881 段通达信自编口径，如 `881075.TDX` 贵金属；volume 为板块成分合计）。后缀必须大写。
 
 ## 输出示例
 
@@ -268,7 +268,7 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 | 数据源 | 市场 | 费用 | 必要性 | env key |
 |--------|------|------|--------|---------|
-| mootdx | A 股 + ETF（.SH/.SZ） | 无 Key；TCP 7709 直连通达信 | **A 股主源**（实时快照；需装 `requirements-mootdx.txt`，`DISABLE_MOOTDX=1` 停用） | 无 |
+| mootdx | A 股 + ETF（.SH/.SZ）+ 板块指数（880/881 段 `.TDX`） | 无 Key；TCP 7709 直连通达信 | **A 股主源**（实时快照；板块指数走 index_bars 日线；需装 `requirements-mootdx.txt`，`DISABLE_MOOTDX=1` 停用） | 无 |
 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | 免费 250 次/日 / 付费 | 可选（财报、宏观等功能需要） | `FMP_API_KEY` |
 | tushare | A 股（.SH/.SZ）、港股（.HK） | 120 积分非复权日线当前 0 元；其他看权限 | A 股首备用（EOD）；港股需要 | `TUSHARE_TOKEN` |
 | Nasdaq | 美股基础行情 | 无 Key | 自动 fallback（FMP 未返回时） | 无 |
