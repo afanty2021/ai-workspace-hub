@@ -20,7 +20,10 @@ class RiskState:
         # S6-A（spec v1.2.3 §3.6）：全停从吸收态改探针重启滞回态——
         # 触发后持币 halt_wait_weeks 周（触发当周计入）→ probe_frac 仓探针
         # probe_confirm_weeks 周 → 探针期收益 ≥0 确认恢复满仓 / <0 否决回到停机，
-        # 循环不限次。触发条件只在正常态评估（滞回：探针期内不看绝对线）。
+        # 循环不限次。绝对亏损线为边沿触发（Q-20261105-05 拍板 A）：确认恢复时
+        # 若 NAV 仍 ≤0.9×锚点，绝对线解除武装（armed=False），直至 NAV 重上
+        # 0.9×锚点才重新武装、此后再跌破才再停——避免「确认次周即再停」的
+        # level 触发循环（深熊中恢复满仓只活 1 周）。
         # 默认参数 = 选择窗网格冻结值（N=13/f=0.5/M=4，spec §6.3 2026-11-05），
         # 取代草案先验 N=8——引擎默认行为与预注册参数保持一致。
         self.spec = spec
@@ -41,6 +44,7 @@ class RiskState:
         self.probe_weeks = 0                    # S6-A：当前探针期已过周数
         self.halt_events: list[str] = []        # S6-A：触发日志（friday 列表）
         self.halt_rejects = 0                   # S6-A：探针否决次数
+        self.armed = True                       # S6-A：绝对线武装（Q-20261105-05 边沿触发）
         self.start_nav: float | None = None
         self.ytd_high = 0.0
         self.ytd_year: int | None = None
@@ -57,7 +61,9 @@ class RiskState:
             self.ytd_year, self.ytd_high = year, nav
         self.ytd_high = max(self.ytd_high, nav)
         probe_scale = 1.0
-        if not self.halted and nav <= self.start_nav * 0.90:
+        if not self.armed and nav > self.start_nav * 0.90:
+            self.armed = True                   # S6-A 边沿：NAV 收复锚点线 → 绝对线重新武装
+        if not self.halted and self.armed and nav <= self.start_nav * 0.90:
             self.halted = True                  # 组合绝对亏损 ≥10% → 停机（S6-A 滞回态）
             self.halt_events.append(wf.fridays[t])
         if self.halted:
@@ -71,6 +77,8 @@ class RiskState:
                 if nav >= self.probe_nav0:      # 探针期收益 ≥0 → 确认，本周恢复满仓
                     self.halted, self.probing = False, False
                     self.wait_weeks = 0
+                    # 确认时已收复锚点线（>0.9×start）→ 保持武装；仍在线下 → 解除武装直至收复
+                    self.armed = nav > self.start_nav * 0.90
                 else:                           # 否决 → 回到停机等待（循环不限次）
                     self.halted, self.probing = True, False
                     self.wait_weeks = 1         # 否决当周计为新周期第 1 周（与触发当周同口径）

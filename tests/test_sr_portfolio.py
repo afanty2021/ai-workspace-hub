@@ -151,3 +151,84 @@ def test_probe_params_invariant_when_never_halted():
         outs.append([rs.apply(t, wf, {0: 0.4, 3: 0.6}, None, nav=1.0 + 0.001 * t)
                      for t in range(6)])
     assert outs[0] == outs[1]
+
+
+def test_probe_defaults_frozen():
+    """评审 I-4：引擎默认 = spec §6.3 选择窗网格冻结值（N=13/f=0.5/M=4）。
+    默认值即预注册参数载体（对照/压力档走 run_walkforward 内部默认构造），
+    改动必须随 spec 预注册行同步，本断言防静默漂移。"""
+    rs = RiskState(SPEC)
+    assert (rs.halt_wait_weeks, rs.probe_frac,
+            rs.probe_confirm_weeks) == (13, 0.5, 4)
+
+
+def test_probe_frac_distinct_from_halved_scale():
+    """评审 I-6（M4 变异存活）：探针敞口与回撤减半是两个独立状态。
+    f=0.25 且探针周 halved=True（避开与 f=0.5 的数值碰撞盲区）——
+    探针周仓位必须 0.5×0.25=0.125；若探针优先级被删（退化成 halved
+    的 0.5），将得 0.25 → 本用例红。"""
+    rs = RiskState(SPEC, halt_wait_weeks=4, probe_frac=0.25, probe_confirm_weeks=2)
+    wf = _wf16()
+    rs.apply(0, wf, {0: 0.5}, None, nav=1.00)
+    rs.apply(1, wf, {0: 0.5}, {0: 0.01}, nav=0.89)        # 触发（0.89 ≤ 0.90）
+    for t in range(2, 5):                                 # 持币 2..4/4
+        rs.apply(t, wf, {0: 0.5}, None, nav=0.89)
+    got = rs.apply(5, wf, {0: 0.5}, None, nav=0.89)       # 探针 1/2
+    assert got == {0: 0.125} and rs.probing and rs.halved  # 探针优先级 > halved
+
+
+def test_probe_confirm_boundary_exact_zero():
+    """评审 I-6（M5 变异存活）：判据周 nav == probe_nav0（探针期累计收益恰为 0）
+    → 按 spec §3.6「≥0」语义确认恢复；若判据变异成严格 >，此路径错否决。"""
+    rs = RiskState(SPEC, halt_wait_weeks=4, probe_frac=0.5, probe_confirm_weeks=2)
+    wf = _wf16()
+    rs.apply(0, wf, {0: 0.5}, None, nav=1.00)
+    rs.apply(1, wf, {0: 0.5}, {0: 0.01}, nav=0.85)        # 触发（probe_nav0 将取 0.85）
+    for t in range(2, 5):
+        rs.apply(t, wf, {0: 0.5}, None, nav=0.85)         # 持币 2..4/4
+    assert rs.apply(5, wf, {0: 0.5}, None, nav=0.85) == {0: 0.25}   # 探针 1/2
+    rs.apply(6, wf, {0: 0.5}, None, nav=0.85)             # 探针 2/2（持平）
+    got = rs.apply(7, wf, {0: 0.5}, None, nav=0.85)       # 收益恰 0 → 确认
+    assert got == {0: 0.25} and not rs.halted and not rs.probing
+
+
+def test_confirm_below_line_disarms_until_recover():
+    """Q-20261105-05 拍板 A（边沿触发）：探针确认时 NAV 仍 ≤0.9×锚点 →
+    绝对线解除武装（次周不再触发，恢复持续活跃）；NAV 重上锚点线 → 重新武装；
+    此后再跌破 → 才再停。替代 level 触发（确认次周即再停的 18 周循环，
+    深熊中「恢复满仓」只活 1 周——评审 I-1 实测对靶复现后用户拍板弃用）。"""
+    rs = RiskState(SPEC, halt_wait_weeks=4, probe_frac=0.5, probe_confirm_weeks=2)
+    wf = _wf(np.full((11, 4), 1.0), np.full((11, 4), 1.01), np.full((11, 4), 1.0),
+             fridays=[f"2021-04-{d:02d}" for d in range(1, 12)])
+    rs.apply(0, wf, {0: 0.5}, None, nav=1.00)             # start_nav=1.00，线=0.90
+    rs.apply(1, wf, {0: 0.5}, {0: 0.01}, nav=0.80)        # 触发 #1
+    for t in range(2, 5):
+        rs.apply(t, wf, {0: 0.5}, None, nav=0.80)         # 持币 2..4/4
+    assert rs.apply(5, wf, {0: 0.5}, None, nav=0.80) == {0: 0.25}   # 探针 1/2
+    rs.apply(6, wf, {0: 0.5}, None, nav=0.81)             # 探针 2/2
+    got = rs.apply(7, wf, {0: 0.5}, None, nav=0.82)       # 0.80→0.82 ≥0 确认（仍 <0.90）
+    assert got == {0: 0.25} and not rs.halted and not rs.armed   # 解除武装
+    got = rs.apply(8, wf, {0: 0.5}, None, nav=0.82)       # 次周仍在线下 → 不再停
+    assert got == {0: 0.25} and not rs.halted and len(rs.halt_events) == 1
+    got = rs.apply(9, wf, {0: 0.5}, None, nav=0.95)       # 收复锚点线 → 重新武装
+    assert got == {0: 0.25} and rs.armed and not rs.halted  # 0.95<年内高点 1.00 仍半仓；armed 已 True
+    got = rs.apply(10, wf, {0: 0.5}, None, nav=0.88)      # 此后再跌破 → 再停 #2
+    assert got == {} and rs.halted and len(rs.halt_events) == 2
+
+
+def test_ytd_high_resets_across_year_during_halt():
+    """评审 Minor：停机期跨年 ytd_high 重置——新年首周 nav 成为年内高点基准，
+    确认周 nav ≥ 新 ytd_high 时直接满仓（而非被旧年高点的减半规则接手）。"""
+    fridays = ["2021-12-17", "2021-12-24", "2021-12-31",
+               "2022-01-07", "2022-01-14", "2022-01-21"]
+    wf = _wf(np.full((6, 4), 1.0), np.full((6, 4), 1.01), np.full((6, 4), 1.0),
+             fridays=fridays)
+    rs = RiskState(SPEC, halt_wait_weeks=2, probe_frac=0.5, probe_confirm_weeks=2)
+    rs.apply(0, wf, {0: 0.5}, None, nav=1.00)             # 2021 高点 1.00
+    rs.apply(1, wf, {0: 0.5}, {0: 0.01}, nav=0.85)        # 触发
+    rs.apply(2, wf, {0: 0.5}, None, nav=0.85)             # 持币 2/2
+    assert rs.apply(3, wf, {0: 0.5}, None, nav=0.85) == {0: 0.25}   # 探针 1/2（跨年首周）
+    assert rs.ytd_year == 2022 and rs.ytd_high == 0.85    # ytd_high 已按新年重置
+    rs.apply(4, wf, {0: 0.5}, None, nav=0.86)             # 探针 2/2
+    got = rs.apply(5, wf, {0: 0.5}, None, nav=0.86)       # 0.85→0.86 ≥0 确认
+    assert got == {0: 0.5} and not rs.halved              # 0.86 ≥ 新高点 0.86 → 满仓
