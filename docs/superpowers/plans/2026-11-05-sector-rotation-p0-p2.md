@@ -2982,7 +2982,7 @@ git commit -m "feat(sector-rotation): 周信号工具 + README + 全量回归绿
    - **C6** `render_report(level=…)` 矩阵键 → T11 + L1/L2 键路径测试；
    - **C7** 决策期/执行期双 valid（`dvalid`）→ T4 双口径 + T15 `replace(wf, valid=wf.dvalid)`；附带修复 T4 fixture 日期区间盖不到决策周的同类矛盾（评审未列、修复中发现）；
    - **C8** 簇代测试改为 g+2 口径（实现不动，避免 I-4 泄漏）→ T1 测试 + T9 默认 friday ≥2021；
-   - **C9** OOS 边界 = max(2019-06 首周, 覆盖率 80% 首周) + `--pre-oos` 选择窗 + 动态 `power_note(√(370/n))` + 实施记录回写 → GC 12 + T10 `oos_start/end` + T11；
+   - **C9** OOS 边界 = max(2019-06 首周, coverage 起点（S5 后口径：可用行业绝对数 ≥50 首周）) + `--pre-oos` 选择窗 + 动态 `power_note(√(370/n))` + 实施记录回写 → GC 12 + T10 `oos_start/end` + T11（终审 Minor 3 修正：原文"覆盖率 80% 首周"为 S5 前陈旧口径）；
    - **I1** 预注册从 T3 挪到 T11 两段式 → T3 Step 6 只留 review-queue + 停等（I8 一并）；
    - **I2** 风控六条补全（回撤 ≥8% 半仓、绝对亏损 ≥10% 全停）→ T9 `nav` 参数 + 测试；
    - **I3** `--lookback`（排名回看）与 `--window`（特征窗 N，spec 网格 {8,13,26,52}）分离 + T14 网格探索性跑；
