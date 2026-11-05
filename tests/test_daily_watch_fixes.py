@@ -397,10 +397,32 @@ class FallbackDegradationMetaTests(unittest.TestCase):
             result = fmd.fetch_fallback_quote(
                 {"ticker": "^TNX", "market": "INDEX"}, {"DISABLE_MOOTDX": "1"}, degs)
         self.assertEqual(result, quote)
+        # 链序（2026-11-05 重排）：东财环球（实时）在 FRED（T+1）之前
         self.assertEqual(
             [(d["ticker"], d["source_tried"], d["reason"], d["fallback"]) for d in degs],
             [("^TNX", "nasdaq", "returned no data", "nasdaq-index"),
-             ("^TNX", "nasdaq-index", "returned no data", "fred")])
+             ("^TNX", "nasdaq-index", "returned no data", "eastmoney-global"),
+             ("^TNX", "eastmoney-global", "returned no data", "sina-global"),
+             ("^TNX", "sina-global", "returned no data", "fred")])
+
+    def test_eastmoney_global_hits_before_fred_for_tnx(self) -> None:
+        # ^TNX 实时优先：东财环球命中时 FRED（T+1）不该被触发
+        import fetch_market_data as fmd
+
+        degs: list[dict] = []
+        quote = {"symbol": "^TNX", "price": 4.87, "source": "eastmoney-global"}
+        with patch.object(fmd, "fetch_nasdaq_quote", return_value=None), \
+             patch.object(fmd, "fetch_nasdaq_index_quote", return_value=None), \
+             patch.object(fmd, "fetch_eastmoney_global_quote", return_value=quote), \
+             patch.object(fmd, "fetch_fred_series_quote") as mock_fred:
+            result = fmd.fetch_fallback_quote(
+                {"ticker": "^TNX", "market": "INDEX"}, {"DISABLE_MOOTDX": "1"}, degs)
+        self.assertEqual(result, quote)
+        # 东财之前的失败环照常记录；东财命中后链停止，FRED 不再被试
+        self.assertEqual(
+            [(d["source_tried"], d["fallback"]) for d in degs],
+            [("nasdaq", "nasdaq-index"), ("nasdaq-index", "eastmoney-global")])
+        mock_fred.assert_not_called()
 
     def test_inner_exception_reason_is_captured(self) -> None:
         # fetcher 内部吞掉的异常原因（_note_fetch_failure）优先于笼统 "returned no data"

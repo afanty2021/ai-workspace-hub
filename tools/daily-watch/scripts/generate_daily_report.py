@@ -925,7 +925,8 @@ def apply_hypothesis_updates(
 # ticker 名义来源与真实交付源不同时，读者需要在这里看到，而不是翻 README。
 SOURCE_CALIBER_NOTES = {
     "HG=F": "交付口径为 LME 三月铜（USD/吨）；ticker 名义是 COMEX 铜（USD/磅），两者价位差约 4 倍",
-    "^TNX": "FRED DGS10 官方序列，T+1 发布",
+    "^TNX": "美十债收益率实时快照（东财 171.US10Y；FRED DGS10 T+1 降级备用）",
+    "NQ00Y": "小型纳指当月连续期货实时快照（东财 103.NQ00Y，CME E-mini Nasdaq 100；24 小时交易，日报时点为最新成交）",
     "XAUUSD=X": "现货金（伦敦金），USD/盎司",
     "DX-Y.NYB": "ICE 美元指数（DINIW 口径）",
     "000660.KS": "KRW 计价；EOD 源为收盘价非实时",

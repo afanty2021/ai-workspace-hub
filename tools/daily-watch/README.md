@@ -278,14 +278,14 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | 腾讯 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（东财之后） | 无 |
 | 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
-| FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 自动 fallback；官方 H.15 序列，T+1 | 无 |
+| FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 降级备用（主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |
 | 东财环球 | 韩股（000660.KS → 177.000660）、LME 伦铜（HG=F → 109.LCPT）、纳指/费半备源（100.NDX / 251.SOX） | 无 Key | 自动 fallback（映射制；反爬间歇断连时落到新浪环球 / yfinance） | 无 |
 | 新浪环球 | 美元指数（DX-Y.NYB）、伦敦金（XAUUSD=X）、伦铜备用（hf_CAD = LME 三月铜） | 无 Key | 自动 fallback（映射制） | 无 |
 | yfinance | 多市场 | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
-**取数顺序**：A 股主源是 mootdx（批量实时快照，服务器逐台真实取数验证，全网不可用时记 5 分钟负缓存快速失败）。单只票主源未返回时按链降级：Nasdaq → Finnhub → EOD → Nasdaq 指数 / FRED / 东财环球 / 新浪环球（映射制）→ mootdx（按票重试）→ tushare → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（mootdx / Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
+**取数顺序**：A 股主源是 mootdx（批量实时快照，服务器逐台真实取数验证，全网不可用时记 5 分钟负缓存快速失败）。单只票主源未返回时按链降级：Nasdaq → Finnhub → EOD → Nasdaq 指数 / 东财环球 / 新浪环球 / FRED（映射制；2026-11-05 起东财环球排在 FRED 之前——^TNX 实时快照优先于 T+1 官方序列）→ mootdx（按票重试）→ tushare → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（mootdx / Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
 
 **海外与宏观 ticker 口径**：watchlist 统一写 Yahoo 风格逻辑 ticker（`^IXIC`、`^TNX`、`DX-Y.NYB`、`XAUUSD=X`、`HG=F`、`000660.KS`），脚本内映射表转换为各源的代码（如 COMP/SOX、DGS10、DINIW、hf_XAU、hf_CAD、东财 `177.000660`）；yfinance 恢复可用时同一 ticker 直接复用。
 

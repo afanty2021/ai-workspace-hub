@@ -847,7 +847,8 @@ def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
 # Eastmoney serves global venues under their own market numbers; the secids
 # below came from eastmoney's own suggest API (QuoteID) and each was verified
 # live against an independent feed on 2026-10-31 (SOX/IXIC == nasdaq.com,
-# LCPT == sina hf_CAD, 000660 pct == SKHY ADR move).
+# LCPT == sina hf_CAD, 000660 pct == SKHY ADR move) — ^TNX/NQ00Y verified live
+# 2026-11-05 (US10Y 4.8777 vs FRED T+1 4.95 direction, NQ realtime ts).
 # Keyed by the FULL ticker on purpose: stripping suffixes would collide KR
 # 000660 (SK hynix) with CN 000660.SZ (铜陵有色).
 EASTMONEY_GLOBAL_SYMBOLS = {
@@ -855,6 +856,8 @@ EASTMONEY_GLOBAL_SYMBOLS = {
     "HG=F": "109.LCPT",         # LME copper 3M (综合铜03)
     "^SOX": "251.SOX",          # PHLX semiconductor, backup to the nasdaq API
     "^IXIC": "100.NDX",         # eastmoney's NDX is the composite, not NASDAQ-100
+    "^TNX": "171.US10Y",        # 美国10年期国债收益率，实时（FRED 是 T+1 官方序列，降级备用）
+    "NQ00Y": "103.NQ00Y",       # 小型纳指当月连续（CME E-mini Nasdaq 100 期货），实时
 }
 
 
@@ -979,12 +982,15 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
         chain.append(("eod", lambda: fetch_eod_quote(ticker, market, eod_key)))
 
     chain.append(("nasdaq-index", lambda: fetch_nasdaq_index_quote(ticker, market)))
-    chain.append(("fred", lambda: fetch_fred_series_quote(ticker, market)))
 
+    # Eastmoney global before FRED: ^TNX 东财 171.US10Y 是实时快照，FRED DGS10
+    # 是 T+1 官方序列——实时优先（2026-11-05 用户拍板），FRED 只当东财反爬断连
+    # 时的兜底。其余映射票行为不变（fred 对它们本就无映射，试一环空跑而已）。
     # Eastmoney before Sina: fresher prev-close reference for LME; Sina stays
     # as the resilient fallback when eastmoney's anti-bot drops the request.
     chain.append(("eastmoney-global", lambda: fetch_eastmoney_global_quote(ticker, market)))
     chain.append(("sina-global", lambda: fetch_sina_global_quote(ticker, market)))
+    chain.append(("fred", lambda: fetch_fred_series_quote(ticker, market)))
 
     # Mootdx per-ticker retry ahead of tushare: recovers individual misses from
     # the batch path. When mootdx is unavailable this fails fast (negative
