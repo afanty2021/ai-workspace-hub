@@ -90,3 +90,64 @@ def test_consecutive_loss_weeks_pause():
     for t in range(4):
         out = rs.apply(t, wf, {0: 0.5}, {0: -0.01})
     assert out == {}
+
+
+# ---- S6-A 探针重启（spec v1.2.3 §3.6：全停从吸收态改滞回态）----
+
+FRIDAYS16 = [f"2021-01-{d:02d}" for d in range(1, 10)] + [f"2021-01-{d:02d}" for d in range(10, 17)]
+
+
+def _wf16():
+    return _wf(np.full((16, 4), 1.0), np.full((16, 4), 1.01), np.full((16, 4), 1.0),
+               fridays=FRIDAYS16)
+
+
+def test_halt_probe_restart_confirms():
+    """触发 → N=8 周持币 → f=0.5 探针 M=4 周 → 探针期收益 ≥0 确认。
+    确认后回到常规风控域：仍低于年内高点 → 回撤减半规则接手（0.5 仓），
+    创新高后恢复满仓（§3.6 级联）。"""
+    rs = RiskState(SPEC, halt_wait_weeks=8, probe_frac=0.5, probe_confirm_weeks=4)
+    wf = _wf16()
+    assert rs.apply(0, wf, {0: 0.5}, None, nav=1.00) == {0: 0.5}      # 正常
+    assert rs.apply(1, wf, {0: 0.5}, {0: 0.01}, nav=0.89) == {}       # 触发（当周计入持币 1/8）
+    for t in range(2, 9):                                             # 持币 2..8/8 周
+        assert rs.apply(t, wf, {0: 0.5}, None, nav=0.88) == {}
+    got = rs.apply(9, wf, {0: 0.5}, None, nav=0.88)                   # 第 9 周 = 探针第 1 周
+    assert got == {0: 0.25} and rs.probing                            # f=0.5 缩放（探针期不看绝对线）
+    for t, nav in ((10, 0.885), (11, 0.89), (12, 0.90)):              # 探针 2..4 周（滞回态）
+        assert rs.apply(t, wf, {0: 0.5}, None, nav=nav) == {0: 0.25}
+    got = rs.apply(13, wf, {0: 0.5}, None, nav=0.93)                  # 探针期 0.88→0.93 ≥0 确认
+    assert got == {0: 0.25} and not rs.halted and not rs.probing      # 停机解除；减半规则接手
+    assert rs.halved
+    got = rs.apply(14, wf, {0: 0.5}, None, nav=1.01)                  # 创年内新高 → 满仓
+    assert got == {0: 0.5} and not rs.halved
+    assert rs.halt_events == ["2021-01-02"]                           # 触发日志恰一条
+
+
+def test_halt_probe_restart_rejects_and_recycles():
+    """探针 M 周收益 <0 → 否决回停机，重走 N 周等待后可再次探针（循环不限次）。"""
+    rs = RiskState(SPEC, halt_wait_weeks=4, probe_frac=0.5, probe_confirm_weeks=2)
+    wf = _wf16()
+    rs.apply(0, wf, {0: 0.5}, None, nav=1.00)
+    rs.apply(1, wf, {0: 0.5}, {0: 0.01}, nav=0.85)                    # 触发
+    for t in range(2, 5):                                             # 持币 2..4/4
+        rs.apply(t, wf, {0: 0.5}, None, nav=0.85)
+    assert rs.apply(5, wf, {0: 0.5}, None, nav=0.85) == {0: 0.25}     # 探针 1/2
+    assert rs.apply(6, wf, {0: 0.5}, None, nav=0.84) == {0: 0.25}     # 探针 2/2（跌）
+    got = rs.apply(7, wf, {0: 0.5}, None, nav=0.83)                   # 0.85→0.83 <0 否决
+    assert got == {} and rs.halted and not rs.probing and rs.halt_rejects == 1
+    for t in range(8, 11):                                            # 第二轮持币
+        rs.apply(t, wf, {0: 0.5}, None, nav=0.83)
+    assert rs.apply(11, wf, {0: 0.5}, None, nav=0.83) == {0: 0.25}    # 再次探针（循环不限次）
+
+
+def test_probe_params_invariant_when_never_halted():
+    """从未触发的路径与 (N, f, M) 参数无关——网格选择只对触发格有区分度。"""
+    wf = _wf(np.full((6, 4), 1.0), np.full((6, 4), 1.01), np.full((6, 4), 1.0),
+             fridays=[f"2021-02-{d:02d}" for d in range(1, 7)])
+    outs = []
+    for kwargs in ({}, dict(halt_wait_weeks=4, probe_frac=0.25, probe_confirm_weeks=2)):
+        rs = RiskState(SPEC, **kwargs)
+        outs.append([rs.apply(t, wf, {0: 0.4, 3: 0.6}, None, nav=1.0 + 0.001 * t)
+                     for t in range(6)])
+    assert outs[0] == outs[1]
