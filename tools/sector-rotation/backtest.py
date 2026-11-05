@@ -29,12 +29,13 @@ from sector_rotation.walkforward import WalkResult, coverage_start, run_walkforw
 TIERS = {"base": CostModel.base, "stress": CostModel.stress}
 
 
-def power_note(n_oos: int) -> str:
+def power_note(n_oos: int, alpha: float = 0.1) -> str:
     """评审 C9 + spec 补钉 S3：按实际样本外周数动态生成（370 周基准 ≈5-7%）。"""
     scale = (370 / n_oos) ** 0.5 if n_oos > 0 else float("nan")
     lo, hi = 0.05 * scale, 0.07 * scale
-    return (f"功效边界：样本外 {n_oos} 周，单侧 p<0.1 稳定检出的年化 α ≈ "
-            f"{lo:.1%}-{hi:.1%}（spec §3.8 补钉 S3：随 √(370/n) 缩放，粗估）；"
+    return (f"功效边界：样本外 {n_oos} 周，单侧 p<{alpha:g} 稳定检出的年化 α ≈ "
+            f"{lo:.1%}-{hi:.1%}（spec §3.8 补钉 S3：随 √(370/n) 缩放；"
+            f"5-7% 基准按 p<0.1 口径粗估，阈值更严时上浮）；"
             f"证伪结论是「未检出 ≥{lo:.0%}/年的 α」，弱边际可能被错杀。")
 
 
@@ -43,7 +44,9 @@ def render_report(results: dict[str, WalkResult],
                   tag: str, tier_notes: dict[str, str], prereg: str,
                   exploratory: bool = False,
                   n_oos: int | None = None,
-                  diag: dict[str, float] | None = None) -> str:
+                  diag: dict[str, float] | None = None,
+                  alpha: float = 0.1,
+                  second_look: bool = False) -> str:
     lines = [f"# 板块轮动回测报告：{tag}", "",
              f"- 生成：{date.today().isoformat()} · 配置：{prereg}",
              f"- 点差档：基准 {tier_notes['base']} / 压力 {tier_notes['stress']}"
@@ -60,34 +63,42 @@ def render_report(results: dict[str, WalkResult],
         lines.append(f"| {name} | {m['cagr']:.2%} | {m['sharpe']:.2f} | "
                      f"{m['max_dd']:.2%} | {m['win_rate']:.1%} | {m['turnover']:.1f} | "
                      f"{_drag(name)} | {_drag(f'{name}·压力档')} | {int(m['cluster_binds'])} |")
-    lines += ["", "## 检验矩阵（单侧 p<0.1 判定，两档都须过）", "",
+    lines += ["", f"## 检验矩阵（单侧 p<{alpha:g} 判定，两档都须过）", "",
               "| 检验 | 基准档 p | 基准档 | 压力档 p | 压力档 |", "|---|---|---|---|---|"]
     for row in ("vs 随机", "vs 等权", "vs 沪深300", "vs L0"):
         cells = [row]                                        # C6：键用 level 参数
         for tier in ("base", "stress"):
             p = tests.get((level, row, tier))
             cells += ["—" if p is None else f"{p:.3f}",
-                      "—" if p is None else ("过" if p < 0.1 else "未过")]
+                      "—" if p is None else ("过" if p < alpha else "未过")]
         lines.append("| " + " | ".join(cells) + " |")
     if exploratory:                                          # I10：探索性不判定
         # 2026-11-05 机械适配：brief 脚注原文含「闸门」二字，与 brief 测试
         # `"闸门" not in text2` 互斥；改为同义表述，探索性文本不出现闸门字样。
         lines += ["", "> **探索性变体——只报告不判定**（spec §3.8 变体协议，不构成任何晋级判定）。"]
     else:
+        if second_look:                        # 评审 I-2：v2 二看惩罚落进引擎
+            lines += ["", "> **v2 二看惩罚（spec §3.8 v2 协议第 3 条）：本窗口已被 v1 "
+                          "消耗过一次，属同窗口第二次消费，判定阈值收紧为 p<0.05；"
+                          "若仍未过，本窗口不再有第三次消费资格。**"]
         rows = ["vs 随机", "vs 等权", "vs 沪深300"] + ([] if level == "L0" else ["vs L0"])
-        ok = all(tests.get((level, r, t), 1.0) < 0.1
+        ok = all(tests.get((level, r, t), 1.0) < alpha
                  for r in rows for t in ("base", "stress"))
         lines += ["", f"> {level} 闸门："
                   f"{'**通过，可进下一级**' if ok else '**未通过，按 spec §5 停止并写结案报告**'}"]
     if n_oos:
-        lines += ["", power_note(n_oos), ""]
+        lines += ["", power_note(n_oos, alpha), ""]
     if diag:                                            # S6-C：裸信号诊断（不判定）
+        halt_parts = [f"{ {'base': '基准', 'stress': '压力'}[tier] }档"
+                      f" 触发 {diag[f'halt_events_{tier}']} 次"
+                      f" / 探针否决 {diag[f'halt_rejects_{tier}']} 次"
+                      for tier in ("base", "stress") if f"halt_events_{tier}" in diag]
         lines += ["## 裸信号诊断（S6-C，RiskState 关闭；只诊断不判定，spec v1.2.3）", "",
-                  f"- 裸路径 CAGR {diag['bare_cagr']:+.2%} / Sharpe {diag['bare_sharpe']:.2f}"
+                  f"- 裸路径（基准档成本）CAGR {diag['bare_cagr']:+.2%}"
+                  f" / Sharpe {diag['bare_sharpe']:.2f}"
                   f" / MaxDD {diag['bare_max_dd']:.2%}——归因用：裸路径差 = 信号无边际；"
                   "裸路径好而闸门路径差 = 风控侵蚀边际。",
-                  f"- 闸门路径 halt 统计：触发 {diag['halt_events']} 次"
-                  f" / 探针否决 {diag['halt_rejects']} 次（S6-A 滞回态）。", ""]
+                  f"- 闸门路径 halt 统计（S6-A 滞回态）：{'；'.join(halt_parts)}。", ""]
     return "\n".join(lines)
 
 
@@ -109,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="稳健切片，如 2024-09-01:2024-12-31（I7）")
     ap.add_argument("--exploratory", action="store_true",
                     help="探索性变体：只报告不判定（I10）")
+    ap.add_argument("--second-look", action="store_true",
+                    help="v2 二看惩罚：同窗口第二次消费，判定阈值 p<0.1→p<0.05"
+                         "并标注（spec §3.8 v2 协议第 3 条；评审 I-2）")
     ap.add_argument("--universe", type=Path,
                     default=REPO_ROOT / "config/sector-rotation-universe.md")
     ap.add_argument("--out", type=Path, default=REPO_ROOT / "output/sector-rotation")
@@ -140,8 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     tests: dict[tuple[str, str, str], float] = {}
     results: dict[str, WalkResult] = {}
     n_oos = 0
-    main_strat = _l0 if args.level == "L0" else None      # S6-C：裸诊断用主策略引用
-    gate_risk = None                                      # S6-C：基准档主策略 halt 统计
+    main_strat = None                                     # S6-C：裸诊断用主策略引用
+    gate_risks: dict[str, RiskState] = {}                 # S6-C：两档主策略 halt 统计（评审 I-5）
     for tier in tiers:
         cost = TIERS[tier]()
         strategies = {
@@ -158,9 +172,12 @@ def main(argv: list[str] | None = None) -> int:
             else f"L0-{args.direction}-lb{args.lookback}"
         tier_res = {}
         for n, s in strategies.items():
-            if n == main_name and tier == "base":         # S6-C：自持 RiskState 读 halt 统计
-                gate_risk = RiskState(spec)
-                tier_res[n] = run_walkforward(wf, s, cost=cost, risk=gate_risk, **run_kw)
+            if n == main_name and tier in ("base", "stress"):
+                # S6-C：主策略自持 RiskState 读 halt 统计（参数=引擎默认=冻结值，
+                # 与 run_walkforward 内部默认构造行为完全一致，纯为读取统计）
+                gate_risks[tier] = RiskState(spec)
+                tier_res[n] = run_walkforward(wf, s, cost=cost,
+                                              risk=gate_risks[tier], **run_kw)
             else:
                 tier_res[n] = run_walkforward(wf, s, cost=cost, **run_kw)
         main_strat = strategies[main_name]
@@ -185,15 +202,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             results.update({f"{n}·压力档": r for n, r in tier_res.items()})
     diag = None
-    if "base" in tiers and main_strat is not None and gate_risk is not None:
+    if "base" in tiers and main_strat is not None and "base" in gate_risks:
         # S6-C：裸信号诊断（RiskState 关闭，spec v1.2.3 §3.8 v2 协议第 2 条）——
         # 只诊断不判定；裸路径差=信号无边际，裸路径好而闸门路径差=风控侵蚀边际。
         bare = run_walkforward(wf, main_strat, cost=CostModel.base(),
                                risk=RiskState(spec, enabled=False), **run_kw)
         diag = {"bare_cagr": bare.metrics["cagr"], "bare_sharpe": bare.metrics["sharpe"],
-                "bare_max_dd": bare.metrics["max_dd"],
-                "halt_events": len(gate_risk.halt_events),
-                "halt_rejects": gate_risk.halt_rejects}
+                "bare_max_dd": bare.metrics["max_dd"]}
+        for tier, rk in gate_risks.items():               # 评审 I-5：两档各自披露
+            diag[f"halt_events_{tier}"] = len(rk.halt_events)
+            diag[f"halt_rejects_{tier}"] = rk.halt_rejects
     # 修根（2026-11-05，阶段 A 实测）：tag 必须含 direction——momentum/reversal 同
     # k·lb 的两格会写同一文件名互相覆盖（brief 原 tag 只到 lb）。方向维度进文件名。
     tag = f"{args.level}-{args.direction}-k{args.k}-lb{args.lookback}"
@@ -207,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     text = render_report(results, tests, level=args.level, tag=tag,
                          tier_notes={"base": "10bp", "stress": "20bp"},
                          prereg=prereg, exploratory=args.exploratory,
-                         n_oos=None if args.pre_oos else n_oos, diag=diag)
+                         n_oos=None if args.pre_oos else n_oos, diag=diag,
+                         alpha=0.05 if args.second_look else 0.1,
+                         second_look=args.second_look)
     start_row = run_kw.get("start", start)
     if args.pre_oos:  # 终审 Should-fix 2：选择窗不是 OOS，功效注释不适用
         oos_note = (f"选择窗 {wf.fridays[start_row]} → {wf.fridays[run_kw['end'] - 1]}"
