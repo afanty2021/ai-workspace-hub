@@ -295,17 +295,24 @@ def render_other_movers(
 def render_earnings_sections(
     earnings: list[dict[str, Any]], enabled: bool, status: dict[str, Any] | None = None
 ) -> tuple[str, str]:
+    """财报跟踪两张表：已披露 / 待披露。行形状兼容两路源——
+
+    - 东财预约披露（A 股，source=eastmoney-disclosure）：reportDate/appointDate/
+      actualDate/daysUntil，无 EPS；
+    - FMP earning_calendar（美股）：date/eps/epsEstimated。
+    表格统一为「代码｜日期｜报告期｜备注」，EPS 细节进备注，不再分设两张表头。
+    """
     reported_rows = [
-        "| 代码 | 日期 | 预期 EPS | 实际 EPS | Surprise | 市场反应 |",
-        "|------|------|----------|----------|----------|----------|",
+        "| 代码 | 名称 | 报告期 | 日期 | 备注 |",
+        "|------|------|--------|------|------|",
     ]
     upcoming_rows = [
-        "| 代码 | 日期 | 预期 EPS |",
-        "|------|------|----------|",
+        "| 代码 | 名称 | 报告期 | 预约披露日 | 备注 |",
+        "|------|------|--------|------------|------|",
     ]
     if not enabled:
-        reported_rows.append("| 模块关闭 | N/A | N/A | N/A | N/A | 财报模块已关闭 |")
-        upcoming_rows.append("| 模块关闭 | N/A | N/A |")
+        reported_rows.append("| 模块关闭 | N/A | N/A | N/A | 财报模块已关闭 |")
+        upcoming_rows.append("| 模块关闭 | N/A | N/A | N/A |")
         return "\n".join(reported_rows), "\n".join(upcoming_rows)
 
     if status is not None and status.get("state") != "ok":
@@ -314,34 +321,49 @@ def render_earnings_sections(
                   "disabled": "财报模块已关闭"}.get(status.get("state"), "财报数据状态未确认")
         return f"> {reason}", f"> {reason}"
 
-    if earnings:
-        for item in earnings[:10]:
-            actual_eps = item.get("eps")
-            estimated_eps = item.get("epsEstimated")
+    cn_rows = [e for e in earnings if e.get("source") == "eastmoney-disclosure"]
+    fmp_rows = [e for e in earnings if e.get("source") != "eastmoney-disclosure"]
+
+    for item in cn_rows:
+        remark = f"预约 {item['appointDate']}" if item.get("appointDate") else ""
+        if item.get("actualDate"):
+            reported_rows.append(
+                f"| {item['ticker']} | {item['name']} | {item.get('reportTypeName') or item.get('reportDate') or 'N/A'} | "
+                f"{item['actualDate']} | {remark} |"
+            )
+        else:
+            days = item.get("daysUntil")
+            flag = "（本周）" if isinstance(days, int) and 0 <= days <= 7 else ""
+            upcoming_rows.append(
+                f"| {item['ticker']} | {item['name']} | {item.get('reportTypeName') or item.get('reportDate') or 'N/A'} | "
+                f"{item.get('appointDate') or 'N/A'} | 距今 {days if isinstance(days, int) else 'N/A'} 天{flag} |"
+            )
+
+    for item in fmp_rows[:6]:
+        actual_eps = item.get("eps")
+        estimated_eps = item.get("epsEstimated")
+        if actual_eps is not None:
             surprise = (
                 format_num(actual_eps - estimated_eps, digits=2)
-                if isinstance(actual_eps, (int, float))
-                and isinstance(estimated_eps, (int, float))
-                else "N/A"
+                if isinstance(estimated_eps, (int, float)) else "N/A"
             )
-            if actual_eps is not None:
-                estimated = estimated_eps if estimated_eps is not None else "N/A"
-                reported_rows.append(
-                    f"| {item['ticker']} | {item.get('date') or 'N/A'} | {estimated} | "
-                    f"{actual_eps} | {surprise} | 用 WebSearch 补充市场反应 |"
-                )
-            else:
-                estimated = estimated_eps if estimated_eps is not None else "N/A"
-                upcoming_rows.append(
-                    f"| {item['ticker']} | {item.get('date') or 'N/A'} | {estimated} |"
-                )
+            reported_rows.append(
+                f"| {item['ticker']} | {item['name']} | N/A | {item.get('date') or 'N/A'} | "
+                f"EPS 实际 {actual_eps} / 预期 {estimated_eps if estimated_eps is not None else 'N/A'}"
+                f"（surprise {surprise}），市场反应用 WebSearch 补充 |"
+            )
+        else:
+            upcoming_rows.append(
+                f"| {item['ticker']} | {item['name']} | N/A | {item.get('date') or 'N/A'} | "
+                f"预期 EPS {estimated_eps if estimated_eps is not None else 'N/A'} |"
+            )
 
     if len(reported_rows) == 2:
         reported_rows.append(
-            "| 暂无 | N/A | N/A | N/A | N/A | 当前没有已披露财报条目 |"
+            "| 暂无 | N/A | N/A | N/A | 当前没有已披露财报条目 |"
         )
     if len(upcoming_rows) == 2:
-        upcoming_rows.append("| 暂无 | N/A | N/A |")
+        upcoming_rows.append("| 暂无 | N/A | N/A | N/A |")
     return "\n".join(reported_rows), "\n".join(upcoming_rows)
 
 

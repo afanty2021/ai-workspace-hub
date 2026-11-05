@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
@@ -31,6 +32,13 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+EM_DC_BASE_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+# 东财 datacenter 反爬：无 UA/Referer 直接静默断连（空响应体，非错误码）；
+# 且偶发在带头的请求上抖动，重试一次通常即好（2026-11-05 接预约披露日历时实测）。
+EM_DC_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://data.eastmoney.com/",
+}
 DEFAULT_TIMEOUT = 20
 DEFAULT_THRESHOLDS = {
     "large_cap_move": 3.0,
@@ -1170,6 +1178,143 @@ def fetch_earnings_calendar(
     return results
 
 
+def _merge_earnings_status(
+    earnings: list[dict[str, Any]],
+    fmp_status: dict[str, Any],
+    cn_status: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """合并 FMP（美股）与东财（A 股）两路财报日历的状态：任一 ok 即 ok。
+
+    sources 声明实际生效的通道；两路都不可用时保留更具体的状态（not_configured
+    优于 failed——前者提示配置而非故障）。
+    """
+    ok_sources = [
+        name for name, st in (("fmp", fmp_status), ("eastmoney-disclosure", cn_status))
+        if st.get("state") == "ok"
+    ]
+    if ok_sources:
+        fmp_state, cn_state = fmp_status.get("state"), cn_status.get("state")
+        fmp_status.clear()
+        fmp_status.update(
+            state="ok", sources=ok_sources,
+            fmp=fmp_state, cn=cn_state,
+            cn_count=sum(1 for row in earnings if row.get("source") == "eastmoney-disclosure"),
+        )
+        return earnings
+    states = (fmp_status.get("state"), cn_status.get("state"))
+    # failed 优先于 not_configured：FMP 没 Key（not_configured）+ 东财拉取失败
+    # 时，唯一可用通道是故障而非未配置，报 failed 才不误导。
+    merged = "failed" if "failed" in states else (
+        "not_configured" if "not_configured" in states else states[0]
+    )
+    fmp_status.clear()
+    fmp_status.update(state=merged, sources=ok_sources)
+    return earnings
+
+
+def fetch_cn_disclosure_calendar(
+    watchlist_map: dict[str, dict[str, str]],
+    status: dict[str, Any] | None = None,
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    """A 股预约披露日历（东财 datacenter RPT_PUBLIC_BS_APPOIN，无 Key）。
+
+    按 watchlist 代码 `in` 过滤 + 预约披露窗口（今天-40 ~ 今天+35：回看 40 天
+    覆盖刚过去的披露高峰——Q3 季里有票 10-17 就披露，回看 10 天在季末会切掉
+    整批；前瞻 35 天覆盖年报预约季）一次查询。不用全市场窗口再交集——Q3
+    收官季窗口内全市场 4,700+ 行，分页才能拿全；按票过滤一次请求即可。FMP
+    earning_calendar 只覆盖美股且要 Key；tushare disclosure_date 在当前 120
+    积分档实测全零行——东财 datacenter 是 A 股无 Key 唯一可行通道。失败返回
+    空列表并把 status 标 failed（与 FMP 路径同契约）。
+    """
+    if status is not None:
+        status.update(state="failed", source="eastmoney-disclosure")
+    today = today or date.today()
+    window_start = (today - timedelta(days=40)).isoformat()
+    window_end = (today + timedelta(days=35)).isoformat()
+    cn_codes = sorted({
+        t.split(".")[0] for t in watchlist_map if t.endswith(CN_SUFFIXES)
+    })
+    if not cn_codes:
+        if status is not None:
+            status.update(state="ok", count=0, source="eastmoney-disclosure",
+                          period_start=window_start, period_end=window_end)
+        return []
+    codes_in = ",".join(f'"{c}"' for c in cn_codes)
+    url = (
+        f"{EM_DC_BASE_URL}?reportName=RPT_PUBLIC_BS_APPOIN"
+        f"&columns=SECURITY_CODE,SECURITY_NAME_ABBR,REPORT_DATE,APPOINT_PUBLISH_DATE,"
+        f"ACTUAL_PUBLISH_DATE,REPORT_TYPE_NAME,IS_PUBLISH"
+        f"&filter=(SECURITY_CODE%20in%20({codes_in}))"
+        f"(APPOINT_PUBLISH_DATE%3E%3D%27{window_start}%27)"
+        f"(APPOINT_PUBLISH_DATE%3C%3D%27{window_end}%27)"
+        f"&pageSize=100&pageNumber=1&sortColumns=APPOINT_PUBLISH_DATE&sortTypes=-1"
+    )
+
+    payload = None
+    for attempt in range(2):
+        try:
+            response = requests.get(
+                url, timeout=DEFAULT_TIMEOUT, headers=EM_DC_HEADERS
+            )
+            response.raise_for_status()
+            payload = response.json()
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 0:
+                time.sleep(1.0)
+                log(f"Warning: eastmoney disclosure calendar attempt 1 failed, retrying: {exc}")
+            else:
+                log(f"Warning: failed to fetch CN disclosure calendar: {exc}")
+    if not isinstance(payload, dict) or not payload.get("success"):
+        if payload is not None:
+            log(f"Warning: unexpected eastmoney disclosure response: {str(payload)[:200]}")
+        return []
+
+    rows = (payload.get("result") or {}).get("data") or []
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        code = str(row.get("SECURITY_CODE", "")).strip()
+        ticker = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+        if ticker not in watchlist_map:
+            continue
+        watch = watchlist_map[ticker]
+
+        def _day(value: Any) -> str | None:
+            text = str(value or "").strip()
+            return text[:10] or None
+
+        appoint = _day(row.get("APPOINT_PUBLISH_DATE"))
+        actual = _day(row.get("ACTUAL_PUBLISH_DATE"))
+        report_date = _day(row.get("REPORT_DATE"))
+        days_until = (
+            (date.fromisoformat(appoint) - today).days if appoint else None
+        )
+        results.append(
+            {
+                "ticker": ticker,
+                "name": watch["name"],
+                "market": watch["market"],
+                "category": watch["category"],
+                "reportDate": report_date,
+                "reportTypeName": str(row.get("REPORT_TYPE_NAME", "") or "") or None,
+                "appointDate": appoint,
+                "actualDate": actual,
+                "isPublished": str(row.get("IS_PUBLISH", "")) == "1",
+                "date": actual or appoint,  # 兼容渲染器按 date 排序/判已披露
+                "daysUntil": days_until,
+                "source": "eastmoney-disclosure",
+            }
+        )
+
+    results.sort(key=lambda r: (r.get("date") or "", r["ticker"]))
+    if status is not None:
+        status.update(state="ok", count=len(results),
+                      period_start=window_start, period_end=window_end,
+                      source="eastmoney-disclosure")
+    return results
+
+
 def fetch_profile(ticker: str, api_key: str) -> list[dict[str, Any]]:
     url = f"{FMP_BASE_URL}/profile/{ticker}?apikey={api_key}"
     payload = request_json(url)
@@ -1413,6 +1558,7 @@ def build_snapshot(
     ]
 
     earnings_status: dict[str, Any] = {"state": "disabled"}
+    cn_earnings_status: dict[str, Any] = {"state": "disabled"}
     quotes: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=4) as executor:
         quote_future = executor.submit(fetch_fmp_quotes, fmp_tickers, api_key, max_workers)
@@ -1424,6 +1570,13 @@ def build_snapshot(
         )
         earnings_future = (
             executor.submit(fetch_earnings_calendar, api_key, watchlist_map, earnings_status)
+            if include_earnings
+            else None
+        )
+        cn_earnings_future = (
+            executor.submit(
+                fetch_cn_disclosure_calendar, watchlist_map, cn_earnings_status
+            )
             if include_earnings
             else None
         )
@@ -1439,6 +1592,9 @@ def build_snapshot(
             mootdx_quotes = []
         tushare_quotes = tushare_future.result()
         earnings = earnings_future.result() if earnings_future else []
+        cn_earnings = cn_earnings_future.result() if cn_earnings_future else []
+        earnings = earnings + cn_earnings
+        earnings = _merge_earnings_status(earnings, earnings_status, cn_earnings_status)
 
     for raw in fmp_quotes:
         symbol = str(raw.get("symbol", "")).strip().upper()

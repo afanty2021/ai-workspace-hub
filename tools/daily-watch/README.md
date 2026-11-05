@@ -125,7 +125,7 @@ market: mixed
 # 模块开关：关闭后对应章节不会拉取数据
 modules:
   macro: true          # 宏观数据（VIX/SPY/QQQ/GLD/WTI/BTC）
-  earnings: true       # 财报日历（需要 FMP key）
+  earnings: true       # 财报日历（A 股东财预约披露无 Key；美股 FMP 要 key）
   focus_areas: true    # 重点主题
   wiki: auto           # wiki 联动
 
@@ -259,7 +259,7 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 - **宏观数据**：需要 FMP key，没有则宏观表格全部显示 `N/A`
 - **A 股 + ETF**：mootdx 无 Key 实时覆盖（需装 `requirements-mootdx.txt`）；未装或缺装时按 tushare（需 token）→ 东财/腾讯/新浪（无 Key）降级
 - **港股**：需要 tushare token，没有则对应股票无数据
-- **财报日历**：需要 FMP key，没有则财报章节为空
+- **财报日历**：A 股走东财 datacenter 预约披露（无 Key，按池内代码过滤，窗口 -40/+35 天）；美股走 FMP `earning_calendar`（要 key）。tushare `disclosure_date` 120 积分档实测不可用
 - **报告骨架**：无论有没有 key，报告文件都会生成，缺失的数据位显示 `N/A` 或 `[待补充]`
 
 所以最低成本的试跑路径是：只放几只美股到 watchlist，不配任何 key，直接跑。

@@ -13,7 +13,7 @@
 | 个人研究的多市场备用行情 | yfinance | 无 Key；非官方 Yahoo 接口，只适合个人研究/教育用途 | 安装 `yfinance`，再设置 `ENABLE_YFINANCE=1` |
 | A 股 + ETF 实时行情（主源）；财务快照（gpcw，148 期至 1988）；板块指数（880/881 段，通达信自编口径）；交易所核心指数（上证指数/沪深300 等 8 个） | mootdx（通达信 TCP） | 免费、无 Key、实时快照 + 日线，覆盖沪深股票和 ETF；依赖 TCP 7709 出网，被公司网络/防火墙拦截时自动降级 | 安装 `requirements-mootdx.txt` 后自动使用；`DISABLE_MOOTDX=1` 可整体停用 |
 | A 股日线 / 港股日线（首备用） | Tushare | 官方当前规则下，120 积分档的非复权日线价格为 0 元；更完整数据需要更多积分或单独权限；EOD 盘后才更新当日 | 注册、补全资料、取得 token，并安装 tushare 依赖 |
-| A 股 + ETF 降级行情 | 东方财富 / 腾讯 / 新浪 | 免费、无 Key、零配置；非官方公开接口，稳定性与时效不作承诺，mootdx 和 tushare 都未返回时依次尝试 | 无需任何操作，脚本自动使用 |
+| A 股 + ETF 降级行情；A 股财报预约披露日历（东财 datacenter） | 东方财富 / 腾讯 / 新浪 | 免费、无 Key、零配置；非官方公开接口，稳定性与时效不作承诺，mootdx 和 tushare 都未返回时依次尝试 | 无需任何操作，脚本自动使用 |
 | 全球指数 / 宏观 / 韩股（纳指、费半、美十债、美元指数、伦敦金、伦铜、海力士） | Nasdaq 指数 API / FRED / 东财环球 / 新浪环球 | 免费、无 Key、零配置；按 watchlist ticker（^IXIC、^SOX、^TNX、DX-Y.NYB、XAUUSD=X、HG=F、000660.KS）映射自动命中；^TNX 走 FRED 官方序列（T+1），韩股走东财 177 市场 | 无需任何操作，脚本自动使用 |
 | 港股 / 韩国 / 芬兰小股票池 EOD 备用 | EODHD | 免费账户当前为 20 次调用/日，可取任意 ticker 过去一年 EOD 历史；不是实时行情 | 把 key 写入 `EOD_API_KEY` |
 | 美股 EOD / profile 测试 | FMP Basic | 免费 Basic 当前为 250 次调用/日；全球覆盖和高级数据属于更高套餐 | 把 key 写入 `FMP_API_KEY` |
