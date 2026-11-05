@@ -21,6 +21,7 @@ from sector_rotation.baselines import (EqualWeightAnnual, momentum_topk,  # noqa
                                        random_k, reversal_topk)
 from sector_rotation.cost import CostModel  # noqa: E402
 from sector_rotation.data import build_weekly_frame  # noqa: E402
+from sector_rotation.portfolio import RiskState  # noqa: E402
 from sector_rotation.permtest import paired_block_bootstrap, perm_test_vs_random  # noqa: E402
 from sector_rotation.universe import load_universe  # noqa: E402
 from sector_rotation.walkforward import WalkResult, coverage_start, run_walkforward  # noqa: E402
@@ -41,7 +42,8 @@ def render_report(results: dict[str, WalkResult],
                   tests: dict[tuple[str, str, str], float], *, level: str,
                   tag: str, tier_notes: dict[str, str], prereg: str,
                   exploratory: bool = False,
-                  n_oos: int | None = None) -> str:
+                  n_oos: int | None = None,
+                  diag: dict[str, float] | None = None) -> str:
     lines = [f"# 板块轮动回测报告：{tag}", "",
              f"- 生成：{date.today().isoformat()} · 配置：{prereg}",
              f"- 点差档：基准 {tier_notes['base']} / 压力 {tier_notes['stress']}"
@@ -79,6 +81,13 @@ def render_report(results: dict[str, WalkResult],
                   f"{'**通过，可进下一级**' if ok else '**未通过，按 spec §5 停止并写结案报告**'}"]
     if n_oos:
         lines += ["", power_note(n_oos), ""]
+    if diag:                                            # S6-C：裸信号诊断（不判定）
+        lines += ["## 裸信号诊断（S6-C，RiskState 关闭；只诊断不判定，spec v1.2.3）", "",
+                  f"- 裸路径 CAGR {diag['bare_cagr']:+.2%} / Sharpe {diag['bare_sharpe']:.2f}"
+                  f" / MaxDD {diag['bare_max_dd']:.2%}——归因用：裸路径差 = 信号无边际；"
+                  "裸路径好而闸门路径差 = 风控侵蚀边际。",
+                  f"- 闸门路径 halt 统计：触发 {diag['halt_events']} 次"
+                  f" / 探针否决 {diag['halt_rejects']} 次（S6-A 滞回态）。", ""]
     return "\n".join(lines)
 
 
@@ -131,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     tests: dict[tuple[str, str, str], float] = {}
     results: dict[str, WalkResult] = {}
     n_oos = 0
+    main_strat = _l0 if args.level == "L0" else None      # S6-C：裸诊断用主策略引用
+    gate_risk = None                                      # S6-C：基准档主策略 halt 统计
     for tier in tiers:
         cost = TIERS[tier]()
         strategies = {
@@ -143,10 +154,16 @@ def main(argv: list[str] | None = None) -> int:
             from sector_rotation.models import make_strategy
             strategies[args.level] = make_strategy(args.level, k=args.k,
                                                    window=args.window)
-        tier_res = {n: run_walkforward(wf, s, cost=cost, **run_kw)
-                    for n, s in strategies.items()}
         main_name = args.level if args.level in ("L1", "L2") \
             else f"L0-{args.direction}-lb{args.lookback}"
+        tier_res = {}
+        for n, s in strategies.items():
+            if n == main_name and tier == "base":         # S6-C：自持 RiskState 读 halt 统计
+                gate_risk = RiskState(spec)
+                tier_res[n] = run_walkforward(wf, s, cost=cost, risk=gate_risk, **run_kw)
+            else:
+                tier_res[n] = run_walkforward(wf, s, cost=cost, **run_kw)
+        main_strat = strategies[main_name]
         main_res = tier_res[main_name]
         n_oos = len(main_res.weekly)                         # C9：实际样本外周数
         if not args.exploratory:  # 2026-11-05 裁定：探索性跳过 1001 次置换（只按净指标选配置）
@@ -167,6 +184,16 @@ def main(argv: list[str] | None = None) -> int:
             results = tier_res
         else:
             results.update({f"{n}·压力档": r for n, r in tier_res.items()})
+    diag = None
+    if "base" in tiers and main_strat is not None and gate_risk is not None:
+        # S6-C：裸信号诊断（RiskState 关闭，spec v1.2.3 §3.8 v2 协议第 2 条）——
+        # 只诊断不判定；裸路径差=信号无边际，裸路径好而闸门路径差=风控侵蚀边际。
+        bare = run_walkforward(wf, main_strat, cost=CostModel.base(),
+                               risk=RiskState(spec, enabled=False), **run_kw)
+        diag = {"bare_cagr": bare.metrics["cagr"], "bare_sharpe": bare.metrics["sharpe"],
+                "bare_max_dd": bare.metrics["max_dd"],
+                "halt_events": len(gate_risk.halt_events),
+                "halt_rejects": gate_risk.halt_rejects}
     # 修根（2026-11-05，阶段 A 实测）：tag 必须含 direction——momentum/reversal 同
     # k·lb 的两格会写同一文件名互相覆盖（brief 原 tag 只到 lb）。方向维度进文件名。
     tag = f"{args.level}-{args.direction}-k{args.k}-lb{args.lookback}"
@@ -180,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     text = render_report(results, tests, level=args.level, tag=tag,
                          tier_notes={"base": "10bp", "stress": "20bp"},
                          prereg=prereg, exploratory=args.exploratory,
-                         n_oos=None if args.pre_oos else n_oos)
+                         n_oos=None if args.pre_oos else n_oos, diag=diag)
     start_row = run_kw.get("start", start)
     if args.pre_oos:  # 终审 Should-fix 2：选择窗不是 OOS，功效注释不适用
         oos_note = (f"选择窗 {wf.fridays[start_row]} → {wf.fridays[run_kw['end'] - 1]}"

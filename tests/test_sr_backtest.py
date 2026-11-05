@@ -45,3 +45,20 @@ def test_render_report_level_param_and_exploratory_no_gate():
         tier_notes={"base": "10bp", "stress": "20bp"},
         prereg="探索性", exploratory=True, n_oos=370)
     assert "只报告不判定" in text2 and "闸门" not in text2
+
+
+def test_render_report_bare_diagnostic_section():
+    """S6-C：裸信号诊断段（只诊断不判定）；不传 diag 时不出现。"""
+    diag = {"bare_cagr": 0.02, "bare_sharpe": 0.3, "bare_max_dd": -0.2,
+            "halt_events": 2, "halt_rejects": 1}
+    text = backtest.render_report(
+        {"L0": _res()}, _tests("L0"), level="L0", tag="L0-确认",
+        tier_notes={"base": "10bp", "stress": "20bp"},
+        prereg="L0 主检验", n_oos=370, diag=diag)
+    assert "裸信号诊断" in text and "S6-C" in text and "不判定" in text
+    assert "触发 2 次" in text and "探针否决 1 次" in text and "+2.00%" in text
+    text2 = backtest.render_report(
+        {"L0": _res()}, _tests("L0"), level="L0", tag="L0-确认",
+        tier_notes={"base": "10bp", "stress": "20bp"},
+        prereg="L0 主检验", n_oos=370)
+    assert "裸信号诊断" not in text2
