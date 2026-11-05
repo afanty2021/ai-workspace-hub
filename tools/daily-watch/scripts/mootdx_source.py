@@ -318,7 +318,8 @@ def _quote_from_snapshot(ticker: str, row: dict[str, Any], trade_date: str) -> d
     """
     price = _to_float(row.get("price"))
     previous_close = _to_float(row.get("last_close"))
-    if price is None or price <= 0:
+    # 与 _index_quote_from_bars 同款 NaN 守卫（评审 #5 对齐既有模式）
+    if price is None or price <= 0 or price != price:
         return None
     change = (
         round(price - previous_close, 6) if previous_close not in (None, 0) else None
@@ -371,7 +372,9 @@ def _index_quote_from_bars(ticker: str, bars) -> dict[str, Any] | None:
         return None
     last = bars.iloc[-1]
     price = _to_float(last.get("close"))
-    if price is None or price <= 0:
+    # NaN 三重穿透守卫（评审 #5）：NaN 与任何比较都是 False，<=0 挡不住；
+    # price != price 是 float NaN 的判定惯式（_to_float 返回 float 或 None）。
+    if price is None or price <= 0 or price != price:
         return None
     previous_close = _to_float(bars.iloc[-2].get("close")) if len(bars) >= 2 else None
     change = (
@@ -384,11 +387,14 @@ def _index_quote_from_bars(ticker: str, bars) -> dict[str, Any] | None:
     )
     # 末根日期：datetime 列（"2026-11-05 15:00"）优于 year/month/day 冗余列
     trade_date = str(last.get("datetime", ""))[:10]
-    if not trade_date or trade_date.startswith("Na"):
+    if not trade_date or len(trade_date) != 10 or trade_date[:2].lower() == "na":
         y, m, d = last.get("year"), last.get("month"), last.get("day")
-        if y and m and d:
-            trade_date = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
-        else:
+        try:
+            if y and m and d:
+                trade_date = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+            else:
+                return None
+        except (TypeError, ValueError):  # NaN/脏值：int(nan) 抛 ValueError
             return None
     return {
         "symbol": ticker,
@@ -456,10 +462,11 @@ def fetch_mootdx_quotes(tickers: list[str]) -> list[dict[str, Any]]:
                 bars = _mootdx_call(
                     "index_bars", symbol=ticker.split(".")[0], frequency=9, offset=2
                 )
+                # 装配也在 try 内（评审 #5）：坏行异常不逃逸拖垮整个批次
+                quote = _index_quote_from_bars(ticker, bars)
             except Exception as exc:  # noqa: BLE001 — 单票降级不连坐整批
-                log(f"Warning: mootdx index_bars failed for {ticker}: {exc}")
+                log(f"Warning: mootdx index quote failed for {ticker}: {exc}")
                 continue
-            quote = _index_quote_from_bars(ticker, bars)
             if quote:
                 quotes.append(quote)
             else:

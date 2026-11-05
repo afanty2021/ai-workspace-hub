@@ -327,6 +327,51 @@ class TdxIndexTests(unittest.TestCase):
         self.assertIsNone(mootdx_source._index_quote_from_bars(
             "881075.TDX", _StubIndexFrame([{"close": 2177.29}])))
 
+    def test_index_quote_nan_penetrations_return_none(self) -> None:
+        # 评审 #5 三个实证穿透：NaN close（price<=0 挡不住）、NaN datetime
+        # （startswith("Na") 大小写敏感）、datetime 缺 + year NaN（int(nan) 炸）
+        nan = float("nan")
+        self.assertIsNone(mootdx_source._index_quote_from_bars(
+            "881075.TDX", _StubIndexFrame([{"datetime": "2026-11-05 15:00", "close": nan}])))
+        self.assertIsNone(mootdx_source._index_quote_from_bars(
+            "881075.TDX", _StubIndexFrame([{"datetime": nan, "close": 2177.29}])))
+        self.assertIsNone(mootdx_source._index_quote_from_bars(
+            "881075.TDX", _StubIndexFrame([{"close": 2177.29, "year": nan}])))
+
+    def test_assembly_failure_degrades_only_that_ticker(self) -> None:
+        # 评审 #5：装配调用挪进 try 后，坏行异常只降级该票，批内其他票不受影响
+        class StubClient:
+            def quotes(self, symbol):
+                return _StubSnapshotFrame(
+                    [{"code": "300750", "price": 264.06, "last_close": 252.88, "vol": 1}]
+                )
+
+        class ExplodingFrame:
+            empty = False
+            def __len__(self):
+                return 1
+            @property
+            def iloc(self):
+                raise RuntimeError("坏行炸装配")
+
+        def fake_call(method, **kw):
+            return ExplodingFrame()
+
+        with (
+            patch.object(mootdx_source, "_get_mootdx_client", return_value=StubClient()),
+            patch.object(mootdx_source, "_bars_trade_date", return_value="2026-11-05"),
+            patch.object(mootdx_source, "_mootdx_call", side_effect=fake_call),
+        ):
+            quotes = fetch_mootdx_quotes(["300750.SZ", "881075.TDX"])
+        self.assertEqual([q["symbol"] for q in quotes], ["300750.SZ"])
+
+    def test_snapshot_quote_nan_price_returns_none(self) -> None:
+        # 个股快照路径同款 NaN 守卫（与指数装配对齐）
+        quote = _quote_from_snapshot(
+            "600276.SH", {"price": float("nan"), "last_close": 48.46, "vol": 1},
+            "2026-11-05")
+        self.assertIsNone(quote)
+
     def test_mixed_batch_stocks_via_quotes_and_index_via_index_bars(self) -> None:
         snapshots = _StubSnapshotFrame(
             [{"code": "300750", "price": 264.06, "last_close": 252.88, "vol": 693511}]

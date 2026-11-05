@@ -510,7 +510,11 @@ def collect_hypothesis_signals(
     config: dict[str, Any],
     movers: list[dict[str, Any]],
     earnings: list[dict[str, Any]],
+    today: date | None = None,
 ) -> list[dict[str, Any]]:
+    # today 可注入：事件级闸门按「今天」算距今天数，不注入则测试用例
+    # 会随真实日历滑出窗口而变红（复查 N-1 时间炸弹的修根）。
+    gate_today = (today or date.today()).isoformat()
     signals: list[dict[str, Any]] = []
     signal_keys: set[tuple[str, str, str]] = set()
 
@@ -550,6 +554,15 @@ def collect_hypothesis_signals(
             ticker = str(earning.get("ticker", "")).upper()
             if not ticker or ticker not in hypothesis["tickers"]:
                 continue
+            # 事件级闸门（评审 #2 双管齐下之二）：CN 预约披露行在 -40/+35 窗内
+            # 长驻 earnings，只有临近披露/刚披露的事件才值得写假设时间线——
+            # daysUntil ∈ [0,7]（本周预约）或 actualDate 距今 ≤7 天（刚披露）。
+            # 闸门只管信号写回；渲染端 earnings 表格仍展示窗口全量。
+            if earning.get("source") == "eastmoney-disclosure":
+                near_appoint = isinstance(earning.get("daysUntil"), int) and 0 <= earning["daysUntil"] <= 7
+                recently_actual = _within_days(earning.get("actualDate"), gate_today, 7)
+                if not (near_appoint or recently_actual):
+                    continue
             key = (hypothesis["id"], "earnings", ticker)
             if key in signal_keys:
                 continue
@@ -567,6 +580,8 @@ def collect_hypothesis_signals(
                     "ref": ticker,
                     # 财报业务时点 = 披露日（FMP earning_calendar 的 date 字段）
                     "observed_trade_date": earning.get("date"),
+                    # 事件日用于 marker 幂等（评审 #2 双管齐下之一）
+                    "event_date": earning.get("actualDate") or earning.get("appointDate") or earning.get("date"),
                     "market": earning.get("market", ""),
                     "display": (
                         f"- {hypothesis['id']} `{hypothesis['title']}` "
@@ -711,11 +726,28 @@ def build_hypothesis_section(
     return "\n".join(lines)
 
 
+def _within_days(iso_date: Any, today_text: str, days: int) -> bool:
+    """iso_date 在 today_text（ISO）之前 0~days 天（含当天）→ True。
+
+    未来日期 False：actualDate 晚于今天是脏数据（未来不可能已披露），不能放行
+    进信号。畸形输入 False。
+    """
+    try:
+        delta = date.fromisoformat(str(iso_date)) - date.fromisoformat(str(today_text))
+    except (ValueError, TypeError):
+        return False
+    return -days <= delta.days <= 0
+
+
 def build_signal_marker(date_text: str, signal: dict[str, Any]) -> str:
     signal_type = str(signal["signal_type"])
+    # earnings 信号按事件日（actualDate or appointDate）构造 marker：同一财报
+    # 事件在 -40 天回看窗内每天重进 earnings，用报告日去重会每天写一条新时间线
+    # 条目（最长 40 天）；事件日让跨日去重幂等。其他信号类型维持报告日。
+    effective_date = str(signal.get("event_date") or date_text)
     ref = slugify(str(signal["ref"]))
     hypothesis_id = slugify(str(signal["hypothesis_id"]))
-    return f"DW-{date_text}-{signal_type}-{ref}-{hypothesis_id}"
+    return f"DW-{effective_date}-{signal_type}-{ref}-{hypothesis_id}"
 
 
 def build_evidence_id(date_text: str, signal: dict[str, Any]) -> str:
@@ -749,6 +781,13 @@ def _available_at_for(observed_day: str, market: str) -> tuple[str, str | None]:
     return f"{observed_day}T15:00:00+08:00", note
 
 
+def _evidence_path_for(workspace_root: Path, date_text: str,
+                       signal: dict[str, Any]) -> Path:
+    """证据文件的落盘路径（纯计算，无 IO）——去重判断需要先于写入拿到路径。"""
+    evidence_id = build_evidence_id(date_text, signal)
+    return resolve_evidence_dir(workspace_root) / date_text[:7] / f"{evidence_id}.md"
+
+
 def write_signal_evidence(
     workspace_root: Path,
     date_text: str,
@@ -756,9 +795,8 @@ def write_signal_evidence(
     report_relpath: str,
 ) -> tuple[Path, bool]:
     evidence_id = build_evidence_id(date_text, signal)
-    evidence_dir = resolve_evidence_dir(workspace_root) / date_text[:7]
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    evidence_path = evidence_dir / f"{evidence_id}.md"
+    evidence_path = _evidence_path_for(workspace_root, date_text, signal)
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
     if evidence_path.exists():
         return evidence_path, False
 
@@ -903,18 +941,20 @@ def apply_hypothesis_updates(
         hypothesis = hypothesis_map.get(str(signal["hypothesis_id"]))
         if not hypothesis:
             continue
-        evidence_path, _ = write_signal_evidence(
-            workspace_root, date_text, signal, report_relpath
-        )
-        evidence_relpath = str(evidence_path.relative_to(workspace_root)).replace(
-            "\\", "/"
-        )
+        # 去重先行（复查 N-2）：时间线已含 marker 的事件说明证据早写过，必须先判
+        # 再落盘——否则 7 天闸门窗内同一事件每个报告日都新建一个 E-报告日 证据
+        # 文件（evidence_id 按报告日命名，跨日不撞名，exists() 幂等拦不住）。
         path = Path(hypothesis["path"])
         original = path.read_text(encoding="utf-8")
+        evidence_relpath = str(
+            _evidence_path_for(workspace_root, date_text, signal)
+            .relative_to(workspace_root)
+        ).replace("\\", "/")
         updated, changed = append_signal_to_hypothesis(
             original, date_text, signal, report_relpath, evidence_relpath
         )
         if changed and updated != original:
+            write_signal_evidence(workspace_root, date_text, signal, report_relpath)
             path.write_text(updated, encoding="utf-8")
             writeback_count += 1
 
@@ -947,7 +987,16 @@ def render_data_coverage(market_data: dict[str, Any], macro_data: dict[str, Any]
         rows.append("- 没有可用行情，不能据此判断市场没有异动。")
     earnings = meta.get("earnings") or {}
     if modules["earnings"] and earnings.get("state") == "ok":
-        rows.append(f"- 财报检查区间：{earnings.get('period_start', '未提供')} 至 {earnings.get('period_end', '未提供')}。")
+        # 两通道窗口口径不同（FMP=本周、东财=-40/+35 天），分别展示
+        window_parts = []
+        if earnings.get("fmp_period_start"):
+            window_parts.append(
+                f"美股 {earnings['fmp_period_start']} 至 {earnings.get('fmp_period_end', '未提供')}")
+        if earnings.get("cn_period_start"):
+            window_parts.append(
+                f"A 股 {earnings['cn_period_start']} 至 {earnings.get('cn_period_end', '未提供')}")
+        if window_parts:
+            rows.append("- 财报检查区间：" + "；".join(window_parts) + "。")
     if modules["macro"]:
         macro_meta = macro_data.get("meta") or {}
         if macro_meta.get("reason") == "FMP_API_KEY not set":

@@ -1200,11 +1200,17 @@ def _merge_earnings_status(
     ]
     if ok_sources:
         fmp_state, cn_state = fmp_status.get("state"), cn_status.get("state")
+        # 两通道窗口口径不同（FMP=本周一至五、东财=-40/+35），分开带出；
+        # 渲染端（generate_daily_report 数据覆盖段）分别展示。
+        fmp_ps, fmp_pe = fmp_status.get("period_start"), fmp_status.get("period_end")
+        cn_ps, cn_pe = cn_status.get("period_start"), cn_status.get("period_end")
         fmp_status.clear()
         fmp_status.update(
             state="ok", sources=ok_sources,
             fmp=fmp_state, cn=cn_state,
             cn_count=sum(1 for row in earnings if row.get("source") == "eastmoney-disclosure"),
+            fmp_period_start=fmp_ps, fmp_period_end=fmp_pe,
+            cn_period_start=cn_ps, cn_period_end=cn_pe,
         )
         return earnings
     states = (fmp_status.get("state"), cn_status.get("state"))
@@ -1277,25 +1283,44 @@ def fetch_cn_disclosure_calendar(
             log(f"Warning: unexpected eastmoney disclosure response: {str(payload)[:200]}")
         return []
 
-    rows = (payload.get("result") or {}).get("data") or []
+    result_meta = payload.get("result") or {}
+    pages = result_meta.get("pages")
+    if isinstance(pages, int) and pages > 1:
+        # pageSize=100 单页 + 按预约日降序：pages>1 意味着最旧的事件被静默截断
+        log(f"Warning: eastmoney disclosure calendar returned {pages} pages; "
+            f"only page 1 (newest) is kept — some events may be missing")
+    rows = result_meta.get("data") or []
     results: list[dict[str, Any]] = []
+
+    def _day(value: Any) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        # 东财字段格式变更/脏数据可能给 "2026/11/20"、"None" 等——只放行 ISO 日期
+        return text[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text[:10]) else None
+
     for row in rows:
-        code = str(row.get("SECURITY_CODE", "")).strip()
-        ticker = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
-        if ticker not in watchlist_map:
+        # 单行解析失败只跳过该行（评审 #3：对齐 FMP 路径的整段 try 契约，
+        # 不让一行脏数据拖垮整份日报）
+        try:
+            code = str(row.get("SECURITY_CODE", "")).strip()
+            ticker = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+            if ticker not in watchlist_map:
+                continue
+            watch = watchlist_map[ticker]
+            appoint = _day(row.get("APPOINT_PUBLISH_DATE"))
+            actual = _day(row.get("ACTUAL_PUBLISH_DATE"))
+            if not appoint and not actual:
+                # 日期全解析失败（格式变更/脏数据）：该行对日历无可用时点，跳过
+                continue
+            report_date = _day(row.get("REPORT_DATE"))
+            days_until = (
+                (date.fromisoformat(appoint) - today).days if appoint else None
+            )
+        except (ValueError, AttributeError) as exc:
+            log(f"Warning: skip malformed disclosure row for "
+                f"{row.get('SECURITY_CODE', '?')}: {exc}")
             continue
-        watch = watchlist_map[ticker]
-
-        def _day(value: Any) -> str | None:
-            text = str(value or "").strip()
-            return text[:10] or None
-
-        appoint = _day(row.get("APPOINT_PUBLISH_DATE"))
-        actual = _day(row.get("ACTUAL_PUBLISH_DATE"))
-        report_date = _day(row.get("REPORT_DATE"))
-        days_until = (
-            (date.fromisoformat(appoint) - today).days if appoint else None
-        )
         results.append(
             {
                 "ticker": ticker,
@@ -1547,6 +1572,7 @@ def build_snapshot(
         item["ticker"]
         for item in watchlist
         if not item["ticker"].endswith(CN_SUFFIXES) and not item["ticker"].endswith(HK_SUFFIX)
+        and not item["ticker"].endswith(".TDX")  # 板块指数不在 FMP，白占批量额度
     ]
     # A 股主源是 mootdx（TCP 无 Key，实时，覆盖 ETF）；tushare 降为首备用，
     # 只在主源路径没覆盖到时出手（.HK 票 mootdx 不服务，仍走 tushare 主源）。
