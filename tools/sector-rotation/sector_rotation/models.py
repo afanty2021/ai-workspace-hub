@@ -150,8 +150,8 @@ def _roc_threshold(probs: np.ndarray, labels: np.ndarray) -> float:
 
 def _confident(samples: np.ndarray, *, mass: float = 0.80) -> np.ndarray:
     """MC dropout 置信（论文 §1.1）：某资产 (T,) 概率样本 ≥80% 落在
-    中位数 ±1 样本标准差内 → 置信。高斯 ≈68% 不过——只有紧于高斯的
-    预测分布才可买（论文周均仅买 2.25/11 的机制来源）。"""
+    中位数 ±1 总体标准差（ddof=0）内 → 置信。高斯 ≈68% 不过——只有紧于
+    高斯的预测分布才可买（论文周均仅买 2.25/11 的机制来源）。"""
     med = np.median(samples, axis=0)
     sd = samples.std(axis=0)
     return (np.abs(samples - med) <= sd).mean(axis=0) >= mass

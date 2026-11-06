@@ -12,7 +12,10 @@ Tier-2 主跑：MIMOModel 三格（window∈{13,26,52}）× 2012-2022，年模�
 （设计评审 C-1 教训——缩宇宙须硬警报，计划评审 I-4）。
 
 窗口纪律：消费区间硬编码 2012-01-01:2022-12-31；尾段 2023+ 处女——
---limit-weeks 只缩短不改终点，代码 assert 终点周 ≤ 2022-12-31。"""
+--limit-weeks 只缩短不改终点，代码 assert 终点周 ≤ 2022-12-31。
+
+用法：python repro_paper.py [--limit-weeks N] [--force-out]——OUT 已存在时
+默认拒绝覆盖（归档 C 判定证据防确定性复查误毁），--force-out 才显式覆盖。"""
 from __future__ import annotations
 
 import json
@@ -75,6 +78,9 @@ DISCLOSURES = [
     "窗界过滤（复查轮 N3）：决策周五 ∈ 2012-01-01..2022-12-31 且执行周 ISO 年 "
     "≤2022——2012 年不含 W01 执行周（属窗外决策 2011-12-30）、末决策 2022-12-30 "
     "的执行周 2023-W01 已弃，尾段 2023+ 零触及。",
+    "胜率/Sharpe 的分母含空仓周（本轮 458/573 周空仓）——与论文 60.6% 可比的"
+    "是持仓周内条件胜率（由归档数字推导：win_rate×n_weeks/weeks_with_positions，"
+    "N=13 ≈61%）；空仓周同时压缩 Sharpe 均值与标准差。",
 ]
 
 
@@ -98,7 +104,7 @@ def year_bounds(wf) -> tuple[int, int]:
     idx = [t for t, f in enumerate(wf.fridays)
            if WIN_START <= f <= WIN_END and exec_iso_year(f) <= 2022]
     assert idx, "2012-2022 无决策周——数据未回补？"
-    assert wf.fridays[idx[-1]] <= WIN_END            # 窗口纪律（Global Constraint 6）
+    assert exec_iso_year(wf.fridays[idx[-1]]) <= 2022   # GC-6：末消费决策的执行周不出窗
     return idx[0], idx[-1] + 1
 
 
@@ -114,6 +120,12 @@ def annual_group_returns(keys: list[int], weekly: np.ndarray) -> dict[int, float
 def alpha_vs_paper(annual: dict[int, float],
                    bench: dict[int, float]) -> dict[int, float]:
     return {y: annual[y] - bench[y] for y in annual if y in bench}
+
+
+def _paper_cell(pv, fmt: str) -> str:
+    """论文列渲染（终审修复波）：None 才是「论文无此口径」；格式串一律可格式化
+    ——旧守卫 `"{}" in fmt` 对 "{:+.2%}" 恒 False，报告 7/9 行误渲染为「—」。"""
+    return fmt.format(pv) if pv is not None else "—"
 
 
 def verdict(mean_alpha: float, pos_years: int) -> str:
@@ -246,6 +258,11 @@ def main(argv: list[str]) -> int:
     limit = None
     if "--limit-weeks" in argv:
         limit = int(argv[argv.index("--limit-weeks") + 1])
+    # 覆盖保护（终审修复波）：OUT 是归档 C 判定证据——确定性复查重跑不得静默
+    # 重写，须 --force-out 显式覆盖
+    if OUT.exists() and "--force-out" not in argv:
+        print(f"[FAIL] 报告已存在：{OUT}——防误覆盖归档证据，确认覆盖请传 --force-out")
+        return 1
     wf = build_frame()
     start, end = year_bounds(wf)
     # 自检（提案 §9，计划评审 I-4）：全窗 valid==11 + SPY 锚点带——缩宇宙/数据
@@ -288,7 +305,7 @@ def main(argv: list[str]) -> int:
             ("周均持仓数", "avg_positions", PAPER["avg_positions"], "{:.2f}"),
             ("净α均值(2bp)", "net_alpha_mean", None, "{:+.2%}")]
     for label, key, pv, fmt in rows:
-        paper_cell = fmt.format(pv) if (pv is not None and "{}" in fmt) else "—"
+        paper_cell = _paper_cell(pv, fmt)
         report.append(f"| {label} | {paper_cell} | "
                       + " | ".join(fmt.format(c[key]) for c in cells.values()) + " |")
     for n in N_GRID:

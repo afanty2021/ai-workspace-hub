@@ -4,12 +4,20 @@ import pytest
 
 pytest.importorskip("torch")            # repro_paper 顶部 import models
 
-from repro_paper import (PREREG_CONFIG, YEARS, alpha_vs_paper,  # noqa: E402
-                         annual_group_returns, exec_iso_year, verdict)
+from repro_paper import (PREREG_CONFIG, YEARS, _paper_cell,  # noqa: E402
+                         alpha_vs_paper, annual_group_returns, exec_iso_year,
+                         verdict)
 
 
 def test_years_window_frozen():
     assert list(YEARS) == list(range(2012, 2023))     # 尾段 2023+ 处女，硬编码
+
+
+def test_paper_cell_renders():
+    # 终审修复波：旧守卫 `"{}" in fmt` 对 "{:+.2%}" 恒 False，论文列误渲染「—」
+    assert _paper_cell(0.1263, "{:+.2%}") == "+12.63%"   # PAPER mean_alpha 格式
+    assert _paper_cell(None, "{:+.2%}") == "—"           # 论文无此口径（净 α 行）
+    assert _paper_cell(10, "{}/11") == "10/11"           # 正年数行格式串本身含字面量
 
 
 def test_prereg_config_frozen():
