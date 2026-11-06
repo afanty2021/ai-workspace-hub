@@ -66,3 +66,17 @@ def test_point_in_time_pick_bypass_single():
                               bypass_single=True) == "XLE"
     assert point_in_time_pick(["A", "B"], {"A": short, "B": short}, "2026-01-01",
                               bypass_single=True) is None   # 多候选不旁路
+
+
+def test_us_universe_roundtrip(tmp_path):
+    """R20261106-02 §6 U3：论文 11 成员退化宇宙——index_code==ETF 符号、
+    limit_pct=1.0（涨停闸门永不触发）、无簇表。"""
+    from make_us_universe import NAMES, US_MEMBERS, write_config
+    out = tmp_path / "us-universe.md"
+    write_config(out)
+    spec = load_universe(out)
+    assert [m.index_code for m in spec.members] == US_MEMBERS
+    assert all(m.etf_candidates == (m.index_code,) for m in spec.members)
+    assert all(m.limit_pct == 1.0 for m in spec.members)
+    assert spec.clusters == {}
+    assert len(NAMES) == 11
