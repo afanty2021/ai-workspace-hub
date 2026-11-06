@@ -127,4 +127,12 @@ def test_l1_seed_deterministic():
     s1 = make_strategy("L1", k=1)
     s2 = make_strategy("L1", k=1)
     assert s1(wf, 170) == s2(wf, 170)
+    # v2 评审 M-3：锁到概率逐位一致（picks 相等只是排序级，强度不足）
+    X, y, r, x_now, cols = _prep(wf, 170, window=13)
+    probs = []
+    for _ in range(2):
+        m = LinearModel()
+        m.fit(X, y, r)
+        probs.append(m.probs_now(x_now))
+    assert np.array_equal(probs[0], probs[1])
     assert s1(wf, 178) == s2(wf, 178)

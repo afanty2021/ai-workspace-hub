@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 PY = sys.executable
 CELLS = [(w, v) for w in (8, 13, 26) for v in ("joint", "independent")]
 
-GATE_ROW = re.compile(r"^\| L1 \| (-?[\d.]+)% \| (-?[\d.]+) \|", re.M)
+GATE_ROW = re.compile(r"^\| L1 \| ([+-]?[\d.]+)% \| (-?[\d.]+) \|", re.M)
 BARE = re.compile(r"裸路径（基准档成本）CAGR ([+-][\d.]+)% / Sharpe (-?[\d.]+)")
 
 
@@ -52,7 +52,10 @@ def main(argv: list[str] | None = None) -> int:
             hits = sorted(Path(REPO, "output/sector-rotation").glob(
                 f"*/backtest-{tag}.md"))
         text = hits[-1].read_text(encoding="utf-8")
-        cfg = re.search(r"配置：(.+)", text).group(1)   # sweep 自检：注入有效性
+        cfg_m = re.search(r"配置：(.+)", text)      # sweep 自检：注入有效性
+        if cfg_m is None:
+            raise SystemExit(f"解析失败：{hits[-1].name} 缺少「配置：」行")
+        cfg = cfg_m.group(1)
         assert f"window={w}" in cfg and f"l1_variant={v}" in cfg, f"配置行错配：{cfg}"
         rows.append({"w": w, "v": v, **parse(text), "path": hits[-1].name})
     assert len({r["gate_cagr"] for r in rows}) > 1, \
@@ -75,4 +78,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))   # 评审 v2 I-1：argv 必须显式传入，
+    # 否则 --parse-only 死开关（main 默认参 None → 恒重跑、静默覆盖 artifact）
