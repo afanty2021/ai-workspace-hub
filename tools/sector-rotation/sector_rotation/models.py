@@ -133,7 +133,11 @@ class LinearModel:
 
 
 def _roc_threshold(probs: np.ndarray, labels: np.ndarray) -> float:
-    """纯函数：数组上的 Youden J 最优分位点；单类/样本过少 → 回退 0.5。
+    """纯函数：数组上的 ROC 最优分位点；单类/样本过少 → 回退 0.5。
+    准则实义（2026-11-07 实施评审 I-1 补录）：(TP−FP)/n = 患病率加权
+    J 变体——.mean() 除以全体 n 而非类内计数，类不平衡下比真 Youden J
+    （TPR−FPR）更保守（实测阈值 0.324 vs 0.147；真 Youden 反事实
+    α -12.25% 不翻转 C 判定，公式冻结不改）。
     trailing 对口径经 thresholds_from_pairs 调用（偏差⑨）。"""
     m = np.isfinite(probs) & np.isfinite(labels)
     p, y = probs[m], labels[m]
@@ -160,7 +164,9 @@ def _confident(samples: np.ndarray, *, mass: float = 0.80) -> np.ndarray:
 def thresholds_from_pairs(pairs, n_assets: int, *, min_pairs: int = 26
                           ) -> np.ndarray:
     """T13/评审 I5 口径（R20261106-02 §4 偏差⑨，2026-11-06 用户追认）：
-    每资产买入阈值 = trailing 实际（预测, 已实现标签）对的 Youden J；
+    每资产买入阈值 = trailing 实际（预测, 已实现标签）对的 ROC 分位点
+    （实义 (TP−FP)/n 患病率加权变体，非真 Youden J——见 _roc_threshold
+    2026-11-07 实施评审 I-1 补录）；
     有效对 < min_pairs 回退 0.5（年首回退期）。禁用训练窗 in-sample
     拟合概率充数。"""
     out = np.full(n_assets, 0.5)
