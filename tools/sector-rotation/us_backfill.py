@@ -65,7 +65,10 @@ def df_to_rows(sym: str, df) -> list[dict]:
 def _write_series(rel_dir: str, sym: str, rows: list[dict]) -> None:
     path = DATA_ROOT / rel_dir / f"{sym}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with series_lock(DATA_ROOT, f"us-{sym}"):
+    with series_lock(DATA_ROOT, f"us-{sym}") as acquired:
+        if not acquired:
+            print(f"[SKIP] {sym} 拿不到锁，跳过写入")
+            return
         upsert_series_rows(path, rows, "batch")
 
 
