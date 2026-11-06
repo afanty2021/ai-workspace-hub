@@ -68,6 +68,17 @@ def test_drift_update_skips_blocked_member_no_keyerror():
     assert res.trades[1]["detail"]["turnover"] > 0.49
 
 
+def test_min_universe_passthrough_prevents_collapse():
+    """R20261106-02 §7：11 成员宇宙下默认 min_universe=50 令 coverage_start 回退
+    末行（空转）；透传 min_universe=1 后从首个有效周正常起跑。"""
+    wf = _wf(T=30)                                   # 2 成员全 valid（末行除外）
+    res_def = run_walkforward(wf, momentum_topk, cost=CostModel.base(),
+                              min_universe=50)       # 回退 start=29 → 第 29 周无 valid → 空转
+    assert len(res_def.t_rows) == 0
+    res = run_walkforward(wf, momentum_topk, cost=CostModel.base(), min_universe=1)
+    assert len(res.t_rows) == 29
+
+
 def test_paired_block_bootstrap_positive_and_negative():
     """评审 C2：重定心版——正效应 p<0.1、负效应 p 接近 1（未重定心版两者都 ≈0.5）。"""
     rng = np.random.default_rng(1)

@@ -13,9 +13,13 @@ def weekly_gross_returns(wf: WeeklyFrame) -> np.ndarray:
     return np.where(np.isfinite(r), r, np.nan)
 
 
-def window_blocks(wf: WeeklyFrame, *, window: int = 13, cols=None, upto=None
+def window_blocks(wf: WeeklyFrame, *, window: int = 13, cols=None, upto=None,
+                  include_t: bool = False
                   ) -> tuple[np.ndarray, np.ndarray]:
-    """cols：资产子集（None=全体）；upto：只取 tj < upto（None=全帧）。
+    """cols：资产子集（None=全体）；upto：只取 tj < upto（None=全帧）；
+    include_t：特征块含决策周 t 自身收盘（[t-window+1, t]，R20261106-02 论文
+    「周五收盘后采样」口径，修 v2 评审 I-3 滞后一档）——默认 False 保持
+    [t-window, t) 原口径，L1 既有行为零变化。
 
     v2（R20261105-02）子集口径：全市场口径在 point-in-time 覆盖增长宇宙
     （416 成员 10→416 增长、峰值 65%）下无任何一行全体齐备 → t_idx 恒空
@@ -23,9 +27,11 @@ def window_blocks(wf: WeeklyFrame, *, window: int = 13, cols=None, upto=None
     mat = wf.index_close if cols is None else wf.index_close[:, cols]
     ok = np.isfinite(mat).all(axis=1)
     stop = len(wf.fridays) if upto is None else upto
+    first = window - 1 if include_t else window
     feats, t_index = [], []
-    for t in range(window, stop):
-        rows = np.arange(t - window, t)
+    for t in range(first, stop):
+        rows = (np.arange(t - window + 1, t + 1) if include_t
+                else np.arange(t - window, t))
         if ok[rows].all():
             feats.append(mat[rows, :].reshape(-1))
             t_index.append(t)

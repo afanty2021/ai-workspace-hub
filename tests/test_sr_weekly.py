@@ -39,3 +39,21 @@ def test_standardize_uses_train_stats_only():
 def test_window_blocks_shape():
     blocks, t_index = window_blocks(_wf(T=15), window=4)
     assert blocks.shape == (11, 4) and t_index[0] == 4
+
+
+def test_window_blocks_include_t_uses_decision_close():
+    """R20261106-02 §8：MIMO 特征窗含决策周五收盘（论文口径，修 I-3 滞后一档）——
+    include_t=True 时行 t 的块 = mat[t-window+1 : t+1]，t 从 window-1 起。"""
+    from sector_rotation.data import WeeklyFrame
+    from sector_rotation.universe import Member, UniverseSpec
+    spec = UniverseSpec([Member("A", "甲", ("EA.SH",), 0.10)], {})
+    idx = np.array([[1.0], [2.0], [4.0], [8.0], [16.0]])
+    wf = WeeklyFrame([f"w{i}" for i in range(5)], idx, [["EA.SH"]] * 5,
+                     np.ones((5, 1)), np.ones((5, 1)), np.ones((5, 1)),
+                     np.full((5, 1), 2e8), spec.members, spec,
+                     np.ones((5, 1), bool), np.ones((5, 1), bool), np.zeros(5))
+    blocks, t_idx = window_blocks(wf, window=2, upto=5, include_t=True)
+    assert list(t_idx) == [1, 2, 3, 4]
+    assert blocks[0].tolist() == [1.0, 2.0] and blocks[3].tolist() == [8.0, 16.0]
+    b2, i2 = window_blocks(wf, window=2, upto=5)     # 默认不含 t：行为不变
+    assert list(i2) == [2, 3, 4] and b2[0].tolist() == [1.0, 2.0]

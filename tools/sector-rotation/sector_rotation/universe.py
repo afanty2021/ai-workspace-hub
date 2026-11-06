@@ -82,10 +82,18 @@ def cluster_for(spec: UniverseSpec, friday: str) -> dict[str, str] | None:
 
 def point_in_time_pick(candidates: list[str], bars: dict[str, list[dict]],
                        week_end: str, *, min_list_years: int = 2,
-                       min_amount_wan: float = 10000.0) -> str | None:
+                       min_amount_wan: float = 10000.0,
+                       bypass_single: bool = False) -> str | None:
     """当时达标者：上市满 2 年 + trailing 20 日均额 ≥ 1 亿；多只取均额最大
     （规模 proxy 近似，spec §8 待验证——README 声明；上市年满 2 年按年整数差
-    近似，误差 ±数日，评审 M2 注记）。"""
+    近似，误差 ±数日，评审 M2 注记）。
+
+    bypass_single（R20261106-02 §7 第 5 行，设计评审 C-1）：单候选集旁路两道
+    闸门直接返回该候选——美股退化宇宙每成员仅 1 只 ETF，闸门本为 A 股多候选
+    择一而设，不旁路则美元口径均额/短史被静默踢出、宇宙缩水且全链路无警报；
+    旁路后 valid 退化为数据齐备性（缺数防护仍在 build_weekly_frame）。"""
+    if bypass_single and len(candidates) == 1:
+        return candidates[0]
     best, best_amt = None, 0.0
     for sym in candidates:
         rows = [r for r in bars.get(sym, []) if r["date"] <= week_end]

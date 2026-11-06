@@ -53,3 +53,16 @@ def test_point_in_time_pick_respects_listing_age_and_liquidity():
     assert point_in_time_pick(
         ["528030.SH", "516810.SH", "159999.SZ"], bars, "2026-11-06") == "528030.SH"
     assert point_in_time_pick(["516810.SH"], bars, "2026-11-06") is None
+
+
+def test_point_in_time_pick_bypass_single():
+    """R20261106-02 §7 第 5 行（设计评审 C-1/计划评审 I-1）：美股单候选成员
+    旁路 pick——上市年限/均额两闸门本为 A 股多候选择一而设；旁路后 valid
+    退化为数据齐备性；多候选路径不旁路（A 股默认零变化）。"""
+    short = [{"date": f"2025-{m:02d}-15", "open": 1.0, "close": 1.0, "amount": 1e9}
+             for m in range(1, 13)]                   # 12 行：<20 行且上市<2 年
+    assert point_in_time_pick(["XLE"], {"XLE": short}, "2026-01-01") is None
+    assert point_in_time_pick(["XLE"], {"XLE": short}, "2026-01-01",
+                              bypass_single=True) == "XLE"
+    assert point_in_time_pick(["A", "B"], {"A": short, "B": short}, "2026-01-01",
+                              bypass_single=True) is None   # 多候选不旁路

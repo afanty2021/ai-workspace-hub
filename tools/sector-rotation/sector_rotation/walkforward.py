@@ -9,7 +9,7 @@ import numpy as np
 from .cost import CostModel
 from .data import WeeklyFrame
 from .metrics import compute_metrics
-from .portfolio import RiskState, simulate_week
+from .portfolio import RiskState, WEEKLY_MIN_AMOUNT_WAN, simulate_week
 
 
 @dataclass
@@ -31,9 +31,13 @@ def coverage_start(wf: WeeklyFrame, *, min_universe: int = 50) -> int:
 def run_walkforward(wf: WeeklyFrame, strategy, *, cost: CostModel,
                     start: int | None = None, end: int | None = None,
                     oos_start: int | None = None,
-                    risk: RiskState | None = None) -> WalkResult:
+                    risk: RiskState | None = None,
+                    min_universe: int = 50,
+                    min_amount_wan: float | None = WEEKLY_MIN_AMOUNT_WAN
+                    ) -> WalkResult:
     risk = risk or RiskState(wf.spec)
-    start = coverage_start(wf) if start is None else start
+    start = (coverage_start(wf, min_universe=min_universe)
+             if start is None else start)
     if oos_start is not None:
         start = max(start, oos_start)
     stop = len(wf.fridays) if end is None else end
@@ -47,7 +51,7 @@ def run_walkforward(wf: WeeklyFrame, strategy, *, cost: CostModel,
             continue
         desired = strategy(wf, t)                    # 评审 I11：callable 协议
         weights_new = risk.apply(t, wf, desired, last_pos_returns, nav=nav[-1])
-        net, gross_pos, detail = simulate_week(wf, t, weights_prev, weights_new, cost)
+        net, gross_pos, detail = simulate_week(wf, t, weights_prev, weights_new, cost, min_amount_wan=min_amount_wan)
         weekly.append(net)
         nav.append(nav[-1] * (1 + net))
         nav_g.append(nav_g[-1] * (1 + detail["gross"]))

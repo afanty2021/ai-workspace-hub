@@ -44,24 +44,28 @@ def _week_key(d: str) -> int:
     return date.fromisocalendar(iso[0], iso[1], 1).toordinal()
 
 
-def _corrupt_weeks(series: dict[str, dict]) -> set[int]:
+def _corrupt_weeks(series: dict[str, dict], *, threshold: float = 0.30) -> set[int]:
     """拆分防护（T4 修正案，T3 实测 76 件 >30% 事件）：close-to-close 单日
-    |涨跌| > 30% 且生效日为周二~周五的日期所在 ISO 周——该执行周 open→close
+    |涨跌| > threshold 且生效日为周二~周五的日期所在 ISO 周——该执行周 open→close
     被份额拆分/缩股污染（场内行业 ETF ±10/20% 涨跌停下不可能是真实行情）。
-    周一生效良性（整执行周 post-split），不标记。返回污染周 key 集。"""
+    周一生效良性（整执行周 post-split），不标记。返回污染周 key 集。
+    threshold 参数化（R20261106-02 §7）：美股复权数据无拆分残留，调用方传大值关闭。"""
     out: set[int] = set()
     dates = sorted(series)
     for prev, d in zip(dates, dates[1:]):
         if date.fromisoformat(d).weekday() == 0:    # 周一跳空（对上周五）不标记
             continue
         c0, c1 = float(series[prev]["close"]), float(series[d]["close"])
-        if c0 > 0 and abs(c1 / c0 - 1) > 0.30:
+        if c0 > 0 and abs(c1 / c0 - 1) > threshold:
             out.add(_week_key(d))
     return out
 
 
 def build_weekly_frame(data_root: Path, spec: UniverseSpec,
-                       *, bench_symbol: str = "510300.SH") -> WeeklyFrame:
+                       *, bench_symbol: str = "510300.SH",
+                       corrupt_threshold: float = 0.30,
+                       pick_bypass_single: bool = False
+                       ) -> WeeklyFrame:
     members = spec.members
     idx_series = [_load_daily(data_root / "sector" / "series" / f"{m.index_code}.jsonl")
                   for m in members]
@@ -70,7 +74,7 @@ def build_weekly_frame(data_root: Path, spec: UniverseSpec,
                 for s in all_etf_syms}
     bars = {s: [row for row in series.values()]
             for s, series in ((s, dict(sorted(etf_data[s].items()))) for s in all_etf_syms)}
-    corrupt = {s: _corrupt_weeks(etf_data[s]) for s in all_etf_syms}
+    corrupt = {s: _corrupt_weeks(etf_data[s], threshold=corrupt_threshold) for s in all_etf_syms}
 
     week_last: list[dict[int, dict]] = []
     for series in idx_series:
@@ -125,7 +129,7 @@ def build_weekly_frame(data_root: Path, spec: UniverseSpec,
         for li, m in enumerate(members):
             if wk in week_last[li]:
                 idx_close[ti, li] = float(week_last[li][wk]["row"]["close"])
-            pick = point_in_time_pick(list(m.etf_candidates), bars, fridays[-1])
+            pick = point_in_time_pick(list(m.etf_candidates), bars, fridays[-1], bypass_single=pick_bypass_single)
             if pick is None:
                 continue
             bi = all_etf_syms.index(pick)

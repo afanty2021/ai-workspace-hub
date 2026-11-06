@@ -58,6 +58,18 @@ def test_missing_open_blocks_buy():
     assert 0 not in pos and detail["blocked"][0] == "missing"
 
 
+def test_min_amount_none_disables_liquidity_gate():
+    """R20261106-02 §7：美股 SPDR 流动性不需要 5000 万元闸门（论文无此规则）——
+    min_amount_wan=None 放行低均额成员；默认值行为不变（上条用例已锁）。"""
+    wf = _wf(np.array([[1.0]]), np.array([[1.02]]), np.array([[1.0]]),
+             week_amount=np.array([[3e7]]))          # 3000 万 < 默认 5000 万
+    _, pos, detail = simulate_week(wf, 0, {}, {0: 1.0}, CostModel.base())
+    assert 0 not in pos and detail["blocked"][0] == "liquidity"
+    _, pos2, detail2 = simulate_week(wf, 0, {}, {0: 1.0}, CostModel.base(),
+                                     min_amount_wan=None)
+    assert 0 in pos2 and detail2["blocked"] == {}
+
+
 def test_simulate_week_net_turnover_costs():
     """评审 C1+C5：建仓只付单边 11bp；持有过周末（同权重再入选）成本 ≈ 0。"""
     wf = _wf(np.array([[1.0]]), np.array([[1.10]]), np.array([[0.99]]))

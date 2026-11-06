@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import numpy as np
+
 from sector_rotation.data import build_weekly_frame
 from sector_rotation.universe import Member, UniverseSpec
 
@@ -91,3 +93,50 @@ def test_split_guard_monday_jump_is_benign(tmp_path: Path):
     assert wf.valid[0][0]
     assert wf.dvalid[0][0]
     assert wf.etf_close[0][0] == 0.505             # 周一开盘 1.0 → 周五 0.505 是真实拆分周
+
+
+def test_corrupt_threshold_disable(tmp_path: Path):
+    # R20261106-02 §7 第 1 行：美股复权数据无拆分残留，拆分防护可参数化关闭
+    # ——同一 30%+ 跳变数据，默认阈值屏蔽该周、corrupt_threshold=1e9 放行。
+    split = _etf_rows("2020-01-02", "2026-11-13")
+    for r in split:
+        if r["date"] >= "2026-11-11":                 # 周三起 close 减半
+            r["close"] = 0.505
+    _build(tmp_path, split)                           # 布局落盘（帧用默认参数）
+    wf_def = build_weekly_frame(tmp_path, SPEC)
+    wf_off = build_weekly_frame(tmp_path, SPEC, corrupt_threshold=1e9)
+    assert not wf_def.valid[0][0]                     # 默认 0.30：周二~周五生效跳变 → 屏蔽
+    assert wf_off.valid[0][0]                         # 1e9：放行
+
+
+def test_bench_symbol_param(tmp_path: Path):
+    # R20261106-02 §7：bench_symbol 传入即用（美股 SPY），bench_300 字段名不动。
+    _write(tmp_path / "sector/series/881101.jsonl",
+           [{"date": "2026-11-06", "close": 100.0},
+            {"date": "2026-11-13", "close": 101.0},
+            {"date": "2026-11-20", "close": 102.0}])
+    _write(tmp_path / "market/series/528030.SH.jsonl", _etf_rows("2020-01-02", "2026-11-13"))
+    _write(tmp_path / "market/series/SPY.jsonl",
+           _etf_rows("2020-01-02", "2026-11-13", (1.0, 1.05, 1e9)))
+    wf = build_weekly_frame(tmp_path, SPEC, bench_symbol="SPY")
+    assert np.isfinite(wf.bench_300[0]) and abs(wf.bench_300[0] - 0.05) < 1e-9
+
+
+def test_pick_bypass_single_valid_from_first_data_week(tmp_path: Path):
+    # R20261106-02 §7 第 5 行（计划评审 I-1）：单候选旁路后 valid 退化为数据
+    # 齐备性——短史成员从首个执行周齐备周即 valid；默认路径上市<2 年
+    # pick=None → valid 恒 False（不旁路则美股 2009-2010 静默缩宇宙且无警报，
+    # 2012 年模型有效训练标签腰斩）。真实数据全窗 valid==11 断言在
+    # repro_paper.py 自检（提案 §9）。
+    spec1 = UniverseSpec([Member("881101", "工程机械", ("528030.SH",), 0.10)], {})
+    _write(tmp_path / "sector/series/881101.jsonl",
+           [{"date": d, "close": 100.0 + i}
+            for i, d in enumerate(["2026-10-09", "2026-10-16", "2026-11-06"])])
+    _write(tmp_path / "market/series/528030.SH.jsonl",
+           _etf_rows("2026-10-02", "2026-11-13"))
+    _write(tmp_path / "market/series/510300.SH.jsonl",
+           _etf_rows("2020-01-02", "2026-11-13"))
+    wf_def = build_weekly_frame(tmp_path, spec1)
+    wf_byp = build_weekly_frame(tmp_path, spec1, pick_bypass_single=True)
+    assert not wf_def.valid[:, 0].any()               # 默认：上市<2 年 → 恒 invalid
+    assert wf_byp.valid[:, 0].all()                   # 旁路：数据齐备即 valid

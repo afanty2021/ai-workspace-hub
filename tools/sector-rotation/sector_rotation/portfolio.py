@@ -131,12 +131,14 @@ class RiskState:
 
 
 def simulate_week(wf: WeeklyFrame, t: int, weights_prev: dict[int, float],
-                  weights_new: dict[int, float], cost: CostModel
+                  weights_new: dict[int, float], cost: CostModel,
+                  *, min_amount_wan: float | None = WEEKLY_MIN_AMOUNT_WAN
                   ) -> tuple[float, dict[int, float], dict[int, float]]:
     # 执行闸门（spec §3.5）：周一开盘涨停弃买；周内日均成交额 <5000 万拦截；
     # etf_open 缺失（nan）单独记 "missing"（执行注：与 limit_up 拆开分别记）。
     # 跌停顺延首版简化：周五清仓一律按 close 计损益，顺延只影响成本时点
     # （周频口径影响 ≤1bp）——README 已知限制声明。
+    # min_amount_wan=None 关流动性闸门（美股域 R20261106-02 §7）。
     blocked: dict[int, str] = {}
     executed: dict[int, float] = {}
     for i, w in weights_new.items():
@@ -146,8 +148,9 @@ def simulate_week(wf: WeeklyFrame, t: int, weights_prev: dict[int, float],
             blocked[i] = "missing"
         elif wf.etf_open[t, i] >= limit_up:
             blocked[i] = "limit_up"
-        elif (not np.isfinite(wf.etf_week_amount[t, i])
-              or wf.etf_week_amount[t, i] < WEEKLY_MIN_AMOUNT_WAN * 1e4):
+        elif (min_amount_wan is not None
+              and (not np.isfinite(wf.etf_week_amount[t, i])
+                   or wf.etf_week_amount[t, i] < min_amount_wan * 1e4)):
             blocked[i] = "liquidity"
         else:
             executed[i] = w
