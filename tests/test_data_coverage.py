@@ -58,3 +58,12 @@ class CoverageTests(unittest.TestCase):
         # 未命中注记表的标的不能带出口径行。
         self.assertNotIn('口径注记（000630.SZ）', text)
         self.assertNotIn('口径注记（^TNX）', text)
+
+    def test_tdx_56xxxx_caliber_note_carries_known_quirk(self):
+        # 2026-11-06 用户拍板保持现状：562800 入池，价位 ×10 缺陷必须随报告显式披露。
+        market = {'quotes': [{'ticker': '562800.SH', 'source': 'mootdx', 'tradeDate': '2026-11-06'}],
+                  'meta': {'fetched_at': '2026-11-06T08:00:00+00:00'}}
+        text = render_data_coverage(market, {'meta': {}}, {'earnings': False, 'macro': False})
+        self.assertIn('口径注记（562800.SH）', text)
+        self.assertIn('×10', text)
+        self.assertIn('56xxxx', text)
