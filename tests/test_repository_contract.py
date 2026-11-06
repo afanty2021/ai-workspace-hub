@@ -29,6 +29,9 @@ class RepositoryContractTests(unittest.TestCase):
             # review-queue 是被跟踪的实例文件，但表格行是使用数据（agent 自动追加）：
             # 只有表头以上的静态说明是契约，分隔线以下的行不比较。
             "system/templates/review-queue.md": "|---|---|---|---|---|---|---|",
+            # research-profile 的「本轮观察」同理（2026-11-06 首条观察触发此缺口）：
+            # 引导句以上的静态说明与已确认偏好是契约，观察条目是使用数据不比较。
+            "system/templates/research-profile.md": "> 记录用户在真实研究中的追问、删改和反驳。观察不等于偏好",
         }
         for template, public in pairs:
             public_path = REPO_ROOT / public
