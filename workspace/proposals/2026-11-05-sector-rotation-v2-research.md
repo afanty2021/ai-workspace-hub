@@ -7,7 +7,7 @@ related:
   - workspace/proposals/2026-11-05-sector-rotation-p1-closure.md（§9 重启锚点）
   - wiki/explorations/EXP-20261105-01-a-share-sector-rotation-l0-negative.md（触发器：重启前先读结案 §6/§9）
   - docs/superpowers/plans/2026-11-05-sector-rotation-p0-p2.md（T12/T13 设计源，GC 14 终止后复活）
-status: executed-closed（方案 A+消费保护按推荐先行执行完毕；闸门未过负结果结案，Q-20261105-06 正式拍板待补、Q-20261106-01 沉淀待确认）
+status: executed-closed（方案 A+消费保护先行执行完毕并经 Q-20261105-06 追认；闸门未过负结果结案；后续轮次已拍板 C 纯探索不消费；Q-20261106-01 沉淀待确认）
 preflight_id: PF-R20261105-02-44495763
 knowledge_used: ["EXP-20261105-01"]
 wiki_pages_loaded: ["wiki/concepts/ai-filesystem-synergy.md"]
@@ -94,7 +94,7 @@ v2-L1 预注册：level=L1 · variant=<网格胜者> · window=<网格胜者> ·
 
 ## 8. 实施记录（滚动追加）
 
-- **拍板状态（2026-11-06）**：Q-20261105-06 两项（主候选/消费保护）AskUserQuestion 未获回答，执行会话按本草案推荐（**方案 A + 采纳消费保护**）先行，queue 条目保持 pending 供改判；一切 spec/记录均已披露此出处。
+- **拍板状态（2026-11-06，已追认）**：Q-20261105-06 两项——AskUserQuestion 未答、执行会话按本草案推荐（**方案 A + 采纳消费保护**）先行完毕（闸门未过负结果结案）；**用户随后追认本轮执行无误，并拍板后续轮次改选 C（纯探索不消费任何确认性窗口，spec v1.2.5 §3.8 第 8 条；恢复确认性须新窗口/新宇宙+显式拍板）**。
 - **V2-1（commit 92cce34，2026-11-06）**：models.py L1 落地。**两层结构修正**：①训练行不要求全成员 valid（T12 carry Ruling 原裁定）；②资产子集 M_t = 当周窗口特征齐备且 valid 成员——首版按①实现后单元测试 6 用例全绿，但真实数据 17 周切片冒烟 L1 全程空仓（CAGR 0.00%/换手 0）：全市场 window_blocks 口径要求某行全体 416 成员齐备，point-in-time 覆盖增长宇宙（10→416，峰值 65%）下 t_idx 恒空。修根：window_blocks 增 cols/upto 子集参数，_prep 按 M_t 调用。教训记 friction-log（toy 夹具全覆盖掩蔽病灶；真实数据冒烟是网格前置闸门）。修复后冒烟：L1 真实持仓（裸 +71.65%/Sharpe 1.50，2024-09→12 切片）。7 用例：T12 原三 + 稀疏覆盖回归（3 成员无一全齐行）+ 掩码不泄漏（掩码外翻转价格逐位不变）+ seed 确定性；全量 556 绿 + ruff 净。
 - **V2-2（2026-11-06，grid_l1_selection.py 入库）**：选择窗 6 格（window{8,13,26}×variant{joint,independent}），判据事前声明（基准档闸门净 CAGR→裸→Sharpe）。全表：w8/ind **+16.66%/+35.31%/0.90**（胜者）、w13/joint +9.56%、w13/ind +2.79%、w8/joint -5.41%（halt 1 次）、w26/joint -3.32%、w26/ind -3.41%；**L1 全族裸路径六格全正（+24.6~+37.7%）**。引擎一致性交叉验证：L0 对照行 +13.23%/0.77 与 v1 阶段 A 逐位一致（S6+边沿触发后 L0 行为无漂移）。
 - **V2-3（commit 8ecc286，2026-11-06）**：消费保护检查放行（胜者裸 +35.31% > 0）；预注册行落 spec §6.3（v1.2.4）+ §3.8 第 7 条（消费保护入协议，标注「按推荐先行适用，正式拍板待补」）。seed 实值 20261105（非草案的 0，与 LAMBDA_FIN 等常量同源——预注册行以 spec 为准）。
