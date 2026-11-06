@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 
 import numpy as np
+import pytest
 
 from sector_rotation.baselines import EqualWeightAnnual, momentum_topk
 from sector_rotation.cost import CostModel
@@ -68,9 +69,15 @@ def test_drift_update_skips_blocked_member_no_keyerror():
     assert res.trades[1]["detail"]["turnover"] > 0.49
 
 
+@pytest.mark.filterwarnings("ignore:Mean of empty slice:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:invalid value encountered in divide:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:invalid value encountered in scalar divide:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:Degrees of freedom <= 0 for slice:RuntimeWarning")
 def test_min_universe_passthrough_prevents_collapse():
     """R20261106-02 §7：11 成员宇宙下默认 min_universe=50 令 coverage_start 回退
-    末行（空转）；透传 min_universe=1 后从首个有效周正常起跑。"""
+    末行（空转）；透传 min_universe=1 后从首个有效周正常起跑。
+    默认档空转走 metrics 空数组路径，4 类 RuntimeWarning 为该档预期输出，
+    就地屏蔽（GC 2 输出干净）——断言与既有行为锁不动。"""
     wf = _wf(T=30)                                   # 2 成员全 valid（末行除外）
     res_def = run_walkforward(wf, momentum_topk, cost=CostModel.base(),
                               min_universe=50)       # 回退 start=29 → 第 29 周无 valid → 空转
