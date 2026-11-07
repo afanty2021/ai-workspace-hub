@@ -349,8 +349,9 @@ def fetch_tushare_quotes(
 # Order per ticker here: Nasdaq (US stocks, no key) -> Finnhub -> EOD
 #   -> Nasdaq index API / FRED / Eastmoney global / Sina global (mapped
 #   global+macro tickers, no key)
-#   -> Tushare (CN/HK; demoted from primary after mootdx) -> Eastmoney/Tencent/
-#   Sina (CN A-share + ETF, no key) -> yfinance.
+#   -> Tushare (CN/HK; demoted from primary after mootdx) -> Eastmoney/
+#   Tencent (CN A-share + ETF and HK single stocks, no key) -> Sina
+#   (CN only) -> yfinance.
 
 EOD_MARKET_SUFFIX = {"HK": "HK", "KR": "KO", "FI": "HE"}
 
@@ -530,11 +531,27 @@ def _cn_quote_symbol(ticker: str) -> str | None:
     return None
 
 
+def _hk_quote_code(ticker: str) -> str | None:
+    """03800.HK -> '03800' (5-digit HKEX code); None for non-HK tickers."""
+    base, sep, suffix = ticker.upper().rpartition(".")
+    if sep and suffix == "HK" and base.isdigit() and len(base) == 5:
+        return base
+    return None
+
+
 def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
-    symbol = _cn_quote_symbol(ticker)
-    if symbol is None:
-        return None
-    secid = ("1." if symbol.startswith("sh") else "0.") + symbol[2:]
+    hk_code = _hk_quote_code(ticker)
+    if hk_code is not None:
+        secid = f"116.{hk_code}"
+    else:
+        symbol = _cn_quote_symbol(ticker)
+        if symbol is None:
+            return None
+        secid = ("1." if symbol.startswith("sh") else "0.") + symbol[2:]
+    # With fltt=2 both CN and HK responses carry plain decimals (verified live:
+    # 116.03800 -> f43=0.64 HKD, 116.00700 -> 419.8). WITHOUT fltt the raw
+    # payload is per-mille fixed point (640 / 419800) — curl probes that omit
+    # fltt show scaled integers; do not "fix" scaling based on those.
     try:
         response = requests.get(
             "https://push2.eastmoney.com/api/qt/stock/get",
@@ -577,7 +594,11 @@ def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
 
 
 def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
-    symbol = _cn_quote_symbol(ticker)
+    hk_code = _hk_quote_code(ticker)
+    if hk_code is not None:
+        symbol = f"hk{hk_code}"
+    else:
+        symbol = _cn_quote_symbol(ticker)
     if symbol is None:
         return None
     # 10s (not DEFAULT_TIMEOUT=20) on purpose: these are lightweight text/JSON
@@ -595,13 +616,19 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
         if data_start == -1 or data_end <= data_start:
             return None
         # Fields (split on ~): 1=name 3=price 4=pre_close 5=open 6=volume(lots)
-        # 30=yyyymmddHHMMSS 31=change 32=change_pct 33=high 34=low
+        # 30=timestamp 31=change 32=change_pct 33=high 34=low
+        # HK responses (hk03800 style) share the same layout but timestamps are
+        # 'YYYY/MM/DD HH:MM:SS' instead of 'YYYYMMDDHHMMSS'.
         fields = content[data_start + 1 : data_end].split("~")
         if len(fields) < 35:
             return None
         price = parse_float(fields[3])
         if price is None or price <= 0:
             return None
+        if hk_code is not None:
+            trade_date = fields[30][:10].replace("/", "-")
+        else:
+            trade_date = fields[30][:8]
         return {
             "symbol": ticker,
             "price": price,
@@ -612,7 +639,7 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
             "dayHigh": parse_float(fields[33]),
             "dayLow": parse_float(fields[34]),
             "volume": parse_float(fields[6]),
-            "tradeDate": fields[30][:8],
+            "tradeDate": trade_date,
             "source": "tencent",
         }
     except Exception as exc:  # noqa: BLE001
@@ -1000,8 +1027,8 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
 
     # Tushare first among keyless-and-scraper fallbacks (demoted from primary
     # when mootdx took over): official EOD with pre_close, still more
-    # authoritative than the HTTP scrapers below. HK tickers only ever reach
-    # CN sources via this gate.
+    # authoritative than the HTTP scrapers below. HK enters the chain here
+    # (and again via eastmoney/tencent below); sina stays CN-only.
     tushare_token = env.get("TUSHARE_TOKEN", "").strip()
     tushare_client = None
     if tushare_token and (ticker.endswith(CN_SUFFIXES) or ticker.endswith(HK_SUFFIX)):
@@ -1009,8 +1036,9 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
         if tushare_client is not None:
             chain.append(("tushare", lambda: fetch_tushare_quote(tushare_client, ticker)))
 
-    # Keyless A-share fallbacks (also cover ETFs tushare `daily` misses).
-    # The _cn_quote_symbol gate inside each fetcher returns None for non-CN.
+    # Keyless scraper fallbacks: eastmoney/tencent cover CN A-share + ETF
+    # (incl. ones tushare `daily` misses) and HK single stocks via
+    # _hk_quote_code; sina stays CN-only (_cn_quote_symbol -> None for non-CN).
     chain.append(("eastmoney", lambda: fetch_eastmoney_quote(ticker, market)))
     chain.append(("tencent", lambda: fetch_tencent_quote(ticker, market)))
     chain.append(("sina", lambda: fetch_sina_quote(ticker, market)))

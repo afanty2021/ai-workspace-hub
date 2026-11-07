@@ -35,6 +35,11 @@ SINA_PAYLOAD = (
     'var hq_str_sh600276="恒瑞医药,46.00,45.55,48.36,49.00,45.80,48.30,48.36,'
     '12345600,567890000,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,2026-10-28,15:00:00,00";'
 )
+# Same ~-layout as CN but timestamp is 'YYYY/MM/DD HH:MM:SS' (live: hk03800).
+TENCENT_HK_PAYLOAD = (
+    'v_hk03800="100~协鑫科技~03800~0.640~0.660~0.645~152697900~x~x~0.640~x~x~x~x'
+    '~x~x~x~x~x~x~x~x~x~x~x~x~x~x~x~x~2026/11/06 16:08:54~-0.020~-3.03~0.675~0.630";'
+)
 EASTMONEY_PAYLOAD = {
     "data": {
         "f43": 48.36,
@@ -42,11 +47,26 @@ EASTMONEY_PAYLOAD = {
         "f45": 45.80,
         "f46": 46.00,
         "f47": 123456,
-        "f58": "恒瑞医药",
         "f60": 45.55,
         "f86": 1774569600,
         "f169": 2.81,
         "f170": 6.17,
+    }
+}
+# Live HK shape with fltt=2 (116.03800): plain decimals, same as CN —
+# f43=0.64 HKD. Without fltt the same endpoint returns per-mille integers
+# (640/-20/-303); the fetcher always sends fltt=2, so no rescaling here.
+EASTMONEY_HK_PAYLOAD = {
+    "data": {
+        "f43": 0.64,
+        "f44": 0.675,
+        "f45": 0.63,
+        "f46": 0.645,
+        "f47": 152697900,
+        "f60": 0.66,
+        "f86": 1793952531,
+        "f169": -0.02,
+        "f170": -3.03,
     }
 }
 
@@ -68,6 +88,16 @@ class SymbolRuleTests(unittest.TestCase):
         self.assertIsNone(_cn_quote_symbol("AAPL"))
         self.assertIsNone(_cn_quote_symbol("0700.HK"))
         self.assertIsNone(_cn_quote_symbol("601857"))
+
+    def test_hk_codes_require_five_digits(self) -> None:
+        # HKEX codes are 5-digit zero-padded (03800); shorter legacy forms (0700)
+        # stay rejected so a malformed ticker can never hit the 116 secid map.
+        from fetch_market_data import _hk_quote_code
+
+        self.assertEqual(_hk_quote_code("03800.HK"), "03800")
+        self.assertIsNone(_hk_quote_code("0700.HK"))
+        self.assertIsNone(_hk_quote_code("600276.SH"))
+        self.assertIsNone(_hk_quote_code("AAPL"))
 
 
 class EastmoneyQuoteTests(unittest.TestCase):
@@ -106,6 +136,35 @@ class EastmoneyQuoteTests(unittest.TestCase):
         self.assertIsNone(fetch_eastmoney_quote("AAPL", "US"))
         mock_get.assert_called_once()
 
+    @patch("fetch_market_data.requests.get")
+    def test_hk_ticker_parses_fltt2_decimal_fields_unscaled(self, mock_get: MagicMock) -> None:
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = EASTMONEY_HK_PAYLOAD
+        mock_get.return_value = response
+
+        quote = fetch_eastmoney_quote("03800.HK", "HK")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 0.64)
+        self.assertEqual(quote["change"], -0.02)
+        self.assertEqual(quote["changesPercentage"], -3.03)
+        self.assertEqual(quote["previousClose"], 0.66)
+        self.assertEqual(quote["open"], 0.645)
+        self.assertEqual(quote["dayHigh"], 0.675)
+        self.assertEqual(quote["dayLow"], 0.63)
+        self.assertEqual(quote["volume"], 152697900)
+        self.assertEqual(quote["source"], "eastmoney")
+        self.assertRegex(quote["tradeDate"], r"^\d{4}-\d{2}-\d{2}$")
+        # 5-digit HKEX code rides the 116 market prefix (not 0/1 like CN).
+        self.assertEqual(mock_get.call_args.kwargs["params"]["secid"], "116.03800")
+
+    @patch("fetch_market_data.requests.get")
+    def test_short_hk_code_is_rejected_without_request(self, mock_get: MagicMock) -> None:
+        self.assertIsNone(fetch_eastmoney_quote("0700.HK", "HK"))
+        mock_get.assert_not_called()
+
 
 class TencentQuoteTests(unittest.TestCase):
     @patch("fetch_market_data.requests.get")
@@ -132,6 +191,25 @@ class TencentQuoteTests(unittest.TestCase):
             "tencent endpoint must stay HTTPS",
         )
         self.assertIn("q=sh600276", str(mock_get.call_args))
+
+    @patch("fetch_market_data.requests.get")
+    def test_hk_ticker_maps_to_hk_prefix_and_slash_date(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(TENCENT_HK_PAYLOAD)
+
+        quote = fetch_tencent_quote("03800.HK", "HK")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 0.64)
+        self.assertEqual(quote["change"], -0.02)
+        self.assertEqual(quote["changesPercentage"], -3.03)
+        self.assertEqual(quote["previousClose"], 0.66)
+        self.assertEqual(quote["dayHigh"], 0.675)
+        self.assertEqual(quote["dayLow"], 0.63)
+        # 'YYYY/MM/DD HH:MM:SS' normalizes to ISO, not the CN [:8] slice.
+        self.assertEqual(quote["tradeDate"], "2026-11-06")
+        self.assertEqual(quote["source"], "tencent")
+        self.assertIn("q=hk03800", str(mock_get.call_args))
 
     @patch("fetch_market_data.requests.get")
     def test_returns_none_on_truncated_and_non_cn(self, mock_get: MagicMock) -> None:
