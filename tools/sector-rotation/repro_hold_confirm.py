@@ -136,8 +136,12 @@ def main(argv: list[str]) -> int:
     wf = build_frame()
     _, c_end = year_bounds(wf)
     start, end = tail_bounds(wf)
-    # 自检（提案 §2.2）：与消费窗零重叠相接 + 周数冻结带 + valid==11 全窗
-    assert start == c_end, f"尾段首周 {start} ≠ 消费窗末 {c_end}（重叠或缺口）"
+    # 自检（提案 §2.2）：与消费窗零重叠——间隔恰为永久弃的 2022-12-30 决策
+    # （消费窗 N3 弃其 exec 2023-W01；本窗弃其决策日 <2023-01-01；对称永久弃）
+    assert start == c_end + 1, (
+        f"尾段首周 {start} ≠ 消费窗末 {c_end}+1（重叠或意外缺口）")
+    assert wf.fridays[c_end] == "2022-12-30", (
+        f"消费窗末后应恰为永久弃决策 2022-12-30，实际 {wf.fridays[c_end]}")
     assert end - start in EXPECT_WEEKS, (
         f"尾段周数 {end - start} 越出冻结带 {EXPECT_WEEKS}——数据被更新过，终止")
     assert (wf.valid[start:end].sum(axis=1) == 11).all(), "尾段宇宙缩水"
@@ -150,7 +154,8 @@ def main(argv: list[str]) -> int:
               f"预注册冻结配置：{FROZEN}", "",
               f"窗口：决策 {wf.fridays[start]}..{wf.fridays[end - 1]} 共 "
               f"{end - start} 周（执行周 ISO 年 2023-2026）· 与消费窗 "
-              f"[..{wf.fridays[c_end - 1]}] 零重叠相接断言通过 · valid==11 全窗。", "",
+              f"[..{wf.fridays[c_end - 1]}] 零重叠（间隔恰为永久弃决策 "
+              f"2022-12-30）· valid==11 全窗。", "",
               "| 指标 | N=13 | N=26 | N=52 |", "|" + "---|" * 4]
     keys = [("α 均值（毛，主判定）", "mean_alpha", "{:+.2%}"),
             ("α 中位（毛）", "median_alpha", "{:+.2%}"),
