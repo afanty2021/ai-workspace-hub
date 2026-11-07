@@ -266,6 +266,46 @@ review_due: 2020-01-01
         self.assertTrue((self.root / "workspace/knowledge-usage.jsonl").is_file())
         self.assertIn("preflight_id: PF-R-CLI-", report.read_text(encoding="utf-8"))
 
+    def test_cli_rejects_research_id_already_taken_by_another_report(self) -> None:
+        # 撞号回归：并行会话已在子目录占用同一 R-ID 时，后到者必须被拒绝，
+        # 否则回执 preflight/{R-ID}.md 会互相覆盖（2026-11-07 ST人福/宁德案）。
+        existing = self.root / "output/research/2026-11/other-session.md"
+        existing.parent.mkdir(parents=True)
+        existing.write_text(
+            "---\nid: R-TAKEN\nstatus: draft\n---\n\n# 并行会话报告\n",
+            encoding="utf-8",
+        )
+        # own 放更早的月份子目录，让 sorted rglob 先扫到它：若 own 排除逻辑
+        # 被删，先报出的会是自己的路径，断言 other-session.md 即失败——锁死排除行为。
+        mine = self.root / "output/research/2026-10/my-report.md"
+        mine.parent.mkdir(parents=True, exist_ok=True)
+        mine.write_text(
+            "---\nid: R-TAKEN\nstatus: draft\npreflight_id:\n"
+            "knowledge_used: []\nwiki_pages_loaded: []\n---\n\n# 我的报告\n",
+            encoding="utf-8",
+        )
+        argv = [
+            "research_preflight.py",
+            "--root",
+            str(self.root),
+            "--context",
+            "撞号测试",
+            "--research-id",
+            "R-TAKEN",
+            "--research-file",
+            str(mine),
+            "--record",
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch("sys.argv", argv), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = PREFLIGHT.main()
+
+        self.assertEqual(code, 2)
+        self.assertIn("已被占用", stderr.getvalue())
+        self.assertIn("other-session.md", stderr.getvalue())
+        self.assertFalse((self.root / "output/research/preflight/R-TAKEN.md").exists())
+
     def test_doctor_verifies_report_against_preflight_receipt(self) -> None:
         report = self.root / "output/research/doctor.md"
         report.parent.mkdir(parents=True)

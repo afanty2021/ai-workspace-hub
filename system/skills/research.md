@@ -21,7 +21,13 @@
 
 ## 第 1 步：Research Preflight（必须先扫描本地）
 
-先创建研究文件并分配稳定 ID，再把公司/主题、ticker、产业链位置、周期阶段、约束类型、催化类型和决策场景写成一组明确关键词。运行：
+先创建研究文件并分配稳定 ID（编号 = 当日已用最大序号 +1；**分配前必须全量检索，不能只 ls 首层目录**——子目录（如 `output/research/2026-11/`）和并行会话的报告都会占用编号）：
+
+```bash
+grep -rh "^id: RYYYYMMDD" output/research/ --include="*.md" | sort | uniq
+```
+
+再把公司/主题、ticker、产业链位置、周期阶段、约束类型、催化类型和决策场景写成一组明确关键词。运行（`--research-id` 已被其他报告占用时脚本会拒绝执行并指出占用文件）：
 
 ```bash
 python3 system/scripts/research_preflight.py --root . \

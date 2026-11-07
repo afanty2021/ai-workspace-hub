@@ -475,6 +475,31 @@ def render_receipt(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def find_research_id_clash(root: Path, research_id: str, own_file: Path) -> str | None:
+    """Return the path of another report already holding research_id, if any.
+
+    防并行会话撞号：回执按 research_id 命名，两个会话共用同一 ID 会互相覆盖
+    （2026-11-06 汇川/药明、2026-11-07 ST人福/宁德两案）。全量扫描
+    output/research/ 子目录的 frontmatter id，命中即返回占用文件路径。
+    """
+    own = own_file if own_file.is_absolute() else root / own_file
+    own = own.resolve()
+    base = root / "output" / "research"
+    if not base.is_dir():
+        return None
+    for path in sorted(base.rglob("*.md")):
+        if path.resolve() == own:
+            continue
+        try:
+            head = path.read_text(encoding="utf-8", errors="replace")[:2000]
+        except OSError:
+            continue
+        match = re.search(r"^id:[ \t]*(\S+)[ \t]*$", head, flags=re.MULTILINE)
+        if match and match.group(1) == research_id:
+            return display_path(path, root)
+    return None
+
+
 def save_receipt(root: Path, result: dict[str, Any], requested: Path | None = None) -> Path:
     if requested is None:
         filename = re.sub(r"[^A-Za-z0-9._-]+", "-", str(result["research_id"] or result["id"]))
@@ -553,6 +578,16 @@ def main() -> int:
         )
         return 2
     root = find_workspace_root(args.root)
+    if args.research_id and args.research_file:
+        clash = find_research_id_clash(root, args.research_id, args.research_file)
+        if clash:
+            print(
+                f"ERROR: 研究 ID {args.research_id} 已被占用：{clash}。"
+                "并行会话可能已分配该编号，请改用当日最大序号 +1："
+                "grep -rh \"^id: R\" output/research/ --include='*.md' | sort | uniq",
+                file=sys.stderr,
+            )
+            return 2
     result = build_preflight(
         root,
         context=args.context,
