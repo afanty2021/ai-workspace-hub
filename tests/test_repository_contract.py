@@ -106,6 +106,38 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn('startswith("your_")', market_script)
         self.assertIn('startswith("your_")', macro_script)
 
+    def test_data_sources_doc_covers_entrypoint_wirings(self) -> None:
+        """契约修根（friction-log 硬规则，同类第 3 案）：AGENTS.md 数据源表里
+        登记的接线 token（fund_nav / jj 前缀 / 116 段 / gpcw …）必须在
+        DATA-SOURCES.md 的选择表同步出现。
+
+        历史三次漏同步（模板×2、DATA-SOURCES×1）都败在"人工记七处清单"——
+        本测试把清单变成派生断言：往 AGENTS.md 加新接线 token 而
+        DATA-SOURCES.md 不跟，这里直接红。锁 DATA-SOURCES.md 一处（README/
+        skill 是操作手册，覆盖面天然不同，不做 token 平价）。
+        """
+        agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        # 「## 数据源」段内的表格行（| 数据源 | 市场 | env key | 费用 |）。
+        section = agents.split("## 数据源", 1)[1].split("\n## ", 1)[0]
+        # 空格可选：无空格写法（"jj前缀"）也要被提取成 token 并要求两处
+        # 一致（复查 R-1：原 `[a-z]{2,3} 前缀` 依赖空格，无空格改写 +
+        # DATA-SOURCES 删行时静默漏锁）。
+        token_re = re.compile(
+            r"\d{3}(?:/\d{3})? ?段|[a-z]{2,3} ?前缀|[a-z]+_nav|gpcw|datacenter"
+        )
+        tokens: set[str] = set()
+        for line in section.splitlines():
+            if not line.startswith("|") or set(line) <= {"|", "-", " ", ":"}:
+                continue
+            tokens.update(token_re.findall(line))
+        # 解析失效（表挪位置/改格式）时宁可红也不静默通过。
+        self.assertTrue(tokens, "AGENTS.md 数据源表解析不到任何接线 token")
+        doc = (REPO_ROOT / "DATA-SOURCES.md").read_text(encoding="utf-8")
+        missing = sorted(t for t in tokens if t not in doc)
+        self.assertEqual(
+            missing, [], f"DATA-SOURCES.md 缺少接线 token 同步: {missing}"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,12 @@ TENCENT_JJ_TRUNCATED_PAYLOAD = 'v_jj021179="021179~名称~0~0~~2.8052";'
 TENCENT_JJ_ZERO_NAV_PAYLOAD = (
     'v_jj021179="021179~名称~0~0~~0.0000~0.0000~0~2026-11-06~";'
 )
+# 合成夹具（非真实抓取）：单位净值 ≠ 累计净值（已分红基金形状）。真实
+# 021179 两值恰好相等（无分红），fields[5]↔fields[6] 索引漂移时上方真实
+# 载荷零区分度——本载荷专职锁字段位：price 必须读单位净值位 fields[5]。
+TENCENT_JJ_DISTINCT_NAV_PAYLOAD = (
+    'v_jj021179="021179~易方达产业机遇混合A~0.0000~0.0000~~2.8052~3.4100~-2.0017~2026-11-06~";'
+)
 
 # fund_nav 真实列布局（2026-11-08 实测：降序返回，最新在首行）。
 FUND_NAV_FRAME = pd.DataFrame(
@@ -115,6 +121,48 @@ class TushareOpenFundNavTests(unittest.TestCase):
         assert quote is not None
         self.assertIsNone(quote["previousClose"])
         self.assertIsNone(quote["changesPercentage"])
+        self.assertIsNone(quote["previousTradeDate"])
+
+    def test_stale_prev_nav_exposes_previous_trade_date(self) -> None:
+        # 净值停发（封闭期/暂停申赎/QDII 延迟披露）：最新两行隔月时
+        # changesPercentage 实为期间涨跌而非日涨跌——previousTradeDate
+        # 把前值披露日带回，下游可检测 gap 而不是被口径误导。
+        client = MagicMock()
+        client.fund_nav.return_value = pd.DataFrame(
+            {
+                "ts_code": ["021179.OF", "021179.OF"],
+                "ann_date": ["20261106", "20261009"],
+                "nav_date": ["20261106", "20261009"],
+                "unit_nav": [2.8052, 2.7434],
+            }
+        )
+
+        quote = fetch_tushare_openfund_nav(client, "021179.OF")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["tradeDate"], "20261106")
+        self.assertEqual(quote["previousTradeDate"], "20261009")
+
+    def test_nan_prev_nav_date_yields_none_not_nan_string(self) -> None:
+        # 复查 R-2：前值行 nav_date 缺失（None/NaN）时 previousTradeDate
+        # 必须是 None——"nan"/"None" 字符串不允许流进快照。
+        client = MagicMock()
+        client.fund_nav.return_value = pd.DataFrame(
+            {
+                "ts_code": ["021179.OF", "021179.OF"],
+                "ann_date": ["20261106", None],
+                "nav_date": ["20261106", None],
+                "unit_nav": [2.8052, 2.8625],
+            }
+        )
+
+        quote = fetch_tushare_openfund_nav(client, "021179.OF")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["tradeDate"], "20261106")
+        self.assertIsNone(quote["previousTradeDate"])
 
     def test_empty_or_broken_frame_returns_none(self) -> None:
         client = MagicMock()
@@ -151,6 +199,19 @@ class TencentOpenFundQuoteTests(unittest.TestCase):
         self.assertEqual(quote["price"], 2.8052)
         self.assertEqual(quote["changesPercentage"], -2.0017)
         self.assertEqual(quote["tradeDate"], "2026-11-06")
+
+    @patch("fetch_market_data.requests.get")
+    def test_unit_and_accum_nav_positions_are_distinct_fields(self, mock_get: MagicMock) -> None:
+        # 字段位锁：单位净值（fields[5]）≠ 累计净值（fields[6]）时 price 取
+        # 前者——解析索引漂到累计位（有分红/拆分的基金会读错净值）时必红。
+        mock_get.return_value = _text_response(TENCENT_JJ_DISTINCT_NAV_PAYLOAD)
+
+        quote = fetch_tencent_openfund_quote("021179.OF")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 2.8052)
+        self.assertNotEqual(quote["price"], 3.4100)
 
     @patch("fetch_market_data.requests.get")
     def test_truncated_payload_is_rejected(self, mock_get: MagicMock) -> None:
@@ -239,15 +300,49 @@ class OpenFundFallbackChainTests(unittest.TestCase):
     @patch("fetch_market_data.requests.get")
     def test_short_chain_never_touches_long_chain_endpoints(self, mock_get: MagicMock) -> None:
         # 变异防护：短链覆盖失败时绝不能漏进长链（东财 push2/新浪等）。
+        degradations: list[dict] = []
         with patch(
             "fetch_market_data.fetch_tushare_openfund_nav", return_value=None
         ), patch("fetch_market_data.fetch_tencent_openfund_quote", return_value=None):
             quote = fetch_fallback_quote(
-                {"ticker": "021179.OF", "market": "CN"}, self.ENV_WITH_TOKEN
+                {"ticker": "021179.OF", "market": "CN"}, self.ENV_WITH_TOKEN, degradations
             )
 
         self.assertIsNone(quote)
         mock_get.assert_not_called()  # 长链任何 HTTP 端点都未被碰
+        # 路由锁（评审 M-1）：全 miss 时降级记录恰好是 fund 短链两环——
+        # 若 .OF 路由被移除漏进长链，这里会出现长链环名而红。
+        self.assertEqual(
+            [d["source_tried"] for d in degradations],
+            ["tushare-fund", "tencent-fund"],
+        )
+        self.assertEqual(
+            [d["fallback"] for d in degradations], ["tencent-fund", "none"]
+        )
+
+    @patch("fetch_market_data.requests.get")
+    def test_clean_reject_and_exception_reject_have_distinct_reasons(
+        self, mock_get: MagicMock
+    ) -> None:
+        # 语义区分器（评审 M-4）：截断载荷=干净拒绝 reason="returned no
+        # data"；HTTP 异常=reason 记真实异常文本。两路径互换时本断言红
+        # （quote 侧 assertIsNone 锁不住这个差别）。
+        with patch("fetch_market_data.fetch_tushare_openfund_nav", return_value=None):
+            mock_get.return_value = _text_response(TENCENT_JJ_TRUNCATED_PAYLOAD)
+            clean: list[dict] = []
+            fetch_fallback_quote(
+                {"ticker": "021179.OF", "market": "CN"}, self.ENV_WITH_TOKEN, clean
+            )
+            self.assertEqual(clean[-1]["source_tried"], "tencent-fund")
+            self.assertEqual(clean[-1]["reason"], "returned no data")
+
+            mock_get.side_effect = RuntimeError("connection reset")
+            crashed: list[dict] = []
+            fetch_fallback_quote(
+                {"ticker": "021179.OF", "market": "CN"}, self.ENV_WITH_TOKEN, crashed
+            )
+            self.assertEqual(crashed[-1]["source_tried"], "tencent-fund")
+            self.assertEqual(crashed[-1]["reason"], "connection reset")
 
     @patch("fetch_market_data.requests.get")
     def test_bare_fund_code_stays_on_the_long_chain(self, mock_get: MagicMock) -> None:
@@ -303,10 +398,11 @@ class OpenFundQuoteRecordTests(unittest.TestCase):
         }
         raw = {
             "price": 2.8052, "changesPercentage": -1.993, "previousClose": 2.8625,
-            "tradeDate": "20261106", "source": "tushare-fund",
+            "tradeDate": "20261106", "previousTradeDate": "20261105", "source": "tushare-fund",
         }
         record = build_quote_record(raw, entry)
         self.assertEqual(record["tradeDate"], "2026-11-06")
+        self.assertEqual(record["previousTradeDate"], "2026-11-05")  # 期间涨跌可检测的钥匙
         self.assertIsNone(record["open"])  # 场外基金无 OHLC
         self.assertIsNone(record["volume"])
         self.assertEqual(record["source"], "tushare-fund")

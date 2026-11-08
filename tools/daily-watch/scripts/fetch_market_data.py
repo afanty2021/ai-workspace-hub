@@ -657,12 +657,22 @@ def fetch_tushare_openfund_nav(client: Any, ticker: str) -> dict[str, Any] | Non
         return None
     prev = parse_float(rows.iloc[-1].get("unit_nav")) if len(rows) > 1 else None
     change_pct = round((nav / prev - 1) * 100, 4) if prev else None
+    # 语义边界：最新两行隔了非相邻披露日（封闭期/暂停申赎/QDII 延迟披露）
+    # 时，changesPercentage 实为期间涨跌而非日涨跌——把前值日期一并返回，
+    # 下游可检测 gap 而不是被"日涨跌"口径误导。
+    prev_date = None
+    if len(rows) > 1:
+        raw_date = str(rows.iloc[1].get("nav_date", ""))
+        # NaN 穿透防御（复查 R-2）：非 8 位披露日不产出（"nan" 字符串
+        # 不该流进快照）。
+        prev_date = raw_date if re.fullmatch(r"\d{8}", raw_date) else None
     return {
         "symbol": ticker,
         "price": nav,
         "change": round(nav - prev, 4) if prev else None,
         "changesPercentage": change_pct,
         "previousClose": prev,
+        "previousTradeDate": prev_date,
         "open": None,
         "dayHigh": None,
         "dayLow": None,
@@ -678,6 +688,10 @@ def fetch_tencent_openfund_quote(ticker: str) -> dict[str, Any] | None:
     响应布局（~ 分隔，2026-11-08 对 021179 实测验证）：
     0=代码 1=名称 5=单位净值 6=累计净值 7=日涨跌% 8=净值日期。
     与股票 35+ 字段布局完全不同，独立于 fetch_tencent_quote。
+
+    边界在档（复查 R-3）：jj 布局无前值日期位，previousTradeDate 恒
+    None——本源命中时若遇净值停发，fields[7] 的"日涨跌%"实为期间涨跌
+    且无法像 tushare-fund 侧那样检测 gap。
     """
     base = _of_base_code(ticker)
     if base is None:
@@ -1281,6 +1295,7 @@ def build_quote_record(
         "dayLow": parse_float(raw_quote.get("dayLow")),
         "volume": parse_float(raw_quote.get("volume")),
         "tradeDate": _iso_trade_date(raw_quote.get("tradeDate") or raw_quote.get("timestamp")),
+        "previousTradeDate": _iso_trade_date(raw_quote.get("previousTradeDate")),
         "source": raw_quote.get("source", "fmp"),
     }
 
