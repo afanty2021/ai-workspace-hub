@@ -539,6 +539,22 @@ def _hk_quote_code(ticker: str) -> str | None:
     return None
 
 
+def _us_quote_symbol(ticker: str, market: str) -> str | None:
+    """NVDA (market=US) -> 'NVDA' for the Tencent us prefix; None otherwise.
+
+    Gated on the market column (like fetch_nasdaq_quote), not on a suffix:
+    watchlist US rows carry bare tickers. Dotted class tickers (BRK.B) are
+    rejected — their Tencent encoding is unverified, so they fall through
+    to the rest of the chain. Purely numeric bases are intentionally let
+    through (parity with fetch_nasdaq_quote's handling of the same
+    mismatched-row input) — they only produce an empty us* probe.
+    """
+    if market.strip().upper() != "US":
+        return None
+    base = strip_market_suffix(ticker).upper()
+    return base if base.isalnum() else None
+
+
 def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
     hk_code = _hk_quote_code(ticker)
     if hk_code is not None:
@@ -595,8 +611,11 @@ def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
 
 def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
     hk_code = _hk_quote_code(ticker)
+    us_symbol = _us_quote_symbol(ticker, market)
     if hk_code is not None:
         symbol = f"hk{hk_code}"
+    elif us_symbol is not None:
+        symbol = f"us{us_symbol}"
     else:
         symbol = _cn_quote_symbol(ticker)
     if symbol is None:
@@ -619,13 +638,18 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
         # 30=timestamp 31=change 32=change_pct 33=high 34=low
         # HK responses (hk03800 style) share the same layout but timestamps are
         # 'YYYY/MM/DD HH:MM:SS' instead of 'YYYYMMDDHHMMSS'.
+        # US responses (usFCX style, live-verified 2026-11-08 against S&P
+        # Global closes for FCX/NEM/RIO/BHP/AEM/AAPL) keep the same indexes:
+        # timestamp 'YYYY-MM-DD HH:MM:SS' (ET), volume in SHARES (CN side is
+        # lots). Fields 35+ also expose USD marker(35)/PE(39)/market cap(45,
+        # $bn)/PB(51)/div%(52) which this fetcher does not consume.
         fields = content[data_start + 1 : data_end].split("~")
         if len(fields) < 35:
             return None
         price = parse_float(fields[3])
         if price is None or price <= 0:
             return None
-        if hk_code is not None:
+        if hk_code is not None or us_symbol is not None:
             trade_date = fields[30][:10].replace("/", "-")
         else:
             trade_date = fields[30][:8]
@@ -1038,7 +1062,10 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
 
     # Keyless scraper fallbacks: eastmoney/tencent cover CN A-share + ETF
     # (incl. ones tushare `daily` misses) and HK single stocks via
-    # _hk_quote_code; sina stays CN-only (_cn_quote_symbol -> None for non-CN).
+    # _hk_quote_code; tencent additionally serves US equities via the us
+    # prefix (eastmoney's US 105/106 market codes remain unverified from this
+    # network and are intentionally NOT wired); sina stays CN-only
+    # (_cn_quote_symbol -> None for non-CN).
     chain.append(("eastmoney", lambda: fetch_eastmoney_quote(ticker, market)))
     chain.append(("tencent", lambda: fetch_tencent_quote(ticker, market)))
     chain.append(("sina", lambda: fetch_sina_quote(ticker, market)))

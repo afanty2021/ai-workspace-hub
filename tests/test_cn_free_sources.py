@@ -15,6 +15,7 @@ from _test_paths import REPO_ROOT  # noqa: F401 (also sets up sys.path)
 import fetch_market_data  # noqa: E402
 from fetch_market_data import (  # noqa: E402
     _cn_quote_symbol,
+    _us_quote_symbol,
     DEFAULT_THRESHOLDS,
     build_quote_record,
     build_snapshot,
@@ -39,6 +40,23 @@ SINA_PAYLOAD = (
 TENCENT_HK_PAYLOAD = (
     'v_hk03800="100~协鑫科技~03800~0.640~0.660~0.645~152697900~x~x~0.640~x~x~x~x'
     '~x~x~x~x~x~x~x~x~x~x~x~x~x~x~x~x~2026/11/06 16:08:54~-0.020~-3.03~0.675~0.630";'
+)
+# Same layout for US equities (live: usFCX, probe 2026-11-08). Timestamp is
+# 'YYYY-MM-DD HH:MM:SS' (ET); volume in shares; fields 35+ carry the USD
+# marker(35) / PE(39) / market cap(44/45, $mn) / EPS(47) / PB(51) / div%(52)
+# which the fetcher deliberately ignores — all kept here at real probed
+# values so the fixture mirrors the live 73-field layout.
+TENCENT_US_PAYLOAD = (
+    'v_usFCX="200~自由港麦克莫兰~FCX.N~59.42~57.90~59.09~16248755~x~x~59.65'
+    + "~x" * 20
+    + '~2026-11-06 16:03:41~1.52~2.63~60.52~58.30~USD~16248755~967400696~x~24.97'
+    '~x~39.09~x~3.83~848.88379~853.28161~Freeport-McMoRan Inc~2.38~80.09~38.15'
+    '~0~4.07~1.01";'
+)
+# Exactly 34 fields (< the len>=35 gate): fields[30..33] are placeholders, so
+# a gate regression (35 -> 30) would let this parse instead of rejecting.
+TENCENT_US_TRUNCATED_PAYLOAD = (
+    'v_usFCX="200~x~FCX.N~59.42~57.90~59.09~16248755' + "~x" * 27 + '";'
 )
 EASTMONEY_PAYLOAD = {
     "data": {
@@ -88,6 +106,21 @@ class SymbolRuleTests(unittest.TestCase):
         self.assertIsNone(_cn_quote_symbol("AAPL"))
         self.assertIsNone(_cn_quote_symbol("0700.HK"))
         self.assertIsNone(_cn_quote_symbol("601857"))
+
+    def test_us_symbols_gate_on_market_and_reject_dots(self) -> None:
+        self.assertEqual(_us_quote_symbol("NVDA", "US"), "NVDA")
+        self.assertEqual(_us_quote_symbol("nvda", "US"), "NVDA")
+        # Gate on the market column, not the bare-ticker shape: on any other
+        # market a bare US ticker must not leak into a us* request.
+        self.assertIsNone(_us_quote_symbol("NVDA", "CN"))
+        self.assertIsNone(_us_quote_symbol("NVDA", ""))
+        # Dotted class tickers (BRK.B) have an unverified Tencent encoding.
+        self.assertIsNone(_us_quote_symbol("BRK.B", "US"))
+        # Documented tradeoff: a purely numeric base on a US row (mismatched
+        # watchlist input, e.g. 600276) passes isalnum and only produces an
+        # empty us600276 probe — kept for parity with fetch_nasdaq_quote's
+        # handling of the same mismatched row rather than special-cased here.
+        self.assertEqual(_us_quote_symbol("600276", "US"), "600276")
 
     def test_hk_codes_require_five_digits(self) -> None:
         # HKEX codes are 5-digit zero-padded (03800); shorter legacy forms (0700)
@@ -210,6 +243,54 @@ class TencentQuoteTests(unittest.TestCase):
         self.assertEqual(quote["tradeDate"], "2026-11-06")
         self.assertEqual(quote["source"], "tencent")
         self.assertIn("q=hk03800", str(mock_get.call_args))
+
+    @patch("fetch_market_data.requests.get")
+    def test_us_ticker_maps_to_us_prefix_and_iso_date(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(TENCENT_US_PAYLOAD)
+
+        # Lowercase input locks the .upper() normalization at the symbol
+        # assembly layer too (not just inside _us_quote_symbol).
+        quote = fetch_tencent_quote("fcx", "US")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 59.42)
+        self.assertEqual(quote["change"], 1.52)
+        self.assertEqual(quote["changesPercentage"], 2.63)
+        self.assertEqual(quote["previousClose"], 57.90)
+        self.assertEqual(quote["dayHigh"], 60.52)
+        self.assertEqual(quote["dayLow"], 58.30)
+        self.assertEqual(quote["volume"], 16248755)
+        # US timestamps are 'YYYY-MM-DD HH:MM:SS' (ET) — ISO slice, not CN [:8].
+        self.assertEqual(quote["tradeDate"], "2026-11-06")
+        self.assertEqual(quote["source"], "tencent")
+        self.assertIn("q=usFCX", str(mock_get.call_args))
+
+    @patch("fetch_market_data.requests.get")
+    def test_truncated_us_payload_is_rejected_cleanly(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(TENCENT_US_TRUNCATED_PAYLOAD)
+        # 34 fields (< 35 gate): rejection must be the clean length check, not
+        # an IndexError on fields[34] swallowed by the except handler. The two
+        # paths are externally identical (both -> None), so the discriminator
+        # is _note_fetch_failure: only the exception path records a failure.
+        # A gate regression (35 -> 30) flips this to the exception path.
+        with patch("fetch_market_data._note_fetch_failure") as mock_note:
+            self.assertIsNone(fetch_tencent_quote("FCX", "US"))
+        mock_note.assert_not_called()
+
+    @patch("fetch_market_data.requests.get")
+    def test_us_ticker_requires_us_market_gate(self, mock_get: MagicMock) -> None:
+        # Without the market gate a bare US ticker on any market row hits the
+        # us branch directly and fires a us* request — assert_not_called locks
+        # exactly that regression (verified red under gate-removal mutation).
+        self.assertIsNone(fetch_tencent_quote("NVDA", "CN"))
+        self.assertIsNone(fetch_tencent_quote("NVDA", ""))
+        mock_get.assert_not_called()
+
+    @patch("fetch_market_data.requests.get")
+    def test_dotted_us_class_ticker_is_rejected_without_request(self, mock_get: MagicMock) -> None:
+        self.assertIsNone(fetch_tencent_quote("BRK.B", "US"))
+        mock_get.assert_not_called()
 
     @patch("fetch_market_data.requests.get")
     def test_returns_none_on_truncated_and_non_cn(self, mock_get: MagicMock) -> None:
@@ -399,18 +480,45 @@ class FallbackChainOrderTests(unittest.TestCase):
         mock_mootdx.assert_not_called()
 
     @patch("fetch_market_data.requests.get")
-    def test_us_ticker_never_touches_cn_endpoints(self, mock_get: MagicMock) -> None:
+    def test_us_ticker_tencent_is_the_keyless_backup_after_nasdaq(self, mock_get: MagicMock) -> None:
         env = {"FINNHUB_API_KEY": "", "EOD_API_KEY": "", "ENABLE_YFINANCE": ""}
 
-        fetch_fallback_quote({"ticker": "AAPL", "market": "US"}, env)
+        def _route(url, **_kwargs):
+            url = str(url)
+            if "nasdaq" in url:
+                resp = MagicMock()
+                resp.raise_for_status.return_value = None
+                resp.json.return_value = {"data": None}
+                return resp
+            if "gtimg" in url:
+                return _text_response(TENCENT_US_PAYLOAD)
+            raise AssertionError(f"unexpected endpoint requested for US ticker: {url}")
 
-        # No keyless US source beyond Nasdaq; without network mocking its real
-        # call would fire, so instead verify no CN endpoint was requested.
-        for call in mock_get.call_args_list:
-            url = str(call.args[0] if call.args else call.kwargs.get("url", ""))
-            self.assertNotIn("eastmoney", url)
-            self.assertNotIn("gtimg.cn", url)
-            self.assertNotIn("sinajs", url)
+        mock_get.side_effect = _route
+        with patch("fetch_market_data.fetch_mootdx_quote", return_value=None):
+            quote = fetch_fallback_quote({"ticker": "FCX", "market": "US"}, env)
+
+        # Keyless US chain since 2026-11-08: nasdaq -> tencent (us prefix).
+        # Eastmoney's US 105/106 codes stay unwired and sina stays CN-only, so
+        # those endpoints must still never see a US ticker.
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "tencent")
+        self.assertEqual(quote["price"], 59.42)
+        requested = [str(c.args[0] if c.args else c.kwargs.get("url", "")) for c in mock_get.call_args_list]
+        self.assertTrue(any("api.nasdaq.com" in u for u in requested))
+        self.assertTrue(any("gtimg.cn" in u for u in requested))
+        # Whitelist, not blacklist: every fetcher wraps exceptions, so the
+        # _route AssertionError sentinel only surfaces as a swallowed warning
+        # log — an unexpected endpoint (e.g. fred via a map-gate regression)
+        # would stay silent under a blacklist-only check. The exact count
+        # locks both order and completeness.
+        for url in requested:
+            self.assertTrue(
+                "api.nasdaq.com" in url or "gtimg.cn" in url,
+                f"unexpected endpoint requested for US ticker: {url}",
+            )
+        self.assertEqual(len(requested), 2)
 
 
 class CachedTushareClientTests(unittest.TestCase):
