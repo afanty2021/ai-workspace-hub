@@ -26,6 +26,9 @@ class WeeklyFrame:
     valid: np.ndarray
     dvalid: np.ndarray
     bench_300: np.ndarray
+    # 决策周最后交易日成交量（与 index_close 同一数据行——论文 N×(2l+m) 输入的
+    # volume 列，偏差⑫，2026-11-07 补；默认 None：A 股域不构造，既有夹具零改动）
+    etf_volume: np.ndarray | None = None
 
 
 def _load_daily(path: Path) -> dict[str, dict]:
@@ -110,6 +113,7 @@ def build_weekly_frame(data_root: Path, spec: UniverseSpec,
     T, L = len(all_weeks), len(members)
     shape = (T, L)
     idx_close = np.full(shape, np.nan)
+    idx_volume = np.full(shape, np.nan)   # 与 idx_close 同源（决策周最后交易日行）
     etf_symbols = [[""] * L for _ in range(T)]
     etf_open = np.full(shape, np.nan)
     etf_close = np.full(shape, np.nan)
@@ -129,6 +133,9 @@ def build_weekly_frame(data_root: Path, spec: UniverseSpec,
         for li, m in enumerate(members):
             if wk in week_last[li]:
                 idx_close[ti, li] = float(week_last[li][wk]["row"]["close"])
+                v = week_last[li][wk]["row"].get("volume")   # 偏差⑫：volume 列
+                if v is not None:
+                    idx_volume[ti, li] = float(v)
             pick = point_in_time_pick(list(m.etf_candidates), bars, fridays[-1], bypass_single=pick_bypass_single)
             if pick is None:
                 continue
@@ -152,4 +159,5 @@ def build_weekly_frame(data_root: Path, spec: UniverseSpec,
                                  and np.isfinite(etf_close[ti, li])
                                  and next_wk not in corrupt[pick])
     return WeeklyFrame(fridays, idx_close, etf_symbols, etf_open, etf_close,
-                       etf_prev, etf_amt, members, spec, valid, dvalid, bench_ret)
+                       etf_prev, etf_amt, members, spec, valid, dvalid, bench_ret,
+                       etf_volume=idx_volume)

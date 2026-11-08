@@ -35,11 +35,16 @@ SEED = 20261105
 # L2 复刻常量（R20261106-02 §10 预注册；论文 N 缺失 → 网格在消费端声明）
 L2_SEED = 20261106
 L2_TRAIN_WEEKS = 104                  # 论文「前 2 年历史训练」→ 年模型 104 周冻结
-L2_HIDDEN = (64, 32, 16)              # 3 隐层 + 线性输出 = 论文「4 层全连接」
+# 偏差⑬（2026-11-07 论文原文核对补录）：论文「four fully connected internal
+# layers」+独立线性输出层共 5 层 dense；归档运行 (64,32,16)=3 隐层+输出共 4 层
+# （旧注释把输出层计入「4 层」之数，公式/配置冻结不改——归档 C 判定证据位级
+# 保持）。L2_HIDDEN_PAPER = 4 隐层读法（层宽论文未披露，漏斗延伸推定）。
+L2_HIDDEN = (64, 32, 16)
+L2_HIDDEN_PAPER = (64, 32, 16, 8)
 L2_DROPOUT = 0.2
 L2_EPOCHS = 200
 L2_LR = 1e-3
-L2_MC_SAMPLES = 20
+L2_MC_SAMPLES = 20                    # 论文未给 T（「a large number」）；T=100 消融档
 
 
 def _torch(seed: int = SEED):
@@ -198,31 +203,99 @@ class ROCState:
         self.last_pred: np.ndarray | None = None
 
 
+class WeightState:
+    """论文动态配置（§2.4 Dynamic allocation of capital；偏差①消融实现，
+    2026-11-07）：per-asset buys/wins/streaks 追踪 + OCR 损坏权重公式的读法。
+    win = 持仓周收益 > 0（论文「a profitable ETF trade at close of the
+    position」）；streak = 连续被买入且盈利的次数（未被买入的周不重置——
+    论文「not necessarily contiguous weeks」）。回填协议与 ROCState 同构：
+    决策时点 t 先回填上周 (买入集, 已实现收益)——收益至决策周五收盘已实现，
+    无泄漏；再对当周买入集取归一权重（walkforward 引擎按权重直乘收益，
+    须 Σw=1）。
+
+    公式读法（OCR「ws = 1.0 + wins streaks / buys_s + wins_s / (s+1)」排版
+    损坏；语义层=「based on total average investment performance to date
+    (win rate), and on momentum of trades」）：
+      p1（默认）: 1 + (wins·streaks)/buys + wins/(streaks+1)
+                  ——首项 = 胜率×动量乘积读法，(s+1) 读作 (streaks+1)；
+      p2: 1 + (wins+streaks)/buys + wins/(streaks+1)；
+      p3: 1 + (wins·streaks)/buys + wins/(buys+1)。
+    buys=0（从未买）→ w=1.0 基线。"""
+
+    def __init__(self, n_assets: int, *, parse: str = "p1"):
+        self.buys = np.zeros(n_assets, dtype=int)
+        self.wins = np.zeros(n_assets, dtype=int)
+        self.streaks = np.zeros(n_assets, dtype=int)
+        if parse not in ("p1", "p2", "p3"):
+            raise ValueError(f"未知 parse: {parse}")
+        self.parse = parse
+
+    def record(self, bought, returns_row: np.ndarray) -> None:
+        """回填一条已实现执行周：bought=当周买入的资产列，returns_row=该执行周
+        per-asset 收益（weekly_gross_returns 行）。非有限收益不计（无效周）。"""
+        for j in bought:
+            r = returns_row[j]
+            if not np.isfinite(r):
+                continue
+            self.buys[j] += 1
+            if r > 0:
+                self.wins[j] += 1
+                self.streaks[j] += 1
+            else:
+                self.streaks[j] = 0
+
+    def raw(self, j: int) -> float:
+        b, w, s = int(self.buys[j]), int(self.wins[j]), int(self.streaks[j])
+        if b == 0:
+            return 1.0
+        if self.parse == "p2":
+            return 1.0 + (w + s) / b + w / (s + 1)
+        if self.parse == "p3":
+            return 1.0 + w * s / b + w / (b + 1)
+        return 1.0 + w * s / b + w / (s + 1)      # p1
+
+    def weights(self, bought) -> dict[int, float]:
+        if not bought:
+            return {}
+        raw = {j: self.raw(j) for j in bought}
+        tot = sum(raw.values())
+        return {j: v / tot for j, v in raw.items()}
+
+
 class MIMOModel:
     """L2 论文复刻（spec §1.1；R20261106-02 §3/§8，T13 复活）。
 
     与 L1 的差异：①特征块含决策周五收盘（window_blocks include_t=True，
     论文「周五收盘后采样」，修 v2 评审 I-3 滞后一档，偏差⑥）；②标签 =
     执行周 open→close ≥1%（weekly_gross_returns 引擎原生，与执行 PnL 同
-    口径，偏差⑦——2026-11-06 用户追认 A）；③MIMO 联合 4 层 FC（3 隐层
-    ReLU+dropout + 线性 11 输出）；④推断 MC dropout T 采样——中位数 ±1σ
-    含 ≥80% 样本质量才置信；⑤买入 = 置信 ∧ 中位数 ≥ ROC 阈值，阈值 =
-    trailing 52 对实际（预测,已实现标签）的 Youden J（<26 回退 0.5，偏差⑨
-    ——论文「周周重估」的机制落地，2026-11-06 用户追认 A）；等权（论文
-    win-rate/streak 加权公式排版损坏，偏差①）。年模型协议（偏差②）：fit
-    在交易年前最后一个决策周五调用后冻结，年内 select 只换特征不换参，
-    ROC 状态跨年共享（驱动见 repro_paper.py）。"""
+    口径，偏差⑦——2026-11-06 用户追认 A）；③MIMO 联合 FC（默认 3 隐层
+    ReLU+dropout + 线性 11 输出；论文原意 4 隐层+输出共 5 层——偏差⑬，
+    消融传 hidden=L2_HIDDEN_PAPER，层宽论文未披露）；④推断 MC dropout T
+    采样——中位数 ±1σ 含 ≥80% 样本质量才置信；⑤买入 = 置信 ∧ 中位数 ≥
+    ROC 阈值，阈值 = trailing 52 对实际（预测,已实现标签）的 ROC 分位点
+    （实义 (TP−FP)/n，偏差⑨——论文「周周重估」的机制落地，2026-11-06
+    用户追认 A）；等权（论文 win-rate/streak 加权公式排版损坏，偏差①——
+    消融由驱动层 WeightState 承载，见 repro_paper_ablation.py）。年模型
+    协议（偏差②）：fit 在交易年前最后一个决策周五调用后冻结，年内 select
+    只换特征不换参，ROC 状态跨年共享（驱动见 repro_paper.py）；论文周级
+    增量更新由 update() 承载（偏差②消融）。
+
+    消融参数（2026-11-07，默认全关=归档行为位级不变）：use_volume（偏差⑫
+    输入追加 volume 列）、update_epochs（>0 时驱动层逐周调 update）。"""
 
     def __init__(self, *, window: int = 13, epochs: int = L2_EPOCHS,
                  lr: float = L2_LR, hidden: tuple[int, ...] = L2_HIDDEN,
                  dropout: float = L2_DROPOUT, mc_samples: int = L2_MC_SAMPLES,
-                 lambda_fin: float = LAMBDA_FIN, roc: ROCState | None = None):
+                 lambda_fin: float = LAMBDA_FIN, roc: ROCState | None = None,
+                 use_volume: bool = False, update_epochs: int = 0):
         self.window, self.epochs, self.lr = window, epochs, lr
         self.hidden, self.dropout, self.mc_samples = hidden, dropout, mc_samples
         self.lambda_fin = lambda_fin
         self.net = None
         self.roc = roc if roc is not None else ROCState()
         self._train_blocks: np.ndarray | None = None
+        self.use_volume = use_volume
+        self.update_epochs = update_epochs
 
     def _build_net(self, torch, D: int, L: int):
         layers, d = [], D
@@ -235,7 +308,8 @@ class MIMOModel:
 
     def fit(self, wf: WeeklyFrame, t_train: int) -> "MIMOModel":
         blocks, t_idx = window_blocks(wf, window=self.window,
-                                      upto=t_train + 1, include_t=True)
+                                      upto=t_train + 1, include_t=True,
+                                      with_volume=self.use_volume)
         lab = [k for k, tj in enumerate(t_idx) if tj + 1 <= t_train]
         if len(lab) < self.window + 2:
             raise ValueError(f"训练行不足：{len(lab)} < window+2={self.window + 2}")
@@ -269,6 +343,52 @@ class MIMOModel:
         self._train_blocks = train
         return self
 
+    def update(self, wf: WeeklyFrame, t_train: int) -> "MIMOModel":
+        """论文周级增量更新（§2.2「Once trades were completed, the models were
+        updated incrementally using the observed price data from the week just
+        ended」——偏差②消融实现，2026-11-07）：执行周收尾（=下一决策周五
+        收盘）后，用刚实现的单条训练行 (X_{t_train}, y_{t_train}=执行周
+        open→close) 对冻结年模型 warm-start 微调。
+
+        实现方口径（论文未给更新规则）：单行训练、update_epochs 轮（构造
+        参数，默认 0=关）、标准化沿用 fit 冻结的训练切片统计、同自定义损失
+        （masked BCE + λ 金融项——「loss function incorporating recent capital
+        gains and losses」的实现载体）、优化器/学习率沿用 fit。种子 =
+        L2_SEED + t_train（确定性、跨周 dropout 掩码不重复）。特征块缺失周
+        或标签全无效则跳过（返回原模型）。"""
+        if self.net is None or self.update_epochs <= 0:
+            return self
+        blocks, t_idx = window_blocks(wf, window=self.window,
+                                      upto=t_train + 1, include_t=True,
+                                      with_volume=self.use_volume)
+        if len(t_idx) == 0 or t_idx[-1] != t_train:
+            return self
+        rets = weekly_gross_returns(wf)
+        r_row = rets[t_train]
+        lab_ok = wf.valid[t_train] & np.isfinite(r_row)
+        if not lab_ok.any():
+            return self
+        r = np.where(lab_ok, r_row, np.nan).astype(np.float32)
+        y = np.where(lab_ok, r_row >= 0.01, np.nan).astype(np.float32)
+        x = standardize_fit_apply(self._train_blocks, blocks[-1:])[0]
+        torch = _torch(L2_SEED + t_train)
+        opt = torch.optim.Adam(self.net.parameters(), lr=self.lr)
+        bce = torch.nn.BCEWithLogitsLoss(reduction="none")
+        Xt = torch.tensor(x, dtype=torch.float32)
+        mask = torch.tensor(np.isfinite(y) & np.isfinite(r), dtype=torch.float32)
+        Yt = torch.nan_to_num(torch.tensor(y), nan=0.0)
+        Rt = torch.nan_to_num(torch.tensor(r), nan=0.0)
+        denom = mask.sum().clamp(min=1.0)
+        self.net.train()
+        for _ in range(self.update_epochs):
+            opt.zero_grad()
+            logits = self.net(Xt)
+            loss = ((bce(logits, Yt) * mask).sum() / denom
+                    - self.lambda_fin * (torch.sigmoid(logits) * Rt * mask).sum() / denom)
+            loss.backward()
+            opt.step()
+        return self
+
     def _mc_stats(self, x_now: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         torch = _torch(L2_SEED)          # 推断前重置种子：dropout 采样可复现
         self.net.train()                 # MC dropout：推断时开 dropout
@@ -287,7 +407,8 @@ class MIMOModel:
             return {}
         roc = roc if roc is not None else self.roc
         blocks, t_idx = window_blocks(wf, window=self.window,
-                                      upto=t + 1, include_t=True)
+                                      upto=t + 1, include_t=True,
+                                      with_volume=self.use_volume)
         if len(t_idx) == 0 or t_idx[-1] != t:
             return {}
         x_now = standardize_fit_apply(self._train_blocks, blocks[-1:])[0]
