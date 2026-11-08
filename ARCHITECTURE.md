@@ -99,7 +99,7 @@ flowchart TB
 
 | 数据源 | 市场 | 费用 | 用于 |
 |--------|------|------|------|
-| tushare | A 股 (.SH/.SZ) | 120 积分非复权日线当前 0 元；其他看权限 | daily-watch, screen, research |
+| tushare | A 股 (.SH/.SZ)；场外基金净值（fund_nav，`.OF` 主源） | 120 积分非复权日线当前 0 元；其他看权限 | daily-watch, screen, research |
 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | 免费 250 次/日 / 付费 | daily-watch, screen, research |
 | Nasdaq | 美股基础行情 | 无 Key | daily-watch 自动降级源 |
 | Finnhub / EODHD | 各自覆盖市场 | 免费小额度 / 付费 | daily-watch 可选降级源 |

@@ -51,7 +51,7 @@ Agent 首次使用时检查上述条件，缺什么补什么。
 | 优先级 | 数据源 | 市场 | env key | 费用 | 获取 |
 |--------|--------|------|---------|------|------|
 | 1 | mootdx | A 股 + ETF (.SH/.SZ) + 板块指数（880/881 段 `.TDX`） | 无（`DISABLE_MOOTDX=1` 停用） | 免费，TCP 7709 直连通达信，实时快照（板块指数走 index_bars 日线） | [项目](https://github.com/mootdx/mootdx) |
-| 2 | tushare | A 股 (.SH/.SZ) + HK | `TUSHARE_TOKEN` | 120 积分非复权日线当前 0 元（EOD）；其他看权限 | [注册](https://tushare.pro/register) |
+| 2 | tushare | A 股 (.SH/.SZ) + HK；场外基金净值（fund_nav，`.OF` 主源，120 积分实测可调） | `TUSHARE_TOKEN` | 120 积分非复权日线当前 0 元（EOD）；其他看权限 | [注册](https://tushare.pro/register) |
 | 3 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | `FMP_API_KEY` | 免费 250 次/日 / 付费 | [Pricing](https://site.financialmodelingprep.com/developer/docs/pricing) |
 | 4+ | Nasdaq / Finnhub / EODHD / 东财 / 腾讯 / 新浪 / yfinance | 各自覆盖 | 无 Key 或各自 key | 自动 fallback | `DATA-SOURCES.md` |
 
@@ -97,7 +97,7 @@ python3 system/scripts/run_archive.py close --run-id RUN-YYYYMMDD-HHMM-watch \
 必需列：Ticker, Name, Market, Market Cap, Category
 可选列：Tier, Hypothesis, Notes
 
-A 股个股/ETF 用交易所后缀（`.SH`/`.SZ`）；通达信 880/881 段板块指数用 `.TDX` 后缀（如 `881075.TDX` 贵金属，Market 列填 CN，volume 为板块成分合计口径）。
+A 股个股/ETF 用交易所后缀（`.SH`/`.SZ`）；通达信 880/881 段板块指数用 `.TDX` 后缀（如 `881075.TDX` 贵金属，Market 列填 CN，volume 为板块成分合计口径）。 场外开放式基金用 `.OF` 后缀（如 `021179.OF`，2026-11-08 接线）：走 tushare fund_nav → 腾讯 jj 专用短链返回 **T-1 官方净值**，不进证券行情链（TDX 对场外码静默返回错票，段位白名单已挡）。
 
 ## 异动阈值（可在 yaml 配置）
 

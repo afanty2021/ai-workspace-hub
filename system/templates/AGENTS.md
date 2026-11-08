@@ -106,9 +106,9 @@ Codex 应该创建一篇 `wiki/sources/YYYY-MM-DD-first-note.md`，并在 `works
 |--------|------|---------|------|
 | Nasdaq | 美股基础行情 | 无 | 无 Key 自动降级源 |
 | mootdx | A 股 + ETF 实时行情（主源）；财务快照（gpcw，148 期至 1988）；板块指数（880/881 段 `.TDX`，通达信自编口径）；交易所核心指数（上证指数/沪深300 等 8 个） | 无（`DISABLE_MOOTDX=1` 停用） | 无 Key，TCP 7709 直连通达信；装 `tools/daily-watch/requirements-mootdx.txt` 后自动使用 |
-| 东方财富 / 腾讯 / 新浪 | A 股 + ETF 降级行情；东财/腾讯另覆盖港股个股（116 段 / hk 前缀，新浪未接）；腾讯再覆盖美股个股（us 前缀，nasdaq 后的 keyless 备份；东财美股 105/106 段未实测未接） | 无 | 无 Key 自动降级源，mootdx/tushare 未返回时依次尝试 |
+| 东方财富 / 腾讯 / 新浪 | A 股 + ETF 降级行情；东财/腾讯另覆盖港股个股（116 段 / hk 前缀，新浪未接）；腾讯再覆盖美股个股（us 前缀，nasdaq 后的 keyless 备份；东财美股 105/106 段未实测未接）与场外基金净值（jj 前缀，`.OF` ticker 在 tushare-fund 断供时的轻量备份） | 无 | 无 Key 自动降级源，mootdx/tushare 未返回时依次尝试 |
 | Nasdaq 指数 API / 东财环球 / 新浪环球 / FRED | 全球指数 + 宏观 + 韩股 + 外盘期货（纳指 / 费半 / 美十债 / 小型纳指连续 / 美元指数 / 伦敦金 / 伦铜 / 海力士） | 无 | 无 Key 映射制降级源，按 ticker 映射命中；^TNX 东财实时主源（FRED T+1 备用）、NQ00Y 走东财 103.NQ00Y |
-| tushare | A 股 + 港股 | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线（EOD）；其他接口看权限；mootdx 之后的首备用 |
+| tushare | A 股 + 港股；场外基金净值（fund_nav，watchlist `.OF` ticker 主源，2026-11-08 实测 120 积分可调） | `TUSHARE_TOKEN` | 当前 120 积分档可取非复权日线（EOD）；其他接口看权限；mootdx 之后的首备用 |
 | FMP | 美股 EOD/profile 起步；扩展市场看套餐 | `FMP_API_KEY` | 免费 Basic 当前 250 次/日 |
 | Finnhub | 美股备用 | `FINNHUB_API_KEY` | 免费账户端点可用，额度以官方为准 |
 | EODHD | HK/KR/FI 最近 EOD 备用 | `EOD_API_KEY` | 免费账户当前 20 次/日；不是实时价 |
