@@ -54,6 +54,9 @@ workspace/meta/active-context-archive-*.md
 workspace/meta/friction-log.md
 workspace/review-queue.md
 
+# 知识加载运行时日志（knowledge_lifecycle.py / preflight 写入，按惯例留工作树不入库）
+workspace/knowledge-usage.jsonl
+
 # OS / 编辑器
 .DS_Store
 Thumbs.db
