@@ -48,7 +48,6 @@ wiki/raw/*
 wiki/sources/*
 wiki/concepts/*
 wiki/entities/*
-wiki/explorations/*
 workspace/meta/active-context.md
 workspace/meta/active-context-archive-*.md
 workspace/meta/friction-log.md
