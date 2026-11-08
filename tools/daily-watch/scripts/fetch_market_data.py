@@ -609,6 +609,116 @@ def fetch_eastmoney_quote(ticker: str, market: str) -> dict[str, Any] | None:
         return None
 
 
+# --- 场外开放式基金（.OF 约定，如 021179.OF 易方达产业机遇A）---
+# watchlist 用 .OF 后缀显式标记场外基金（同 .TDX 板块指数先例）。这类代码
+# 无场内行情：TDX 协议对它静默返回错票（021179 实测映射成四川长虹 600839
+# 全 0 行，friction-log 2026-11-08），东财 push2 secid 空响应，fundgz 实时
+# 估值接口已整体下线——因此 fetch_fallback_quote 对 .OF ticker 走专用短链：
+# tushare fund_nav（官方净值主源，120 积分可调）→ 腾讯 jj 前缀（轻量备份）。
+# 语义注意：这里返回的是 T-1 官方净值（当日净值约 20:00 后更新），日报
+# 16:30 跑永远显示前一交易日净值——场外基金口径属性，非数据缺失。
+
+OF_SUFFIX = ".OF"
+
+
+def is_open_fund_ticker(ticker: str) -> bool:
+    """场外开放式基金判定（watchlist 约定 .OF 后缀）。"""
+    return ticker.strip().upper().endswith(OF_SUFFIX)
+
+
+def _of_base_code(ticker: str) -> str | None:
+    """021179.OF -> '021179'；后缀不合法返回 None。"""
+    base, sep, suffix = ticker.strip().upper().rpartition(".")
+    if not sep or suffix != "OF" or not base.isdigit() or len(base) != 6:
+        return None
+    return base
+
+
+def fetch_tushare_openfund_nav(client: Any, ticker: str) -> dict[str, Any] | None:
+    """tushare fund_nav：官方单位净值（T-1）。降序取最新两行自算日涨跌。"""
+    base = _of_base_code(ticker)
+    if base is None:
+        return None
+    ts_code = f"{base}.OF"
+    try:
+        frame = client.fund_nav(ts_code=ts_code)
+    except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "tushare-fund", str(exc))
+        log(f"Warning: tushare fund_nav failed for {ts_code}: {exc}")
+        return None
+    if frame is None or frame.empty or "unit_nav" not in frame.columns:
+        log(f"Warning: tushare fund_nav returned no data for {ts_code}")
+        return None
+
+    rows = frame.sort_values("nav_date", ascending=False).head(2)
+    latest = rows.iloc[0]
+    nav = parse_float(latest.get("unit_nav"))
+    if nav is None or nav <= 0:
+        return None
+    prev = parse_float(rows.iloc[-1].get("unit_nav")) if len(rows) > 1 else None
+    change_pct = round((nav / prev - 1) * 100, 4) if prev else None
+    return {
+        "symbol": ticker,
+        "price": nav,
+        "change": round(nav - prev, 4) if prev else None,
+        "changesPercentage": change_pct,
+        "previousClose": prev,
+        "open": None,
+        "dayHigh": None,
+        "dayLow": None,
+        "volume": None,
+        "tradeDate": str(latest.get("nav_date", "")),
+        "source": "tushare-fund",
+    }
+
+
+def fetch_tencent_openfund_quote(ticker: str) -> dict[str, Any] | None:
+    """腾讯 jj 前缀：场外基金净值轻量备份（keyless）。
+
+    响应布局（~ 分隔，2026-11-08 对 021179 实测验证）：
+    0=代码 1=名称 5=单位净值 6=累计净值 7=日涨跌% 8=净值日期。
+    与股票 35+ 字段布局完全不同，独立于 fetch_tencent_quote。
+    """
+    base = _of_base_code(ticker)
+    if base is None:
+        return None
+    try:
+        response = requests.get(
+            f"https://qt.gtimg.cn/q=jj{base}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.qq.com"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        fields = content[data_start + 1 : data_end].split("~")
+        if len(fields) < 9:
+            return None
+        price = parse_float(fields[5])
+        if price is None or price <= 0:
+            return None
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": None,
+            "changesPercentage": parse_float(fields[7]),
+            "previousClose": None,
+            "open": None,
+            "dayHigh": None,
+            "dayLow": None,
+            "volume": None,
+            "tradeDate": fields[8],
+            "source": "tencent-fund",
+        }
+    except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "tencent-fund", str(exc))
+        log(f"Warning: Tencent open-fund fallback failed for {ticker}: {exc}")
+        return None
+
+
 def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
     hk_code = _hk_quote_code(ticker)
     us_symbol = _us_quote_symbol(ticker, market)
@@ -1073,6 +1183,23 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
     yf_flag = env.get("ENABLE_YFINANCE", "").strip().lower()
     if yf_flag in ("1", "true", "yes", "on"):
         chain.append(("yfinance", lambda: fetch_yfinance_quote(ticker)))
+
+    # 场外开放式基金（.OF）：覆盖为专用短链。长链各环对 .OF 本就会各自
+    # gate 拒绝（mootdx is_mootdx_ticker / tushare CN_SUFFIXES / 东财腾讯
+    # 新浪 _cn_quote_symbol 均不认 .OF，且构建段对 .OF 无副作用），但逐环
+    # 空跑会让 degradations 记满整条无意义链——直接重写，降级记录只剩
+    # fund 短链内的真实环。语义与净 T-1 口径见 OF_SUFFIX 注释。
+    if is_open_fund_ticker(ticker):
+        fund_chain: list[tuple[str, Callable[[], dict[str, Any] | None]]] = []
+        fund_token = env.get("TUSHARE_TOKEN", "").strip()
+        if fund_token:
+            fund_client = get_cached_tushare_client(fund_token)
+            if fund_client is not None:
+                fund_chain.append(
+                    ("tushare-fund", lambda: fetch_tushare_openfund_nav(fund_client, ticker))
+                )
+        fund_chain.append(("tencent-fund", lambda: fetch_tencent_openfund_quote(ticker)))
+        chain = fund_chain
 
     inner_failures: list[tuple[str, str, str]] = []
     _DEG_LOCAL.failures = inner_failures

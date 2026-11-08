@@ -26,3 +26,8 @@ Use `HOT` / `WARM` / `COLD` to control monitoring depth. This links tickers to t
 | CVX | Chevron | US | Large | Energy | WARM | H3 | Oil cycle monitor |
 | COP | ConocoPhillips | US | Large | Energy | COLD |  | Energy benchmark |
 | SLB | SLB | US | Large | Energy | WARM | H3 | Oil service cycle |
+
+## Funds (open-ended, .OF suffix)
+| Ticker | Name | Market | Market Cap | Category | Tier | Hypothesis | Notes |
+|------|------|------|----------|------|------|------------|-------|
+| 021179.OF | E Fund Industry Opportunity A | CN | 场外基金 | 主动权益-偏股 | WARM |  | Open-ended fund: routed to tushare fund_nav -> Tencent jj short chain (T-1 official NAV); never enters the security quote chain (TDX returns wrong-symbol rows for OF codes) |

@@ -201,7 +201,7 @@ focus_areas:
 | Tier | 监控热度 | `HOT`（重点）/ `WARM`（跟踪）/ `COLD`（基准） |
 | Hypothesis | 关联假设 | 对应 `hypothesis/` 下的假设 ID，如 `H1`、`H2` |
 
-**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。`.TDX` 走 mootdx 板块指数日线（880/881 段通达信自编口径，如 `881075.TDX` 贵金属；volume 为板块成分合计）。后缀必须大写。
+**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。`.TDX` 走 mootdx 板块指数日线（880/881 段通达信自编口径，如 `881075.TDX` 贵金属；volume 为板块成分合计）。`.OF` 是场外开放式基金（如 `021179.OF`）：不进证券行情链，走 tushare fund_nav（官方净值主源）→ 腾讯 jj 前缀（轻量备份）专用短链，返回 **T-1 净值**（当日净值约 20:00 后更新，日报 16:30 显示前一交易日属口径属性非缺数）。后缀必须大写。
 
 ## 输出示例
 
@@ -270,12 +270,12 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 |--------|------|------|--------|---------|
 | mootdx | A 股 + ETF（.SH/.SZ）+ 板块指数（880/881 段 `.TDX`） | 无 Key；TCP 7709 直连通达信 | **A 股主源**（实时快照；板块指数走 index_bars 日线；需装 `requirements-mootdx.txt`，`DISABLE_MOOTDX=1` 停用） | 无 |
 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | 免费 250 次/日 / 付费 | 可选（财报、宏观等功能需要） | `FMP_API_KEY` |
-| tushare | A 股（.SH/.SZ）、港股（.HK） | 120 积分非复权日线当前 0 元；其他看权限 | A 股首备用（EOD）；港股需要 | `TUSHARE_TOKEN` |
+| tushare | A 股（.SH/.SZ）、港股（.HK）、场外基金净值（fund_nav，`.OF` 主源，120 积分实测可调） | 120 积分非复权日线当前 0 元；其他看权限 | A 股首备用（EOD）；港股需要；场外基金唯一官方口径源 | `TUSHARE_TOKEN` |
 | Nasdaq | 美股基础行情 | 无 Key | 自动 fallback（FMP 未返回时） | 无 |
 | Finnhub | 美股 | 免费账户 / 付费 | 可选 fallback | `FINNHUB_API_KEY` |
 | EODHD | 港股、韩国、芬兰等最近 EOD | 免费 20 次/日 / 付费 | 可选 fallback；不是实时价 | `EOD_API_KEY` |
 | 东方财富 | A 股 + ETF（.SH/.SZ）；港股个股（116 段） | 无 Key | 自动 fallback（mootdx/tushare 未返回时） | 无 |
-| 腾讯 | A 股 + ETF（.SH/.SZ）；港股个股（hk 前缀）；美股个股（us 前缀，nasdaq 后的 keyless 备份） | 无 Key | 自动 fallback（东财之后） | 无 |
+| 腾讯 | A 股 + ETF（.SH/.SZ）；港股个股（hk 前缀）；美股个股（us 前缀，nasdaq 后的 keyless 备份）；场外基金净值（jj 前缀，`.OF` 在 tushare-fund 之后） | 无 Key | 自动 fallback（东财之后） | 无 |
 | 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
 | FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 降级备用（主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |
@@ -285,7 +285,7 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
-**取数顺序**：A 股主源是 mootdx（批量实时快照，服务器逐台真实取数验证，全网不可用时记 5 分钟负缓存快速失败）。单只票主源未返回时按链降级：Nasdaq → Finnhub → EOD → Nasdaq 指数 / 东财环球 / 新浪环球 / FRED（映射制；2026-11-05 起东财环球排在 FRED 之前——^TNX 实时快照优先于 T+1 官方序列）→ mootdx（按票重试）→ tushare → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（mootdx / Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。
+**取数顺序**：A 股主源是 mootdx（批量实时快照，服务器逐台真实取数验证，全网不可用时记 5 分钟负缓存快速失败）。单只票主源未返回时按链降级：Nasdaq → Finnhub → EOD → Nasdaq 指数 / 东财环球 / 新浪环球 / FRED（映射制；2026-11-05 起东财环球排在 FRED 之前——^TNX 实时快照优先于 T+1 官方序列）→ mootdx（按票重试）→ tushare → 东方财富 → 腾讯 → 新浪 → yfinance。无 Key 源（mootdx / Nasdaq / 指数与环球映射 / 东财 / 腾讯 / 新浪）自动尝试，其余按 env key 是否配置决定。`.OF` 场外基金不走上述长链，专用短链 = tushare-fund → tencent-fund（2026-11-08 接线；TDX 对场外码静默返回错票，已用段位白名单挡在 mootdx 门外）。
 
 **海外与宏观 ticker 口径**：watchlist 统一写 Yahoo 风格逻辑 ticker（`^IXIC`、`^TNX`、`DX-Y.NYB`、`XAUUSD=X`、`HG=F`、`000660.KS`），脚本内映射表转换为各源的代码（如 COMP/SOX、DGS10、DINIW、hf_XAU、hf_CAD、东财 `177.000660`）；yfinance 恢复可用时同一 ticker 直接复用。
 
