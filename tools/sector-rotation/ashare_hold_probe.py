@@ -179,7 +179,7 @@ def _mimo_models(wf_sub, window: int, start: int, end: int) -> dict[int, MIMOMod
     return models
 
 
-def part2_cells(wf_sub, start, end) -> tuple[dict, dict]:
+def part2_cells(wf_sub, start, end) -> tuple[dict, dict, dict]:
     """三格 × {全平, 持有} × {毛, 基准, 压力}；模型每格 fit 一次共享，每跑
     独立 ROCState/持有状态/计数（同美股 I-8：成本档间信号逐位一致）。"""
     costs = [("毛", ZERO), ("基准", CostModel.base()), ("压力", CostModel.stress())]
