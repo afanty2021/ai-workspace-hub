@@ -255,7 +255,7 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 
 没有配置任何 API key 时（`daily-watchlist.env` 保持默认的 `your_*` 占位符），工具仍然可以运行：
 
-- **美股**：自动 fallback 到 Nasdaq 无 Key 源，能拿到基础行情（最新价、涨跌幅）
+- **美股**：自动 fallback 到 Nasdaq 无 Key 源，能拿到基础行情（最新价、涨跌幅）；Nasdaq 不可用时腾讯 us 前缀为其后的 keyless 备份
 - **宏观数据**：需要 FMP key，没有则宏观表格全部显示 `N/A`
 - **A 股 + ETF**：mootdx 无 Key 实时覆盖（需装 `requirements-mootdx.txt`）；未装或缺装时按 tushare（需 token）→ 东财/腾讯/新浪（无 Key）降级
 - **港股**：需要 tushare token，没有则对应股票无数据
@@ -274,8 +274,8 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | Nasdaq | 美股基础行情 | 无 Key | 自动 fallback（FMP 未返回时） | 无 |
 | Finnhub | 美股 | 免费账户 / 付费 | 可选 fallback | `FINNHUB_API_KEY` |
 | EODHD | 港股、韩国、芬兰等最近 EOD | 免费 20 次/日 / 付费 | 可选 fallback；不是实时价 | `EOD_API_KEY` |
-| 东方财富 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（mootdx/tushare 未返回时） | 无 |
-| 腾讯 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（东财之后） | 无 |
+| 东方财富 | A 股 + ETF（.SH/.SZ）；港股个股（116 段） | 无 Key | 自动 fallback（mootdx/tushare 未返回时） | 无 |
+| 腾讯 | A 股 + ETF（.SH/.SZ）；港股个股（hk 前缀）；美股个股（us 前缀，nasdaq 后的 keyless 备份） | 无 Key | 自动 fallback（东财之后） | 无 |
 | 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
 | FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 降级备用（主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |

@@ -57,7 +57,7 @@ Agent 首次使用时检查上述条件，缺什么补什么。
 
 mootdx 未命中或缺装 → A 股在降级链里先试 tushare（首备用），再东财/腾讯/新浪。mootdx 服务器全网不可用时记 5 分钟负缓存快速失败，不影响整份日报生成。
 
-无任何 key 且未装 mootdx → 美股基础行情先尝试 Nasdaq，其余缺口在报告骨架中标 `[待补充]`，agent 用 websearch 补充。
+无任何 key 且未装 mootdx → 美股基础行情先尝试 Nasdaq（腾讯 us 前缀为其后的 keyless 备份），其余缺口在报告骨架中标 `[待补充]`，agent 用 websearch 补充。
 
 Longbridge Skill/CLI 是独立 Agent 扩展，不是 `tools/daily-watch/` 的内置数据源。需要时可用于 Agent 的临时查询，但不要把它写成日报脚本已接入。
 
