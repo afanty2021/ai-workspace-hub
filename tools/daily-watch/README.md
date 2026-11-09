@@ -280,9 +280,10 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
 | FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 降级备用（主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |
 | 东财环球 | 韩股（000660.KS → 177.000660）、LME 伦铜（HG=F → 109.LCPT）、纳指/费半备源（100.NDX / 251.SOX）、恒生科技（HSTECH → 124.HSTECH，2026-11-09 接线） | 无 Key | 自动 fallback（映射制；反爬间歇断连时落到新浪环球 / yfinance） | 无 |
-| 东财 push2his | 跨资产历史日线回补（7 票默认 800 天：^IXIC/^SOX/^TNX/NQ00Y/DX-Y.NYB→100.UDI/HG=F/HSTECH；XAUUSD=X 无 secid 排除） | 无 Key | `update_cross_asset_history.py`（batch 档权威覆盖快照行；票间 3s 节流+重试——与 push2 共享 IP 级限流，2026-11-09 实测 14 连发触发小时级封禁） | 无 |
+| 东财 push2his | 跨资产历史日线回补（默认 800 天主源 6 票：^IXIC/^TNX/NQ00Y/DX-Y.NYB→100.UDI/HG=F/HSTECH；^SOX 与 XAUUSD=X 票级主源覆盖见下两行，^SOX 失败时仍降级本源） | 无 Key | `update_cross_asset_history.py`（batch 档权威覆盖快照行；票间 3s 节流+重试——与 push2 共享 IP 级限流，2026-11-09 实测 14 连发触发小时级封禁） | 无 |
+| Nasdaq 官方 historical | ^SOX 历史日线主源（exchange 官方，2024-09 起 548 行全窗；东财 251.SOX 仅 2026-07 起 89 行深度受限） | 无 Key | 同上脚本票级分发（`NASDAQ_HISTORY_SYMBOLS`）；失败自动降级东财；腾讯 ifzq usSOX 日线 K 线为空数组不接入 | 无 |
 | 东财 datacenter 宏观 / MOFCOM | 国内 Shibor（隔夜/1W，RPT_IMP_INTRESTRATEN）+ 社融增量（MOFCOM shrzgmQuery，月度） | 无 Key | `update_cn_liquidity.py`（写 data/custom/；社融失败只告警不阻塞；DR007 严格口径未接——Shibor-1W 为信用拆借口径，与质押回购有口径差） | 无 |
-| 新浪环球 | 美元指数（DX-Y.NYB）、伦敦金（XAUUSD=X）、伦铜备用（hf_CAD = LME 三月铜） | 无 Key | 自动 fallback（映射制） | 无 |
+| 新浪环球 | 美元指数（DX-Y.NYB）、伦敦金（XAUUSD=X，实时 hf_XAU + 历史 GlobalFuturesService 日线）、伦铜备用（hf_CAD = LME 三月铜） | 无 Key | 自动 fallback（映射制）；XAUUSD=X 历史为主源（2024-09 起 565 行，11-06 行全 OHLC 与快照逐位一致） | 无 |
 | yfinance | 多市场 | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
@@ -414,7 +415,8 @@ python3 tools/daily-watch/scripts/check_setup.py
     # 盘后批量（定时任务每日 16:30 自动跑全部四条，2026-11-09 起两条新命令已并入 cron prompt）
     python tools/daily-watch/scripts/update_market_series.py --scope all
     python tools/daily-watch/scripts/update_finance_snapshots.py
-    # 跨资产历史回补（东财 push2his，节流内置；社融/Shibor 国内流动性见 update_cn_liquidity）
+    # 跨资产历史回补（^SOX 走 Nasdaq 官方 historical、XAUUSD=X 走新浪全球日线，其余东财 push2his，节流内置；
+    # 社融/Shibor 国内流动性见 update_cn_liquidity）
     python tools/daily-watch/scripts/update_cross_asset_history.py
     python tools/daily-watch/scripts/update_cn_liquidity.py
     # 首次部署：全量初始化（3 年回补的唯一路径）

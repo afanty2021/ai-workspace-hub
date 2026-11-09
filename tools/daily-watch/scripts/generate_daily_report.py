@@ -318,9 +318,10 @@ _CROSS_ASSET_MARKETS = {"INDEX", "FX", "CMDTY", "FUT"}
 
 CROSS_ASSET_NOTE = (
     "> 口径：日涨跌=抓取时点行情（北京时间下午抓取时美股/商品对应 ET 前一交易日或盘中，"
-    "与官方收盘日可能偏移一天）；5d/20d=本地 series 滚动累计（跨资产票 2026-11-03 起积累中，"
-    "「—」=样本不足）；^TNX/美元指数等口径注记见信息来源段。宏观敏感票裁决前读"
-    " `workspace/monitoring/liquidity-dashboard.md`（流动性状态仪表）。"
+    "与官方收盘日可能偏移一天）；5d/20d=本地 series 滚动累计（2026-11-09 已完成 800 天回补："
+    "^SOX 主源 Nasdaq 官方、XAUUSD=X 主源新浪全球日线、其余东财 push2his，各票 ~2024-09 起"
+    "全窗深度；「—」=样本不足，仅新增票积累期出现）；^TNX/美元指数等口径注记见信息来源段。"
+    "宏观敏感票裁决前读 `workspace/monitoring/liquidity-dashboard.md`（流动性状态仪表）。"
 )
 
 

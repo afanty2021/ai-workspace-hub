@@ -141,10 +141,12 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("{CROSS_ASSET_NOTE}", text)
         self.assertIn("### 跨资产例行扫描", text)
 
-    def test_note_mentions_dashboard_and_accumulation(self) -> None:
-        # 口径注记必须带仪表指引与「积累中」语义（跨资产票 series 深度浅属预期）
+    def test_note_mentions_dashboard_and_backfill_depth(self) -> None:
+        # 口径注记必须带仪表指引 + 回补全窗语义（2026-11-09 起七票 ~2024-09 全深度，
+        # 「—」仅新增票积累期出现——旧文案「2026-11-03 起积累中」已过时，防回退）
         self.assertIn("liquidity-dashboard", CROSS_ASSET_NOTE)
-        self.assertIn("积累", CROSS_ASSET_NOTE)
+        self.assertIn("回补", CROSS_ASSET_NOTE)
+        self.assertIn("积累期", CROSS_ASSET_NOTE)
 
 
 if __name__ == "__main__":
