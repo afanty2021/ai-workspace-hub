@@ -129,11 +129,24 @@ class RepositoryContractTests(unittest.TestCase):
             r"\d{3}(?:/\d{3})? ?段|[a-z]{2,3} ?前缀|[a-z]+_nav|gpcw|datacenter"
             r"|push2his|\d{3}\.[A-Z][A-Z0-9]*"
         )
+        # 评审 Q-20261109-04 后续批 I-1（同族第 4 案、第 2 次补 regex）：枚举
+        # 家族永远追不上新接线形态——修根为「反引号即锁」：表行内反引号包裹
+        # 的 token（.TDX / .OF / env key / 新源名如 `Nasdaq 官方 historical`）
+        # 一律派生进锁，登记新接线时用反引号写源名即自动受锁，无需改本测试。
+        backtick_re = re.compile(r"`([^`]+)`")
+        # 结构锁（同日用户拍板，复查后继建议）：第 1 列「数据源」按 / 拆分的
+        # 子源名整列入锁——新源进表即受锁，不依赖作者记得写反引号，彻底
+        # 消除「忘加反引号=静默不进锁」路径（反引号锁继续管第 4 列的接线
+        # token 族，两层互补）。
         tokens: set[str] = set()
         for line in section.splitlines():
             if not line.startswith("|") or set(line) <= {"|", "-", " ", ":"}:
                 continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells and cells[0] != "数据源":  # 表头行不入锁
+                tokens.update(n.strip() for n in cells[0].split("/") if n.strip())
             tokens.update(token_re.findall(line))
+            tokens.update(backtick_re.findall(line))
         # 解析失效（表挪位置/改格式）时宁可红也不静默通过。
         self.assertTrue(tokens, "AGENTS.md 数据源表解析不到任何接线 token")
         doc = (REPO_ROOT / "DATA-SOURCES.md").read_text(encoding="utf-8")
