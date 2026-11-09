@@ -122,8 +122,12 @@ class RepositoryContractTests(unittest.TestCase):
         # 空格可选：无空格写法（"jj前缀"）也要被提取成 token 并要求两处
         # 一致（复查 R-1：原 `[a-z]{2,3} 前缀` 依赖空格，无空格改写 +
         # DATA-SOURCES 删行时静默漏锁）。
+        # 评审 Q-20261109-03/04 I-1：push2his 与东财 secid（124.HSTECH /
+        # 103.NQ00Y）随跨资产回补接线进表但不在旧 pattern 内，变异重放
+        # 证明删 DATA-SOURCES 行不红——补进 pattern 防同类第 4 案。
         token_re = re.compile(
             r"\d{3}(?:/\d{3})? ?段|[a-z]{2,3} ?前缀|[a-z]+_nav|gpcw|datacenter"
+            r"|push2his|\d{3}\.[A-Z][A-Z0-9]*"
         )
         tokens: set[str] = set()
         for line in section.splitlines():
