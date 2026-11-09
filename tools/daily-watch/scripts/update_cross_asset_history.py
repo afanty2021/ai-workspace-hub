@@ -223,9 +223,14 @@ def fetch_sina_global_history_rows(symbol: str, from_iso: str, to_iso: str) -> l
 
 def update_ticker(data_root: Path, ticker: str, secid: str, *,
                   backfill_days: int = 800, force: bool = False,
-                  history_source: str = "eastmoney") -> str:
+                  history_source: str = "eastmoney",
+                  sink: list[tuple[Path, str]] | None = None,
+                 sources_used: set[str] | None = None) -> str:
     """三态 'written' / 'empty' / 'fail'（无锁分支：钩子 16:30 前不与批量同跑，
-    锁冲突按 fail 语义计，次日自愈）。"""
+    锁冲突按 fail 语义计，次日自愈）。sink 非空时收集 (series 路径, upsert 后
+    尾行日期)——运行账本 data-close 的行锚定三元组（batch_ledger 接线）。
+    sources_used 非空时同步收集写入行内 source 指纹（nasdaq 主源降级东财时
+    记的是实际写入的源，而非分发意图，max 评审 M-3）。"""
     path = series_file(data_root, ticker)
     try:
         rows = read_series_rows(path)
@@ -278,6 +283,12 @@ def update_ticker(data_root: Path, ticker: str, secid: str, *,
             log(f"Warning: {ticker} 锁被其它进程持有，本次未更新")
             return "fail"
         changed = upsert_series_rows(path, fetched, writer="batch")
+        if sink is not None:
+            rows_now = read_series_rows(path)
+            if rows_now:
+                sink.append((path, rows_now[-1]["date"]))
+                if sources_used is not None and rows_now[-1].get("source"):
+                    sources_used.add(rows_now[-1]["source"])
     log(f"{ticker}: 拉取 {len(fetched)} 行（beg={beg}，source={history_source}），合并变更 {changed} 行")
     return "written"
 
@@ -306,6 +317,12 @@ def main(argv: list[str] | None = None) -> int:
     from market_data_io import resolve_data_root
 
     data_root = resolve_data_root()
+    from batch_ledger import close_batch, open_batch
+
+    run_id = open_batch("batch-crossasset", data_root)
+    written: list[tuple[Path, str]] = []
+    used: set[str] = set()  # 实际写入行内 source 指纹（含降级路径的真实源，max 评审 M-3）
+    failed_tickers: list[str] = []
     stats = {"ok": 0, "skip": 0, "fail": 0}
     for idx, ticker in enumerate(tickers):
         secid = CROSS_ASSET_HISTORY_SECIDS.get(ticker, "")
@@ -318,7 +335,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             outcome = update_ticker(data_root, ticker, secid,
                                     backfill_days=args.backfill, force=args.force,
-                                    history_source=source)
+                                    history_source=source, sink=written,
+                                    sources_used=used)
         except Exception as exc:  # noqa: BLE001 — 单票失败不中断
             outcome = "fail"
             log(f"Warning: {ticker} 回补失败: {exc}")
@@ -326,11 +344,15 @@ def main(argv: list[str] | None = None) -> int:
             stats["ok"] += 1
         elif outcome == "fail":
             stats["fail"] += 1
+            failed_tickers.append(ticker)
         else:
             stats["skip"] += 1
         if idx < len(tickers) - 1 and args.throttle > 0:
             time.sleep(args.throttle)
     log(f"cross-asset-history 汇总: {stats}")
+    close_batch(run_id, written, data_root, sources=sorted(used),
+                missing=[{"item": t, "reason": "cross-asset batch update fail"}
+                         for t in failed_tickers])
     return 1 if stats["fail"] else 0
 
 

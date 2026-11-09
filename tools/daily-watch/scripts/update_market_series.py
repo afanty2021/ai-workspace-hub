@@ -105,26 +105,35 @@ def list_cn_symbols() -> list[tuple[str, int]]:
 
 
 def _upsert_bars(path: Path, data_root: Path, code: str, backfill: int, *, source: str,
-                 index: bool = False) -> str:
+                 index: bool = False,
+                 sink: list[tuple[Path, str]] | None = None) -> str:
     """结果语义（I2）：'written'=真写；'empty'=服务器空返回；'locked'=锁被其它进程持有。
 
     调用方据此区分 ok/skip 与是否写完成标记——空/锁都不是 ok，静默 return 会让
-    ok 虚高、锁冲突票当日被完成标记掩盖。
+    ok 虚高、锁冲突票当日被完成标记掩盖。sink 非空时收集 (series 路径, upsert
+    后文件尾行日期)——与 update_cross_asset_history 同口径（max 评审 M-2 统一）：
+    服务器数据滞后于文件尾时锚仍覆盖文件全部行，不产生早于既有权威锚的申报。
     """
     method = "index_bars" if index else "bars"
     df = _mootdx_call(method, symbol=code, frequency=9, offset=backfill)
     if df is None or df.empty:
         return "empty"
+    rows = bars_to_rows(df, source=source)
     with series_lock(data_root, path.name) as acquired:
         if not acquired:
             return "locked"
-        upsert_series_rows(path, bars_to_rows(df, source=source), writer="batch")
+        upsert_series_rows(path, rows, writer="batch")
+        if sink is not None:
+            rows_now = read_series_rows(path)
+            if rows_now:
+                sink.append((path, rows_now[-1]["date"]))
     return "written"
 
 
 def run_stocks_update(data_root: Path, *, backfill: int = 30,
                       tickers: list[str] | None = None, latest: str | None = None,
-                      force: bool = False) -> dict:
+                      force: bool = False,
+                      sink: list[tuple[Path, str]] | None = None) -> dict:
     stats = {"ok": 0, "skip": 0, "fail": 0}
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "stocks")
@@ -148,7 +157,8 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
                     and rows[-1].get("amount") is not None and not force):
                 stats["skip"] += 1
                 continue
-            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx")
+            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx",
+                                   sink=sink)
             if outcome == "written":
                 stats["ok"] += 1
             else:
@@ -215,7 +225,8 @@ _LIST_ROUND_LABELS = {"sectors": "板块", "indices": "指数"}  # scope→日�
 
 def _run_list_round(data_root: Path, scope: str, items: list[dict], *, backfill: int,
                     latest: str | None, force: bool,
-                    path_of: Callable[[Path, str], Path]) -> dict:
+                    path_of: Callable[[Path, str], Path],
+                    sink: list[tuple[Path, str]] | None = None) -> dict:
     """清单制 scope（sectors/indices）共用的一轮更新——第三次复制时按评审建议提取。
 
     skip/empty/locked/fail 分类与完成标记条件（I2）在此唯一定义：empty 不阻止
@@ -236,7 +247,8 @@ def _run_list_round(data_root: Path, scope: str, items: list[dict], *, backfill:
             if rows and latest and rows[-1]["date"] >= latest and not force:
                 stats["skip"] += 1
                 continue
-            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index", index=True)
+            outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index",
+                                   index=True, sink=sink)
             if outcome == "written":
                 stats["ok"] += 1
             else:
@@ -254,7 +266,8 @@ def _run_list_round(data_root: Path, scope: str, items: list[dict], *, backfill:
 
 
 def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
-                       force: bool = False) -> dict:
+                       force: bool = False,
+                       sink: list[tuple[Path, str]] | None = None) -> dict:
     """交易所核心指数批量（scope=indices，并入 all）：固定清单 + index_bars。
 
     清单制共用轮见 _run_list_round；index 目录只有批量这一个写者（钩子不碰），
@@ -268,11 +281,12 @@ def run_indices_update(data_root: Path, *, backfill: int = 30, latest: str | Non
         return {"ok": 0, "skip": 0, "fail": 0}
     return _run_list_round(data_root, "indices", _CORE_INDICES, backfill=backfill,
                            latest=latest, force=force,
-                           path_of=index_series_file)
+                           path_of=index_series_file, sink=sink)
 
 
 def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | None = None,
-                       force: bool = False) -> dict:
+                       force: bool = False,
+                       sink: list[tuple[Path, str]] | None = None) -> dict:
     latest = latest or fetch_server_latest_trade_date()
     last_round = last_round_date(data_root, "sectors")  # per-scope 标记：stocks 完成与否不影响本闸门（N1）
     if latest and last_round and latest <= last_round and not force:
@@ -282,7 +296,7 @@ def run_sectors_update(data_root: Path, *, backfill: int = 30, latest: str | Non
     merged, _added = load_or_merge_sector_list(data_root, stocks_df)
     return _run_list_round(data_root, "sectors", merged, backfill=backfill,
                            latest=latest, force=force,
-                           path_of=sector_series_file)
+                           path_of=sector_series_file, sink=sink)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -310,18 +324,34 @@ def main(argv: list[str] | None = None) -> int:
     from market_data_io import resolve_data_root
 
     data_root = resolve_data_root()
+    from batch_ledger import close_batch, open_batch
+
+    run_id = open_batch("batch-series", data_root)
+    written: list[tuple[Path, str]] = []
+    used: set[str] = set()  # 实际写入的 scope 才记源（闸门整轮跳过不虚报，max 评审 M-3）
     stats = {"ok": 0, "skip": 0, "fail": 0}
     if args.scope in ("stocks", "all"):
         stats = run_stocks_update(data_root, backfill=args.backfill, tickers=tickers,
-                                  force=args.force)
+                                  force=args.force, sink=written)
+        if stats["ok"]:
+            used.add("mootdx")
     if args.scope in ("sectors", "all"):
-        sec = run_sectors_update(data_root, backfill=args.backfill, force=args.force)
+        sec = run_sectors_update(data_root, backfill=args.backfill, force=args.force,
+                                 sink=written)
         for key in stats:
             stats[key] += sec[key]
+        if sec["ok"]:
+            used.add("mootdx-index")
     if args.scope in ("indices", "all"):
-        idx = run_indices_update(data_root, backfill=args.backfill, force=args.force)
+        idx = run_indices_update(data_root, backfill=args.backfill, force=args.force,
+                                 sink=written)
         for key in stats:
             stats[key] += idx[key]
+        if idx["ok"]:
+            used.add("mootdx-index")
+    close_batch(run_id, written, data_root, sources=sorted(used),
+                missing=[{"item": "batch-series", "reason": f"fail={stats['fail']}"}]
+                if stats["fail"] else [])
     return 1 if stats["fail"] else 0
 
 

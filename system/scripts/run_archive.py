@@ -7,8 +7,10 @@
 verify_ledger，公开函数保持 argparse 无关；CLI 薄壳供 skill 一步命令使用。
 
 行类型（spec §3.2）：open / data-close / close / amend / amend-done / abort。
-kind 六值：watch / inspect / research / screen / masters / backfill（backfill 无 close 语义，
-不参与 verify 的孤儿判定）。
+kind 十值：watch / inspect / research / screen / masters / backfill（backfill 无 close 语义，
+不参与 verify 的孤儿判定）+ batch-series / batch-finance / batch-crossasset /
+batch-liquidity（16:30 cron 批量，两行制 open+data-close，无 close 行——孤儿判定
+接受 data-close 为下文，见 tools/daily-watch/scripts/batch_ledger.py）。
 
 本模块拍板的实现约定（brief 未逐字规定处的最简一致口径）：
 
@@ -77,7 +79,8 @@ except ImportError:  # importlib 动态加载 / 非脚本目录执行时补路�
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from evidence_lint import parse_frontmatter
 
-KINDS = ("watch", "inspect", "research", "screen", "masters", "backfill")
+KINDS = ("watch", "inspect", "research", "screen", "masters", "backfill",
+          "batch-series", "batch-finance", "batch-crossasset", "batch-liquidity")
 LEDGER_REL = Path(".state") / "run-log.jsonl"
 SENTINEL_REL = Path(".state") / "run-log.error"
 ORPHAN_HOURS = 24
@@ -337,10 +340,10 @@ def normalized_evidence_sha256(path) -> str:
 def append_open(data_root, kind: str, trade_date: str, now: datetime | None = None) -> str:
     """写 open 行（started_at / git_head 如实记录），返回 run_id。
 
-    kind 非六值、trade_date 非 YYYY-MM-DD 抛 ValueError。
+    kind 非十值、trade_date 非 YYYY-MM-DD 抛 ValueError。
     """
     if kind not in KINDS:
-        raise ValueError(f"kind 非法：{kind!r}，合法六值 {KINDS}")
+        raise ValueError(f"kind 非法：{kind!r}，合法值 {KINDS}")
     try:
         date.fromisoformat(str(trade_date))
     except ValueError as exc:
@@ -1033,7 +1036,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_open = sub.add_parser("open", help="运行开始：写 open 行并打印 run_id")
-    p_open.add_argument("--kind", required=True, choices=KINDS, help="运行类型（六值）")
+    p_open.add_argument("--kind", required=True, choices=KINDS, help="运行类型（十值）")
     p_open.add_argument("--trade-date", required=True, help="业务交易日 YYYY-MM-DD")
 
     p_dc = sub.add_parser("data-close", help="数据侧收口（persist 钩子自动写；series 目标行锚定）")

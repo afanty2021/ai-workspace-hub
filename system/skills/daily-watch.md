@@ -72,7 +72,7 @@ Longbridge Skill/CLI 是独立 Agent 扩展，不是 `tools/daily-watch/` 的内
 
 ## 运行账本
 
-每次运行在 `data/.state/run-log.jsonl` 记存在证明与修订痕迹（schema 见 `system/integrations/object-model.md`「运行账本」）。`open` / `data-close` 由持久化钩子自动写入；报告落盘后 skill 一步补全 close 行：
+每次运行在 `data/.state/run-log.jsonl` 记存在证明与修订痕迹（schema 见 `system/integrations/object-model.md`「运行账本」）。`open` / `data-close` 由持久化钩子自动写入；**16:30 批量四脚本（update_market_series / update_finance_snapshots / update_cross_asset_history / update_cn_liquidity）同样自动记账**——open（kind=batch-*）→ data-close 两行制，无 close 行（孤儿判定接受 data-close 为下文），接线见 `tools/daily-watch/scripts/batch_ledger.py`（2026-11-09 三漂移修根，批量改动 series 不再成为 verify 未申报修订）；报告落盘后 skill 一步补全 close 行：
 
 ```bash
 python3 system/scripts/run_archive.py close --run-id RUN-YYYYMMDD-HHMM-watch \
@@ -82,7 +82,7 @@ python3 system/scripts/run_archive.py close --run-id RUN-YYYYMMDD-HHMM-watch \
 
 `--evidence` 可多次传（本次 run 产出的每个独立证据文件一个 E-ID）。缺 `E-ID:sha256` 时自动按归一化口径现算注册（I4 豁免：review_status/direction/confidence 三个状态字段的合法生命周期迁移不误报，只有正文改动才算修订）。
 
-修订纪律：任何对已 close 运行产物的修改（报告正文、series 行、evidence 文件），**先 `run_archive.py amend` 记 intent，改完 `amend --done`** 补哈希，两步都不可省，漏记会被 verify 抓出。报告里的「数据修正披露」散文段保留（给人看），amend 行是其机器可读镜像。
+修订纪律：任何对已 close 运行产物的修改（报告正文、series 行、evidence 文件），**先 `run_archive.py amend` 记 intent，改完 `amend --done`** 补哈希，两步都不可省，漏记会被 verify 抓出。**易漏场景点名：review-queue 收账/复盘确认时给证据正文补巡检注记也是正文改动**——I4 豁免只豁免 frontmatter 状态字段迁移，不豁免正文；E-20261105 与 2026-11-09 三份 E-20261109 证据两案皆栽在此（第 2 次出现，已按 friction-log 硬规则修根进本段）。报告里的「数据修正披露」散文段保留（给人看），amend 行是其机器可读镜像。
 
 ## 股票池格式
 

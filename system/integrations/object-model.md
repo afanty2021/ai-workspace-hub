@@ -81,7 +81,7 @@ dedup_key: DW-2026-07-11-mover-ifx-de-H1
 | `amend-done` | 修订第二步 | 改完文件后补完成行；verify 只认 done |
 | `abort` | 运行中止 | 显式记账中止原因 |
 
-`kind` 六值：`watch / inspect / research / screen / masters / backfill`（backfill 无 close 语义，不参与 verify）。
+`kind` 十值：`watch / inspect / research / screen / masters / backfill / batch-series / batch-finance / batch-crossasset / batch-liquidity`（backfill 无 close 语义，不参与 verify；batch-* 为 16:30 cron 批量四脚本专用——open→data-close 两行制，无 close 行，2026-11-09 三漂移修根接入，接线见 `tools/daily-watch/scripts/batch_ledger.py`）。
 
 **行锚定哈希**：series 是追加式 jsonl，整文件哈希次日必过期。data-close 的 series 目标记三元组 `{path, anchor_date, sha256}`，其中 sha256 = **对文件中 `date ≤ anchor_date` 的全部行（按文件序）拼接的哈希**。效果：追加新行（date > anchor）不触发 verify；改写旧行（date ≤ anchor 的行内容变化）才触发。报告类目标（md）用整文件哈希。amend 的 `--data-target path#date` 同口径。该模型同时兼容 `update_market_series.py`（writer=batch 权威覆盖，不走 persist）——它的合法覆盖更新若发生在 anchor 之后不影响验证，改 anchor 内旧行则须先 amend。
 

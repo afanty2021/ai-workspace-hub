@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -97,18 +98,58 @@ class AppendIdempotencyTests(unittest.TestCase):
 
 
 class MainDegradeTests(unittest.TestCase):
+    # main 型测试必须同时 mock resolve_data_root：batch_ledger 接入后 main 会
+    # open_batch 写运行账本——裸跑会打真实 data/.state（2026-11-09 实测留过 sentinel）。
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._root = Path(self._tmp.name)
+
     def test_social_failure_does_not_fail_exit_code(self) -> None:
         # 降级语义：社融（MOFCOM gov 站风险）失败只告警；Shibor 失败才非零
         with patch("update_cn_liquidity.update_shibor"), \
                 patch("update_cn_liquidity.update_social_financing",
-                      side_effect=RuntimeError("gov down")):
+                      side_effect=RuntimeError("gov down")), \
+                patch("market_data_io.resolve_data_root", return_value=self._root):
             rc = ucl.main(["--only", "social"])
         self.assertEqual(rc, 0)
+        # 附带锁定：main 落 batch-liquidity 账本两行（open+data-close，missing 含社融）
+        ledger = self._root / ".state" / "run-log.jsonl"
+        self.assertTrue(ledger.exists())
+        rows = [json.loads(line) for line in
+                ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual([r["type"] for r in rows], ["open", "data-close"])
+        self.assertIn("batch-liquidity", rows[0]["run_id"])
+        self.assertEqual(rows[1]["missing"],
+                         [{"item": "social-financing", "reason": "gov down"}])
+
+    def test_social_monthly_anchor_gets_day_suffix(self) -> None:
+        # 社融月度行 date=YYYY-MM：账本锚须补 -01 才能过 run_archive 行锚定的
+        # fromisoformat（max 评审 2026-11-09 I-1——不补则 data-close 整批炸+成孤儿）
+        with patch("update_cn_liquidity.requests.post", return_value=MagicMock(
+                json=lambda: [{"date": "2026-04", "tiosfs": 6245.0}])), \
+                patch("market_data_io.resolve_data_root", return_value=self._root):
+            rc = ucl.main(["--only", "social"])
+        self.assertEqual(rc, 0)
+        rows = [json.loads(line) for line in
+                (self._root / ".state" / "run-log.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+        self.assertEqual([r["type"] for r in rows], ["open", "data-close"])
+        target = rows[1]["data_targets"][0]
+        self.assertTrue(target["path"].endswith("custom/social-financing.jsonl"))
+        self.assertEqual(target["anchor_date"], "2026-04-01")  # YYYY-MM → 月首日锚
+        # M-3：实际写入的系列才记源（--only social → 只 mofcom）
+        self.assertEqual(rows[1]["sources_used"], ["mofcom"])
+        # 闭环：月度锚合法，verify 无孤儿/无未申报（行内 date 不可解析=保守计入）
+        import batch_ledger
+        report = batch_ledger._load_run_archive().verify_ledger(self._root)
+        self.assertEqual(report["orphan_opens"] + report["undeclared"], [])
 
     def test_shibor_failure_fails_exit_code(self) -> None:
         with patch("update_cn_liquidity.update_shibor",
                    side_effect=RuntimeError("dc down")), \
-                patch("update_cn_liquidity.update_social_financing"):
+                patch("update_cn_liquidity.update_social_financing"), \
+                patch("market_data_io.resolve_data_root", return_value=self._root):
             rc = ucl.main(["--only", "shibor"])
         self.assertEqual(rc, 1)
 

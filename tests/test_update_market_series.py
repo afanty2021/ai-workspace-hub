@@ -513,5 +513,26 @@ class IndicesTests(unittest.TestCase):
         self.assertIn("Warning: 指数 000001 更新失败: socket dead", logs)  # 第四轮 Minor1 措辞断言
 
 
+class UpsertSinkAnchorTests(unittest.TestCase):
+    def test_sink_anchor_is_file_tail_not_fetch_max(self) -> None:
+        # max 评审 M-2：锚=upsert 后文件尾行日期（与 update_cross_asset_history
+        # 同口径）。服务器数据滞后于文件尾时（钩子先写过当日行），锚必须覆盖
+        # 文件全部行——用 fetch 行最大日期会早于既有权威锚，verify 出需人工分辨的红
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = series_file(root, ums.normalize_cn_symbol("600276", 0))
+            upsert_series_rows(path, [  # 钩子先写的当日行（文件尾 11-09，amount=None 指纹）
+                {"date": "2026-11-09", "open": 46.0, "close": 46.5, "high": 47.0,
+                 "low": 45.5, "volume": 100.0, "amount": None,
+                 "source": "eastmoney-snapshot"}], writer="hook")
+            fake = FakeMootdx(bars=_bars_frame(["2026-11-05", "2026-11-06"], [45.0, 45.5]))
+            sink: list[tuple[Path, str]] = []
+            with patch.object(ums, "_mootdx_call", fake):
+                outcome = ums._upsert_bars(path, root, "600276", backfill=30,
+                                           source="mootdx", sink=sink)
+            self.assertEqual(outcome, "written")
+            self.assertEqual(sink, [(path, "2026-11-09")])  # 文件尾，非 fetch 最大 11-06
+
+
 if __name__ == "__main__":
     unittest.main()

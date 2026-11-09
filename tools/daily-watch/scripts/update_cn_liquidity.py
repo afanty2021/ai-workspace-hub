@@ -88,15 +88,24 @@ def fetch_social_financing_rows() -> list[dict[str, str]]:
 
 
 def _append_many(data_root: Path, *, series: str, name: str, unit: str, source: str,
-                 items: list[dict[str, Any]]) -> dict[str, int]:
-    """逐条 append；同日已存在=幂等 skip（人工数据不静默重写）。"""
+                 items: list[dict[str, Any]],
+                 sink: list[tuple[Path, str]] | None = None) -> dict[str, int]:
+    """逐条 append；同日已存在=幂等 skip（人工数据不静默重写）。
+    sink 非空时收集实际写入的 (文件, 行日期)——运行账本 data-close（batch_ledger）。"""
     stats = {"imported": 0, "skipped": 0}
     for item in items:
         try:
-            append_record(data_root, series=series, name=name,
-                          date=item["date"], value=item["value"], unit=unit,
-                          source=source, period=item.get("period"))
+            path = append_record(data_root, series=series, name=name,
+                                 date=item["date"], value=item["value"], unit=unit,
+                                 source=source, period=item.get("period"))
             stats["imported"] += 1
+            if sink is not None:
+                # 社融月度行 date=YYYY-MM，账本锚须完整日期（run_archive 行锚定走
+                # fromisoformat）——补 -01；行内 date 不可解析被 row_anchor_hash 保守
+                # 计入 = 截至本次写入的整文件哈希语义，保护不缩水（max 评审 I-1）
+                anchor = (f"{item['date']}-01" if len(str(item["date"])) == 7
+                          else item["date"])
+                sink.append((path, anchor))
         except ValueError as exc:
             if "已有" in str(exc):
                 stats["skipped"] += 1
@@ -106,27 +115,29 @@ def _append_many(data_root: Path, *, series: str, name: str, unit: str, source: 
     return stats
 
 
-def update_shibor(data_root: Path) -> dict[str, int]:
+def update_shibor(data_root: Path,
+                   sink: list[tuple[Path, str]] | None = None) -> dict[str, int]:
     total = {"imported": 0, "skipped": 0}
     for series, (indicator_id, name, unit) in SHIBOR_INDICATORS.items():
         rows = fetch_shibor_rows(indicator_id)
         if not rows:
             raise RuntimeError(f"{series} datacenter 返回 0 条有效行")
         stats = _append_many(data_root, series=series, name=name, unit=unit,
-                             source="eastmoney-datacenter", items=rows)
+                             source="eastmoney-datacenter", items=rows, sink=sink)
         for key in total:
             total[key] += stats[key]
     return total
 
 
-def update_social_financing(data_root: Path) -> dict[str, int]:
+def update_social_financing(data_root: Path,
+                             sink: list[tuple[Path, str]] | None = None) -> dict[str, int]:
     rows = fetch_social_financing_rows()
     if not rows:
         raise RuntimeError("MOFCOM 社融返回 0 条有效行")
     return _append_many(data_root, series="social-financing", name="社会融资规模增量",
                         unit="亿元", source="mofcom",
                         items=[{"date": r["period"], "period": r["period"],
-                                "value": r["value"]} for r in rows])
+                                "value": r["value"]} for r in rows], sink=sink)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -136,18 +147,29 @@ def main(argv: list[str] | None = None) -> int:
     from market_data_io import resolve_data_root
 
     data_root = resolve_data_root()
+    from batch_ledger import close_batch, open_batch
+
+    run_id = open_batch("batch-liquidity", data_root)
+    written: list[tuple[Path, str]] = []
+    used: set[str] = set()  # 实际写入的系列才记源（max 评审 M-3）
     fail = False
+    missing: list[dict] = []
     if args.only in ("shibor", "all"):
         try:
-            update_shibor(data_root)
+            update_shibor(data_root, sink=written)
+            used.add("eastmoney-datacenter")
         except Exception as exc:  # noqa: BLE001
             fail = True
+            missing.append({"item": "shibor", "reason": str(exc)})
             log(f"Warning: Shibor 更新失败: {exc}")
     if args.only in ("social", "all"):
         try:
-            update_social_financing(data_root)
+            update_social_financing(data_root, sink=written)
+            used.add("mofcom")
         except Exception as exc:  # noqa: BLE001 — 降级语义：社融失败不连坐 Shibor/退出码
+            missing.append({"item": "social-financing", "reason": str(exc)})
             log(f"Warning: 社融更新失败（不阻塞，下次重试）: {exc}")
+    close_batch(run_id, written, data_root, sources=sorted(used), missing=missing)
     return 1 if fail else 0
 
 

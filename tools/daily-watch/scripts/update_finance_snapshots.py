@@ -154,7 +154,8 @@ def _report_date_from(filename: str) -> str:
     return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
 
 
-def run_finance_update(data_root: Path, *, backfill: int | str = 0) -> dict:
+def run_finance_update(data_root: Path, *, backfill: int | str = 0,
+                        sink: list[tuple[Path, str]] | None = None) -> dict:
     stats = {"ok": 0, "skip": 0, "fail": 0}
     finance_dir = data_root / "finance"
     raw_dir = finance_dir / "_raw"
@@ -187,9 +188,14 @@ def run_finance_update(data_root: Path, *, backfill: int | str = 0) -> dict:
                 download_gpcw(filename, raw_dir)
                 df = parse_gpcw(raw_dir, filename)
                 rows = rows_from_dataframe(df, _report_date_from(filename), item["hash"])
+                out_path = finance_dir / f"gpcw-{_report_date_from(filename)}.jsonl"
                 atomic_write_text(
-                    finance_dir / f"gpcw-{_report_date_from(filename)}.jsonl",
+                    out_path,
                     "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+                if sink is not None:
+                    # gpcw 行无 date 键（report_date 制）：row_anchor_hash 按「不可解析
+                    # 行保守计入」处理=整文件近似；锚定日期用报告期即可（batch_ledger）。
+                    sink.append((out_path, _report_date_from(filename)))
                 meta[filename] = {"hash": item["hash"], "rows": len(rows),
                                   "fetched_at": datetime.now(timezone.utc).isoformat()}
                 atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
@@ -209,11 +215,24 @@ def main(argv: list[str] | None = None) -> int:
     backfill: int | str = args.backfill if args.backfill == "all" else int(args.backfill)
     from market_data_io import resolve_data_root
 
+
+    data_root = resolve_data_root()
+    from batch_ledger import close_batch, open_batch
+
+    run_id = open_batch("batch-finance", data_root)
+    written: list[tuple[Path, str]] = []
     try:
-        stats = run_finance_update(resolve_data_root(), backfill=backfill)
+        stats = run_finance_update(data_root, backfill=backfill, sink=written)
     except RuntimeError as exc:  # 双通道全灭的干净收口（N5）：log + 退出码 1，不出 CLI traceback
         log(f"Error: {exc}")
+        close_batch(run_id, written, data_root,
+                    missing=[{"item": "finance", "reason": str(exc)}])
         return 1
+    # gpcw 行无 source 字段（file_hash 制），账本源按数据通道名记（max 评审 M-3）
+    close_batch(run_id, written, data_root,
+                sources=["mootdx-gpcw"] if stats["ok"] else [],
+                missing=[{"item": "finance", "reason": f"fail={stats['fail']}"}]
+                if stats["fail"] else [])
     return 1 if stats["fail"] else 0
 
 
