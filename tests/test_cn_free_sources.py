@@ -41,6 +41,29 @@ TENCENT_HK_PAYLOAD = (
     'v_hk03800="100~协鑫科技~03800~0.640~0.660~0.645~152697900~x~x~0.640~x~x~x~x'
     '~x~x~x~x~x~x~x~x~x~x~x~x~x~x~x~x~2026/11/06 16:08:54~-0.020~-3.03~0.675~0.630";'
 )
+# Live probe 2026-11-09 (hkHSTECH): same layout as hk single stocks. Close
+# 4040.730/-0.92% matched eastmoney 124.HSTECH; pre_close 4078.230 matched the
+# 11-06 push2his close digit-for-digit. Trailing fields beyond the
+# load-bearing 0..34 trimmed from the live 70+ field payload. volume field
+# (4,212,639.35) is a different caliber from both sina (×10, same digits —
+# see SINA_RT_HK_INDEX_PAYLOAD below) and the eastmoney primary (~2e9, see
+# data/market/series/HSTECH.jsonl): index volume/amount must not be compared
+# across sources (SOURCE_CALIBER_NOTES "HSTECH", max 评审 M-5).
+TENCENT_HK_INDEX_PAYLOAD = (
+    'v_hkHSTECH="100~恒生科技指数~HSTECH~4040.730~4078.230~4119.980~4212639.3537'
+    + "~x" * 23
+    + '~2026/11/09 16:08:26~-37.500~-0.92~4158.880~4033.870";'
+)
+# Live probe 2026-11-09 (rt_hkHSTECH). NOTE: open(2)/pre_close(3) order is the
+# REVERSE of the CN series — pre_close 4078.230 = the 11-06 push2his close,
+# open 4119.980 = the session's higher open (matches Tencent hkHSTECH and the
+# HK higher-open-then-fade narrative). volume(11) 42,126,393.537 = Tencent's
+# digits ×10 (same underlying figure, different scaling — max 评审 M-5).
+SINA_RT_HK_INDEX_PAYLOAD = (
+    'var hq_str_rt_hkHSTECH="HSTECH,恒生科技指数,4119.980,4078.230,4158.880,4033.870,'
+    '4040.730,-37.500,-0.920,0.000,0.000,42126393.537,1186077858,0.000,0.000,'
+    '6025.530,3706.300,2026/11/09,16:08:26,,,,,,";'
+)
 # Same layout for US equities (live: usFCX, probe 2026-11-08). Timestamp is
 # 'YYYY-MM-DD HH:MM:SS' (ET); volume in shares; fields 35+ carry the USD
 # marker(35) / PE(39) / market cap(44/45, $mn) / EPS(47) / PB(51) / div%(52)
@@ -300,6 +323,35 @@ class TencentQuoteTests(unittest.TestCase):
         self.assertIsNone(fetch_tencent_quote("0700.HK", "HK"))
         mock_get.assert_called_once()
 
+    @patch("fetch_market_data.requests.get")
+    def test_hk_index_ticker_maps_to_hk_prefix(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(TENCENT_HK_INDEX_PAYLOAD)
+
+        quote = fetch_tencent_quote("HSTECH", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4040.73)
+        self.assertEqual(quote["change"], -37.5)
+        self.assertEqual(quote["changesPercentage"], -0.92)
+        # pre_close 4078.230 = the 11-06 push2his close; open 4119.980 = the
+        # session's higher open — cross-checked against rt_hkHSTECH below.
+        self.assertEqual(quote["previousClose"], 4078.23)
+        self.assertEqual(quote["open"], 4119.98)
+        self.assertEqual(quote["dayHigh"], 4158.88)
+        self.assertEqual(quote["dayLow"], 4033.87)
+        self.assertEqual(quote["tradeDate"], "2026-11-09")
+        self.assertEqual(quote["source"], "tencent")
+        self.assertIn("q=hkHSTECH", str(mock_get.call_args))
+
+    @patch("fetch_market_data.requests.get")
+    def test_unmapped_bare_ticker_stays_gated_off(self, mock_get: MagicMock) -> None:
+        # Bare non-mapped tickers (e.g. NQ00Y) must not leak into a wild
+        # q=<ticker> request; the mapping table is an explicit allowlist.
+        self.assertIsNone(fetch_tencent_quote("NQ00Y", "INDEX"))
+        self.assertIsNone(fetch_sina_quote("NQ00Y", "INDEX"))
+        mock_get.assert_not_called()
+
 
 class SinaQuoteTests(unittest.TestCase):
     @patch("fetch_market_data.requests.get")
@@ -332,6 +384,45 @@ class SinaQuoteTests(unittest.TestCase):
 
         self.assertIsNone(fetch_sina_quote("AAPL", "US"))
         mock_get.assert_called_once()
+
+    @patch("fetch_market_data.requests.get")
+    def test_hk_index_uses_rt_hk_layout_with_reversed_open_pre_close(
+        self, mock_get: MagicMock
+    ) -> None:
+        mock_get.return_value = _text_response(SINA_RT_HK_INDEX_PAYLOAD)
+
+        quote = fetch_sina_quote("HSTECH", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4040.73)
+        self.assertEqual(quote["change"], -37.5)
+        self.assertEqual(quote["changesPercentage"], -0.92)
+        # Reverse order vs the CN series: field 2 is OPEN (4119.980), field 3
+        # is PRE_CLOSE (4078.230 = the push2his 11-06 close). Swapping the two
+        # indexes in the parser flips both assertions — this is the lock.
+        self.assertEqual(quote["open"], 4119.98)
+        self.assertEqual(quote["previousClose"], 4078.23)
+        self.assertEqual(quote["dayHigh"], 4158.88)
+        self.assertEqual(quote["dayLow"], 4033.87)
+        # rt_hk volume stays in shares (no /100 lot conversion).
+        self.assertEqual(quote["volume"], 42126393.537)
+        self.assertEqual(quote["tradeDate"], "2026-11-09")
+        self.assertEqual(quote["source"], "sina")
+        self.assertIn("list=rt_hkHSTECH", str(mock_get.call_args))
+
+    @patch("fetch_market_data.requests.get")
+    def test_rt_hk_truncated_payload_rejected_cleanly(self, mock_get: MagicMock) -> None:
+        # 10 fields (< the len>=18 gate): rejection must be the clean length
+        # check, not an IndexError swallowed by the except handler — same
+        # discriminator pattern as the Tencent truncated-US test above.
+        mock_get.return_value = _text_response(
+            'var hq_str_rt_hkHSTECH="HSTECH,恒生科技指数,4119.980,4078.230,'
+            '4158.880,4033.870,4040.730,-37.500,-0.920";'
+        )
+        with patch("fetch_market_data._note_fetch_failure") as mock_note:
+            self.assertIsNone(fetch_sina_quote("HSTECH", "INDEX"))
+        mock_note.assert_not_called()
 
 
 class MootdxOutageDegradationTests(unittest.TestCase):

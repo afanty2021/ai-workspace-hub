@@ -539,6 +539,15 @@ def _hk_quote_code(ticker: str) -> str | None:
     return None
 
 
+# Tencent serves HK indexes natively through the same hk prefix (live probe
+# 2026-11-09: hkHSTECH close 4040.730/-0.92% matches eastmoney 124.HSTECH
+# digit-for-digit; layout identical to hk single stocks incl. the 'YYYY/MM/DD'
+# timestamp). eastmoney stays the wired primary for these tickers — this table
+# is the keyless backup that kept HSTECH dark on 2026-11-09 when eastmoney
+# push2 was IP-blocked for the whole session.
+TENCENT_HK_INDEX_SYMBOLS = {"HSTECH": "hkHSTECH"}
+
+
 def _us_quote_symbol(ticker: str, market: str) -> str | None:
     """NVDA (market=US) -> 'NVDA' for the Tencent us prefix; None otherwise.
 
@@ -736,10 +745,13 @@ def fetch_tencent_openfund_quote(ticker: str) -> dict[str, Any] | None:
 def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
     hk_code = _hk_quote_code(ticker)
     us_symbol = _us_quote_symbol(ticker, market)
+    hk_index_symbol = TENCENT_HK_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
     if hk_code is not None:
         symbol = f"hk{hk_code}"
     elif us_symbol is not None:
         symbol = f"us{us_symbol}"
+    elif hk_index_symbol is not None:
+        symbol = hk_index_symbol
     else:
         symbol = _cn_quote_symbol(ticker)
     if symbol is None:
@@ -760,8 +772,9 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
             return None
         # Fields (split on ~): 1=name 3=price 4=pre_close 5=open 6=volume(lots)
         # 30=timestamp 31=change 32=change_pct 33=high 34=low
-        # HK responses (hk03800 style) share the same layout but timestamps are
-        # 'YYYY/MM/DD HH:MM:SS' instead of 'YYYYMMDDHHMMSS'.
+        # HK responses (hk03800 style, and hk-prefixed HK indexes like
+        # hkHSTECH — live probe 2026-11-09) share the same layout but
+        # timestamps are 'YYYY/MM/DD HH:MM:SS' instead of 'YYYYMMDDHHMMSS'.
         # US responses (usFCX style, live-verified 2026-11-08 against S&P
         # Global closes for FCX/NEM/RIO/BHP/AEM/AAPL) keep the same indexes:
         # timestamp 'YYYY-MM-DD HH:MM:SS' (ET), volume in SHARES (CN side is
@@ -773,7 +786,7 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
         price = parse_float(fields[3])
         if price is None or price <= 0:
             return None
-        if hk_code is not None or us_symbol is not None:
+        if hk_code is not None or us_symbol is not None or hk_index_symbol is not None:
             trade_date = fields[30][:10].replace("/", "-")
         else:
             trade_date = fields[30][:8]
@@ -796,7 +809,65 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
         return None
 
 
+# Sina covers HK indexes via the rt_hk realtime series (live probe 2026-11-09:
+# rt_hkHSTECH close 4040.730/-0.92% matches eastmoney 124.HSTECH digit-for-digit).
+# Field layout differs from the CN series — see _fetch_sina_hk_index_quote.
+SINA_HK_INDEX_SYMBOLS = {"HSTECH": "rt_hkHSTECH"}
+
+
+def _fetch_sina_hk_index_quote(ticker: str, symbol: str) -> dict[str, Any] | None:
+    """rt_hk series layout (comma-separated): 0=code 1=name 2=open 3=pre_close
+    4=high 5=low 6=price 7=change 8=change_pct 11=volume(shares) 12=amount
+    17=date 'YYYY/MM/DD'. NOTE the open/pre_close order is the REVERSE of the
+    CN series (verified 2026-11-09 on rt_hkHSTECH: pre_close 4078.230 matches
+    the push2his 11-06 close digit-for-digit, open 4119.980 matches Tencent
+    hkHSTECH and the HK-session higher-open narrative). Change is provided
+    natively, unlike the CN series."""
+    try:
+        response = requests.get(
+            f"https://hq.sinajs.cn/list={symbol}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.sina.com.cn"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        if '=""' in content:
+            return None
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        fields = content[data_start + 1 : data_end].split(",")
+        if len(fields) < 18:
+            return None
+        price = parse_float(fields[6])
+        if price is None or price <= 0:
+            return None
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": parse_float(fields[7]),
+            "changesPercentage": parse_float(fields[8]),
+            "previousClose": parse_float(fields[3]),
+            "open": parse_float(fields[2]),
+            "dayHigh": parse_float(fields[4]),
+            "dayLow": parse_float(fields[5]),
+            # HK index volume is reported in shares; no /100 lot conversion
+            # (HKEX convention — see the 03800.HK caliber note).
+            "volume": parse_float(fields[11]),
+            "tradeDate": fields[17].replace("/", "-"),
+            "source": "sina",
+        }
+    except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "sina", str(exc))
+        log(f"Warning: Sina HK-index fallback failed for {ticker}: {exc}")
+        return None
+
+
 def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    hk_index_symbol = SINA_HK_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if hk_index_symbol is not None:
+        return _fetch_sina_hk_index_quote(ticker, hk_index_symbol)
     symbol = _cn_quote_symbol(ticker)
     if symbol is None:
         return None

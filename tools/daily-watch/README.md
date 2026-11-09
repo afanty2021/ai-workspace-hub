@@ -275,8 +275,8 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | Finnhub | 美股 | 免费账户 / 付费 | 可选 fallback | `FINNHUB_API_KEY` |
 | EODHD | 港股、韩国、芬兰等最近 EOD | 免费 20 次/日 / 付费 | 可选 fallback；不是实时价 | `EOD_API_KEY` |
 | 东方财富 | A 股 + ETF（.SH/.SZ）；港股个股（116 段） | 无 Key | 自动 fallback（mootdx/tushare 未返回时） | 无 |
-| 腾讯 | A 股 + ETF（.SH/.SZ）；港股个股（hk 前缀）；美股个股（us 前缀，nasdaq 后的 keyless 备份）；场外基金净值（jj 前缀，`.OF` 在 tushare-fund 之后） | 无 Key | 自动 fallback（东财之后） | 无 |
-| 新浪 | A 股 + ETF（.SH/.SZ） | 无 Key | 自动 fallback（腾讯之后） | 无 |
+| 腾讯 | A 股 + ETF（.SH/.SZ）；港股个股（hk 前缀）；港股指数（`hkHSTECH`，HSTECH 在东财 124 断连后的 keyless 备份，2026-11-09）；美股个股（us 前缀，nasdaq 后的 keyless 备份）；场外基金净值（jj 前缀，`.OF` 在 tushare-fund 之后） | 无 Key | 自动 fallback（东财之后） | 无 |
+| 新浪 | A 股 + ETF（.SH/.SZ）；港股指数（`rt_hkHSTECH`，HSTECH 第三备份；注意 rt_hk 布局 open/昨收字段序与 A 股系列相反，2026-11-09 实测） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
 | FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 降级备用（主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |
 | 东财环球 | 韩股（000660.KS → 177.000660）、LME 伦铜（HG=F → 109.LCPT）、纳指/费半备源（100.NDX / 251.SOX）、恒生科技（HSTECH → 124.HSTECH，2026-11-09 接线） | 无 Key | 自动 fallback（映射制；反爬间歇断连时落到新浪环球 / yfinance） | 无 |
