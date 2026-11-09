@@ -54,6 +54,13 @@ def _make_tree(root: Path) -> None:
         '{"date": "2026-10-21", "period": "2026-10", "value": 275.0, "unit": "亿美元", "source": "s"}\n',
         encoding="utf-8")
     (root / "custom" / "registry.json").write_text("{}", encoding="utf-8")  # 非 jsonl，不该进视图
+    # 流动性仪表 fixture：^TNX 5 行（close 101..105），其余 6 个仪表票缺文件
+    (root / "market" / "series" / "^TNX.jsonl").write_text(
+        "".join(
+            f'{{"date": "2026-10-{d:02d}", "open": {c}, "high": {c}, "low": {c}, '
+            f'"close": {c}, "volume": 0.0, "amount": 0.0, "source": "eastmoney-global"}}\n'
+            for d, c in zip([27, 28, 29, 30, 31], [101.0, 102.0, 103.0, 104.0, 105.0])),
+        encoding="utf-8")
 
 
 @unittest.skipUnless(HAS_DUCKDB, "duckdb 未安装")
@@ -147,8 +154,53 @@ class QueryTests(unittest.TestCase):
         market_file = self.root / "market" / "series" / "600276.SH.jsonl"
         market_file.write_text(market_file.read_text(encoding="utf-8") + '{"date": "2026-11-05", "clo',
                                encoding="utf-8")
-        rows = self.qm.query_range(self.con, self.root, "600276.SH", "2026-11-01", "2026-12-31")
+        rows = self.qm.query_range(self.con, self.root, "600276.SH", "2026-11-01", "2026-11-12")
         self.assertEqual([r["date"] for r in rows], ["2026-11-03", "2026-11-04"])  # 半行被跳过
+
+    def test_liquidity_snapshot_windows_and_missing(self) -> None:
+        # Q-20261109-03：有数据的票算滚动涨跌（行数不足窗口→None），缺文件的票 n=0 不炸
+        snaps = self.qm.liquidity_snapshot(self.con, self.root)
+        by_ticker = {s["ticker"]: s for s in snaps}
+        tnx = by_ticker["^TNX"]
+        self.assertEqual(tnx["n"], 5)
+        self.assertEqual(tnx["close"], 105.0)
+        self.assertEqual(tnx["as_of"], "2026-10-31")
+        self.assertAlmostEqual(tnx["pct_1d"], 0.96)          # (105-104)/104
+        self.assertIsNone(tnx["pct_5d"])                      # len>5 不满足
+        self.assertIsNone(tnx["pct_20d"])
+        sox = by_ticker["^SOX"]                                # fixture 未造：缺文件
+        self.assertEqual(sox["n"], 0)
+        self.assertIsNone(sox["close"])
+        self.assertIsNone(sox["pct_1d"])
+        self.assertEqual(len(snaps), len(self.qm.LIQUIDITY_TICKERS))  # 全清单都出，不静默丢票
+
+    def test_liquidity_zero_base_window_is_none(self) -> None:
+        # 零基防御（评审 Q-20261109-03/04 M-3）：6 行且 closes[-6]=0.0 精确落在
+        # 5d 基点位 → pct_5d None 而非 ZeroDivisionError；1d 正常窗口对照不受累。
+        (self.root / "market" / "series" / "^TNX.jsonl").write_text(
+            "".join(
+                f'{{"date": "2026-10-{d:02d}", "close": {c}, "source": "eastmoney-global"}}\n'
+                for d, c in zip([26, 27, 28, 29, 30, 31],
+                                [0.0, 100.0, 101.0, 102.0, 103.0, 104.0])),
+            encoding="utf-8")
+        snaps = self.qm.liquidity_snapshot(self.con, self.root)
+        tnx = [s for s in snaps if s["ticker"] == "^TNX"][0]
+        self.assertEqual(tnx["n"], 6)
+        self.assertAlmostEqual(tnx["pct_1d"], 0.97)   # (104-103)/103
+        self.assertIsNone(tnx["pct_5d"])              # 基点 0.0 → None 不炸
+
+    def test_liquidity_md_output(self) -> None:
+        # --md：markdown 表输出（monitoring 仪表直接贴）
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), \
+                patch("market_data_io.resolve_data_root", return_value=self.root):
+            rc = self.qm.main(["liquidity", "--md"])
+        self.assertEqual(rc, 0)
+        text = stdout.getvalue()
+        self.assertIn("| Ticker | 名称 | 最新 | as_of | n | 1d% | 5d% | 20d% | 60d% |", text)
+        self.assertIn("^TNX", text)
+        self.assertIn("+0.96", text)
+        self.assertIn("—", text)                               # 缺窗口用长破折号占位
 
 
 if __name__ == "__main__":

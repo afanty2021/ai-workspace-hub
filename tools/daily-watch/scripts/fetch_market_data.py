@@ -1033,6 +1033,7 @@ EASTMONEY_GLOBAL_SYMBOLS = {
     "^IXIC": "100.NDX",         # eastmoney's NDX is the composite, not NASDAQ-100
     "^TNX": "171.US10Y",        # 美国10年期国债收益率，实时（FRED 是 T+1 官方序列，降级备用）
     "NQ00Y": "103.NQ00Y",       # 小型纳指当月连续（CME E-mini Nasdaq 100 期货），实时
+    "HSTECH": "124.HSTECH",     # 恒生科技指数（124=东财港股指数段；2026-11-09 实测 11-06 收 4078.23 与 R20261108-13 对拍一致）
 }
 
 

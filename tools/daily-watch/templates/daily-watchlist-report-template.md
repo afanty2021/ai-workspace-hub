@@ -6,6 +6,12 @@
 
 {MARKET_OVERVIEW_TABLE}
 
+### 跨资产例行扫描
+
+{CROSS_ASSET_TABLE}
+
+{CROSS_ASSET_NOTE}
+
 市场情绪：{MARKET_SUMMARY}
 
 ## 个股异动

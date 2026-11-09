@@ -209,6 +209,14 @@ def render_market_overview(
     else:
         summary = "宏观模块已关闭"
 
+    # Q-20261109-03：FMP 未配置/失败时不再渲染 6 行全 N/A 死表——提示行指向跨资产例行扫描
+    has_any_price = any(
+        (macro_data.get("macro") or {}).get(sym, {}).get("price") is not None
+        for sym in ("VIX", "SPY", "QQQ", "GLD", "CLUSD", "BTC")
+    )
+    if not (enabled and has_any_price):
+        return "> FMP 宏观模块未配置或本轮无数据（VIX/SPY 等），跨资产状态见下「跨资产例行扫描」。", summary
+
     rows = [
         "| 指标 | 数值 | 涨跌幅 | 状态 |",
         "|------|------|--------|------|",
@@ -246,29 +254,36 @@ def render_market_overview(
     return "\n".join(rows), summary
 
 
-def render_key_movers(movers: list[dict[str, Any]]) -> str:
+def render_key_movers(
+    movers: list[dict[str, Any]], rolling: dict[str, dict[str, str]] | None = None
+) -> str:
+    rolling = rolling or {}
     rows = [
-        "| 代码 | 名称 | 涨跌幅 | 分类 | 摘要 |",
-        "|------|------|--------|------|------|",
+        "| 代码 | 名称 | 涨跌幅 | 5d | 20d | 分类 | 摘要 |",
+        "|------|------|--------|----|-----|------|------|",
     ]
     if movers:
         for mover in movers[:10]:
             change = format_pct(mover["changesPercentage"])
+            cells = rolling.get(mover["ticker"]) or {}
             rows.append(
                 f"| {mover['ticker']} | {mover['name']} | {change} | "
+                f"{cells.get('5d', '—')} | {cells.get('20d', '—')} | "
                 f"{mover['category']} | 用 WebSearch 补充新闻与原因分析 |"
             )
     else:
-        rows.append("| 暂无 | 当前没有股票超过异动阈值 | N/A | N/A | 无需补充 |")
+        rows.append("| 暂无 | 当前没有股票超过异动阈值 | N/A | — | — | N/A | 无需补充 |")
     return "\n".join(rows)
 
 
 def render_other_movers(
-    quotes: list[dict[str, Any]], movers: list[dict[str, Any]] | None = None
+    quotes: list[dict[str, Any]], movers: list[dict[str, Any]] | None = None,
+    rolling: dict[str, dict[str, str]] | None = None,
 ) -> str:
+    rolling = rolling or {}
     rows = [
-        "| 代码 | 名称 | 涨跌幅 |",
-        "|------|------|--------|",
+        "| 代码 | 名称 | 涨跌幅 | 5d | 20d |",
+        "|------|------|--------|----|-----|",
     ]
     mover_tickers = {item["ticker"] for item in (movers or []) if "ticker" in item}
     other_movers = sorted(
@@ -284,11 +299,96 @@ def render_other_movers(
     if other_movers:
         for mover in other_movers:
             change = format_pct(mover["changesPercentage"])
+            cells = rolling.get(mover["ticker"]) or {}
             rows.append(
-                f"| {mover['ticker']} | {mover['name']} | {change} |"
+                f"| {mover['ticker']} | {mover['name']} | {change} | "
+                f"{cells.get('5d', '—')} | {cells.get('20d', '—')} |"
             )
     else:
-        rows.append("| 暂无 | 当前没有可展示的其他异动 | N/A |")
+        rows.append("| 暂无 | 当前没有可展示的其他异动 | N/A | — | — |")
+    return "\n".join(rows)
+
+
+# 跨资产例行扫描（Q-20261109-03 德鲁肯米勒借鉴①）：固定顺序对齐 watchlist「海外与
+# 宏观」段与 query_market.LIQUIDITY_TICKERS；quotes 缺的票跳过（抓取失败不造行）。
+# 5d/20d 滚动窗口近似「日线看 8-20 天、周线看 8-20 周」三框，只作观察列不作信号。
+CROSS_ASSET_ORDER = ["^IXIC", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HSTECH"]
+
+_CROSS_ASSET_MARKETS = {"INDEX", "FX", "CMDTY", "FUT"}
+
+CROSS_ASSET_NOTE = (
+    "> 口径：日涨跌=抓取时点行情（北京时间下午抓取时美股/商品对应 ET 前一交易日或盘中，"
+    "与官方收盘日可能偏移一天）；5d/20d=本地 series 滚动累计（跨资产票 2026-11-03 起积累中，"
+    "「—」=样本不足）；^TNX/美元指数等口径注记见信息来源段。宏观敏感票裁决前读"
+    " `workspace/monitoring/liquidity-dashboard.md`（流动性状态仪表）。"
+)
+
+
+def _rolling_cell(closes: list[float], window: int) -> str:
+    base = closes[-1 - window] if len(closes) > window else None
+    if base is None or base == 0:
+        return "—"
+    return f"{(closes[-1] - base) / base * 100:+.2f}"
+
+
+def load_rolling_stats(
+    tickers: list[str], data_root: Path | None = None
+) -> dict[str, dict[str, str]]:
+    """从 data/market/series/{ticker}.jsonl 读收盘序列算 5d/20d 滚动涨跌（本地零网络）。
+
+    文件缺失/行数不足/torn 行 → 对应窗口 "—"（积累中），不炸不编数。"""
+    from market_data_io import resolve_data_root
+
+    series_dir = (data_root or resolve_data_root()) / "market" / "series"
+    out: dict[str, dict[str, str]] = {}
+    for ticker in tickers:
+        closes: list[float] = []
+        path = series_dir / f"{ticker}.jsonl"
+        try:
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # torn 行静默跳过（有意宽于 M11：本列仅显示用途，
+                                  # 中段坏行也不能炸日报；权威读写走 read_series_rows
+                                  # /upsert_series_rows，M11 尾容忍+中段必炸不变）
+                    if row.get("close") is not None:
+                        closes.append(float(row["close"]))
+        except OSError:
+            closes = []
+        out[ticker] = {"5d": _rolling_cell(closes, 5), "20d": _rolling_cell(closes, 20)}
+    return out
+
+
+def render_cross_asset_table(
+    quotes: list[dict[str, Any]], rolling: dict[str, dict[str, str]] | None = None
+) -> str:
+    rolling = rolling or {}
+    by_ticker = {
+        q["ticker"]: q for q in quotes if q.get("market") in _CROSS_ASSET_MARKETS
+    }
+    if not by_ticker:
+        return (
+            "> 跨资产行情未取得（海外与宏观段本轮抓取失败），"
+            "可用 `query_market.py liquidity` 查本地 series 状态。"
+        )
+    rows = [
+        "| 代码 | 名称 | 最新 | 日涨跌 | 5d | 20d |",
+        "|------|------|------|--------|----|----|",
+    ]
+    for ticker in CROSS_ASSET_ORDER:
+        q = by_ticker.get(ticker)
+        if not q:
+            continue
+        cells = rolling.get(ticker) or {}
+        rows.append(
+            f"| {ticker} | {q.get('name', '')} | {format_num(q.get('price'))} | "
+            f"{format_pct(q.get('changesPercentage'))} | "
+            f"{cells.get('5d', '—')} | {cells.get('20d', '—')} |"
+        )
     return "\n".join(rows)
 
 
@@ -1048,6 +1148,7 @@ def build_report(
     quotes = market_data.get("quotes") or []
     movers = market_data.get("movers") or []
     earnings = market_data.get("earnings") or []
+    rolling = load_rolling_stats([q["ticker"] for q in quotes if q.get("ticker")])
     market_table, market_summary = render_market_overview(macro_data, modules["macro"])
     earnings_reported, earnings_upcoming = render_earnings_sections(
         earnings, modules["earnings"], (market_data.get("meta") or {}).get("earnings", {"state": "unknown"})
@@ -1060,9 +1161,11 @@ def build_report(
             "Claude Code 在运行 `/dw-today` 时通过 WebSearch 补充。"
         ),
         MARKET_OVERVIEW_TABLE=market_table,
+        CROSS_ASSET_TABLE=render_cross_asset_table(quotes, rolling),
+        CROSS_ASSET_NOTE=CROSS_ASSET_NOTE,
         MARKET_SUMMARY=market_summary,
-        KEY_MOVERS_TABLE=(render_key_movers(movers) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
-        OTHER_MOVERS_TABLE=render_other_movers(quotes, movers),
+        KEY_MOVERS_TABLE=(render_key_movers(movers, rolling) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
+        OTHER_MOVERS_TABLE=render_other_movers(quotes, movers, rolling),
         EARNINGS_REPORTED_TABLE=earnings_reported,
         EARNINGS_UPCOMING_TABLE=earnings_upcoming,
         THEMES_SECTION=render_themes(config, modules["focus_areas"]),

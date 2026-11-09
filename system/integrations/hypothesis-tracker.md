@@ -55,7 +55,11 @@ my-ai-workspace/
 
 ## 巡检流程
 
-巡检 = 按假设 frontmatter 的 `next_review_at`（到期）与温度计设定（触线）对检查点逐项判定：
+巡检由三个通道触发，对检查点逐项判定：
+
+- **到期通道**：假设 frontmatter 的 `next_review_at` 到期。
+- **温度计通道**：温度计设定触线。
+- **背离通道**（Q-20261109-03）：主映射标的价格与假设方向持续相反（≥10 个交易日且累计幅度 >10%）→ 巡检记录追加 `warn` 行并提示**提前 next_review**（走 `hypothesis-review.md` 确认后执行）。价格背离是检验触发器，不是基本面证据本身——与「不把股价涨跌本身等同于基本面证据」边界一致。
 
 - 判定行用 `system/integrations/object-model.md`「巡检判定词表」的 verdict（`normal / warn / trigger / missing`）与行文法，逐条**追加**到假设正文「巡检记录」区，不改写旧行。
 - 每个检查点要么有读数，要么是一条带 `reason` 和**可执行补数命令**的 `missing` 行，不允许沉默缺失。

@@ -36,6 +36,22 @@ _VIEW_PATTERNS = {
     "custom_series": "custom/*.jsonl",  # registry.json 不是 .jsonl，天然排除
 }
 
+# 跨资产流动性仪表票清单（Q-20261109-03 德鲁肯米勒借鉴③）：与 config「海外与宏观」段
+# 对齐（NVDA/000660.KS 个股不入仪表）；口径注记见 generate_daily_report.py
+# SOURCE_CALIBER_NOTES。滚动窗口 5/20/60 近似「日线看 8-20 天、周线看 8-20 周」三框。
+LIQUIDITY_TICKERS: list[tuple[str, str]] = [
+    ("^IXIC", "纳斯达克指数"),
+    ("^SOX", "费城半导体"),
+    ("^TNX", "美十债收益率"),
+    ("NQ00Y", "小型纳指连续"),
+    ("DX-Y.NYB", "美元指数"),
+    ("XAUUSD=X", "伦敦金"),
+    ("HG=F", "伦铜"),
+    ("HSTECH", "恒生科技指数"),
+]
+
+_LIQUIDITY_WINDOWS = (1, 5, 20, 60)
+
 
 def ensure_view(con, data_root: Path, view: str) -> None:
     """按需建视图（I1）：目录还没有数据文件就 raise RuntimeError——DuckDB 对空 glob
@@ -136,6 +152,49 @@ def run_sql(con, sql: str) -> list[dict[str, Any]]:
     return _rows(con, sql)
 
 
+def liquidity_snapshot(con, data_root: Path,
+                       windows: tuple[int, ...] = _LIQUIDITY_WINDOWS) -> list[dict[str, Any]]:
+    """跨资产流动性快照：每票最新值 + 各窗口滚动涨跌（%），行数不足的窗口置 None。
+
+    纯本地读 market/series/（零网络）；跨资产票由日报持久化钩子逐日累积，历史深度
+    不足属预期（「积累中」，Q-20261109-03）。缺文件的票给 n=0 行不炸——仪表宁缺
+    勿假。"""
+    ensure_view(con, data_root, "market_quotes")
+    out: list[dict[str, Any]] = []
+    for ticker, name in LIQUIDITY_TICKERS:
+        rows = _rows(
+            con,
+            "SELECT date, close FROM market_quotes WHERE filename LIKE ? "
+            "AND close IS NOT NULL ORDER BY date",
+            (f"%{ticker}.jsonl",))
+        closes = [r["close"] for r in rows]
+        snap: dict[str, Any] = {
+            "ticker": ticker, "name": name, "n": len(closes),
+            "as_of": rows[-1]["date"] if rows else None,
+            "close": closes[-1] if closes else None,
+        }
+        for w in windows:
+            base = closes[-1 - w] if len(closes) > w else None
+            snap[f"pct_{w}d"] = (
+                round((closes[-1] - base) / base * 100, 2)
+                if base not in (None, 0) else None)
+        out.append(snap)
+    return out
+
+
+def _print_liquidity_md(snapshots: list[dict[str, Any]]) -> None:
+    hdr = ["Ticker", "名称", "最新", "as_of", "n"] + [f"{w}d%" for w in _LIQUIDITY_WINDOWS]
+    print("| " + " | ".join(hdr) + " |")
+    print("|" + "---|" * len(hdr))
+    for s in snapshots:
+        cells = [s["ticker"], s["name"],
+                 f"{s['close']}" if s["close"] is not None else "N/A",
+                 s["as_of"] or "-", str(s["n"])]
+        cells += [f"{s[f'pct_{w}d']:+.2f}" if s.get(f"pct_{w}d") is not None else "—"
+                  for w in _LIQUIDITY_WINDOWS]
+        print("| " + " | ".join(cells) + " |")
+
+
 def main(argv: list[str] | None = None) -> int:
     from market_data_io import resolve_data_root
     from save_custom_data import show_series
@@ -153,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     p_finance.add_argument("--last", type=int, default=4)
     p_sector = sub.add_parser("sector")
     p_sector.add_argument("--top", type=int, default=20)
+    p_liq = sub.add_parser("liquidity", help="跨资产流动性快照（本地 series 滚动涨跌）")
+    p_liq.add_argument("--md", action="store_true", help="输出 markdown 表（贴 monitoring 仪表用）")
     p_custom = sub.add_parser("custom")
     p_custom.add_argument("--series", required=True)
     p_custom.add_argument("--tail", type=int)
@@ -185,6 +246,11 @@ def main(argv: list[str] | None = None) -> int:
         out = query_finance(con, data_root, args.ticker, args.last)
     elif args.command == "sector":
         out = sector_top(con, data_root, args.top)
+    elif args.command == "liquidity":
+        out = liquidity_snapshot(con, data_root)
+        if args.md:
+            _print_liquidity_md(out)
+            return 0
     else:  # sql：能建的视图都建，缺组只警告（用户 SQL 没用到就能跑）
         for view in _VIEW_PATTERNS:
             try:

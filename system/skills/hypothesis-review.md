@@ -12,7 +12,7 @@
 2. 只列新增证据，并标为：`强化 / 削弱 / 中性 / 待确认`；先按 `dedup_key` 去重。
 3. 检查数据时间、原始来源以及是否真正对应跟踪指标，避免重复计算同一事件。
 4. 给出建议状态：`维持 / 上调 / 下调 / 暂停 / 推翻 / 已兑现`，说明理由。
-5. 建议修改先进入 `workspace/review-queue.md`。只有用户确认后，才修改假设 frontmatter 的确定性、状态和 `last_reviewed_at`，并把证据 `review_status` 更新为 `confirmed` 或 `rejected`。
+5. 建议修改先进入 `workspace/review-queue.md`。只有用户确认后，才修改假设 frontmatter 的确定性、状态、`last_reviewed_at` 与 `next_review_at`（提前/顺延均需确认；背离通道触发的提前复盘同此，Q-20261109-03），并把证据 `review_status` 更新为 `confirmed` 或 `rejected`。
 6. 结论稳定后，沉淀或更新 `wiki/explorations/`，并完成对应队列项。
 
 ## 复盘弃权规则
