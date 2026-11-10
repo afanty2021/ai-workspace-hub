@@ -10,7 +10,7 @@
   后信号——对靶 R20261110-01 可交易性口径）；
   参考读数 = alpha_5（研究已证 5 日腿弱化，预期接近 0 或负——若 5 日腿显著为正
   反而要警惕口径漂移）；
-  对照期望 = 事件级毛 +2.0%/20 日（OOS +2.47%@adx67 切点口径）；
+  对照期望 = 事件级毛 +2.0%/20 日（OOS +2.59%@adx67 切点口径，评审重算）；
   判定规则 = 积累 ≥3 个月、非重叠事件 ≥300 后读 pooled alpha_20：≥+1% 观察清单
   维持、[0,+1%) 降密度观察、<0 纳入失效候选（连弱 2 个月撤线）。
   单月/小样本只报读数不判定——20 日持有窗意味着首组成熟信号在启动后 1 个月才出现。
@@ -31,7 +31,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from weak_scan import CACHE, LEDGER, MIN_AMT, MIN_BARS, MIN_PRICE, STOCK_RE, load_rows  # noqa: E402
+from weak_scan import CACHE, LEDGER, MIN_AMT, MIN_BARS, MIN_PRICE, load_rows, stock_files  # noqa: E402
 
 
 def load_ledger() -> list[dict]:
@@ -66,7 +66,10 @@ def main(argv: list[str] | None = None) -> int:
     # 信号事件的前瞻：{(date,sym): {h: fwd}}
     fwd = {k: {} for k in sig_rows}
 
-    files = sorted(p for p in CACHE.glob("*.jsonl") if STOCK_RE.match(p.name))
+    files = stock_files(CACHE)   # 复查 I-A 修根：原 p.name 带 .jsonl 后缀恒不匹配 → 评估器静默空转
+    if not files:
+        print("[abort] 缓存白名单命中 0 个文件（CACHE 配置或过滤有误）——拒绝静默空评估")
+        return 1
     for path in files:
         try:
             rows = load_rows(path)

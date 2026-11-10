@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -31,6 +32,9 @@ from jinniu import icon_signals  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 CACHE = REPO / "data" / "wyckoff" / "daily"
+# 复查 I-B 修根：宇宙白名单（与 stage-bottom UNIVERSE_RE 同口径——缓存混有 16 段 LOF
+# 344 只、52 段基金 4 只、跨资产序列 10 只、881.TDX 板块指数 2 只，原裸 glob 全部落入个股臂）
+UNIVERSE_RE = re.compile(r"^(?:(?:60|68|51|56|58)\d{4}\.SH|(?:00|30|15)\d{4}\.SZ)$")
 WARMUP = 60          # 每票前 N 根不取信号（次新/数据头）
 GAP_DAYS = 10        # 日线停牌跳空阈值（日历日）
 GAP_WEEKS = 21       # 周线停牌跳空阈值（日历日）
@@ -62,6 +66,11 @@ def _days_from_civil(y, m, d):
     doy = (153 * np.where(m > 2, m - 3, m + 9) + 2) // 5 + d - 1
     doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
     return era * 146097 + doe - 719468
+
+
+def _ymd_days(d):
+    """YYYYMMDD int → 天数标量封装（复查 I-B：年化一律历法日 /365.25，YYYYMMDD 差不是天数）。"""
+    return int(_days_from_civil(d // 10000, d // 100 % 100, d % 100))
 
 
 def resample_weekly(di, o, c):
@@ -155,7 +164,7 @@ def main(argv=None) -> int:
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    files = sorted(CACHE.glob("*.jsonl"))
+    files = sorted(p for p in CACHE.glob("*.jsonl") if UNIVERSE_RE.match(p.stem))  # 复查 I-B：宇宙白名单
     if args.symbols:
         want = {s.strip() for s in args.symbols.split(",") if s.strip()}
         files = [p for p in files if p.stem in want]
@@ -203,7 +212,7 @@ def main(argv=None) -> int:
         for a, b in spans:
             if o[a] > 0:
                 trades.append(o[b] / o[a] - 1.0)
-        yrs = max((di[-1] - di[spans[0][0]]) / 10000.0, 1e-9) if spans else 0
+        yrs = max((_ymd_days(int(di[-1])) - _ymd_days(int(di[spans[0][0]]))) / 365.25, 1e-9) if spans else 0
         gross = float(np.prod([1 + t for t in trades])) if trades else 1.0
         net = float(np.prod([(1 + t) * (1 - COST_BUY) * (1 - COST_SELL) for t in trades])) if trades else 1.0
         bh = float(o[-1] / o[spans[0][0]]) if spans else None
@@ -303,7 +312,7 @@ def main(argv=None) -> int:
         hold = np.array([r[f"{freq}_hold"] for r in rs])
         win = np.array([r[f"{freq}_win"] for r in rs if r.get(f"{freq}_win") is not None])
         # 年化（跨度用各自数据长度）
-        yrs = np.array([max((r["end"] - r["start"]) / 10000.0, 0.5) for r in rs])
+        yrs = np.array([max((_ymd_days(r["end"]) - _ymd_days(r["start"])) / 365.25, 0.5) for r in rs])  # 复查 I-B 修根
         cagr_s = np.sign(n_) * np.abs(n_) ** (1 / yrs) - 1
         cagr_b = np.sign(b) * np.abs(b) ** (1 / yrs) - 1
         lab = "日线" if freq == "d" else "周线"

@@ -1,7 +1,7 @@
 """gate70 弱票反转观察清单——全市场日扫 + 日报接入（R20261110-07 产品化）。
 
-上游验证链：R20261110-01 事件级（gate70=CROSS(RSI5,20)∧ADX>70 严格 OOS lift ×2.1、
-+2.47%/20 日 t=28.1、OOS 费后个股 +5.92pp/yr vs 单票 BH）；R20261110-02 组合级
+上游验证链：R20261110-01 事件级（gate70=CROSS(RSI5,20)∧ADX>70 严格 OOS lift ×2.0、
++2.59%/20 日 t=28.3、OOS 费后个股 +5.98pp/yr vs 单票 BH，2026-11-10 评审重算口径）；R20261110-02 组合级
 （不可集中收割——正确载体=分散/观察）。**本脚本的岗位=筛选器：信号找票、研究定夺，
 不是买入指令**；单票 20 日持有的事件级期望 ≈ +2%，分布右偏胜率 ~54%，且池依赖性
 已证（强势自选池/ETF 不迁移）。
@@ -62,6 +62,15 @@ def load_rows(path: Path) -> list[dict]:
             if line:
                 rows.append(json.loads(line))
     return rows
+
+
+def stock_files(cache: Path) -> list[Path]:
+    """缓存个股白名单文件列表（复查 I-A 修根：p.stem 过滤单一事实源）。
+
+    必须对 p.stem 匹配——p.name 带 .jsonl 后缀，STOCK_RE 的 $ 锚恒不匹配
+    （weak_eval 首版即栽此坑致评估器静默空转，同坑第二次，测试已锁）。
+    """
+    return sorted(p for p in cache.glob("*.jsonl") if STOCK_RE.match(p.stem))
 
 
 def _df_to_rows(df) -> list[dict]:
@@ -179,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     today_iso = date.today().isoformat()
 
-    files = sorted(p for p in CACHE.glob("*.jsonl") if STOCK_RE.match(p.stem))
+    files = stock_files(CACHE)
     probe_path = CACHE / f"{args.probe}.jsonl"
 
     if not args.no_update:

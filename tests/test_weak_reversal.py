@@ -11,8 +11,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "stage-bottom"))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "daily-watch" / "scripts"))
 
-from weak_scan import scan_one  # noqa: E402
+from weak_scan import scan_one, stock_files  # noqa: E402
 from generate_daily_report import render_weak_reversal_section  # noqa: E402
+
+
+def test_stock_files_stem_filter(tmp_path):
+    """复查 I-A 回归锁：白名单过滤必须对 p.stem——p.name 带 .jsonl 后缀恒不匹配
+    （weak_eval 首版栽坑致评估器静默空转，同坑第二次）。"""
+    for name in ("600276.SH.jsonl", "163001.SZ.jsonl", "881075.TDX.jsonl", "notes.txt"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    assert [p.name for p in stock_files(tmp_path)] == ["600276.SH.jsonl"]
 
 
 def _rows_from_closes(closes, today_iso, seed=11):
