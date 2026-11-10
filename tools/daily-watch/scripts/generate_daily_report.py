@@ -468,6 +468,21 @@ def render_earnings_sections(
     return "\n".join(reported_rows), "\n".join(upcoming_rows)
 
 
+def render_weak_reversal_section(workspace_root: Path, today_iso: str) -> str:
+    """弱票反转观察节（R20261110-07）：读当日 gate70 扫描产物，缺失时降级一行。
+
+    产物由 tools/stage-bottom/weak_scan.py 在收盘后生成（cron 16:10）；
+    非交易日/扫描未运行时本节退化为占位说明，不阻塞报告生成。
+    """
+    artifact = (workspace_root / "output" / "screen" / "weak-reversal"
+                / f"{today_iso}.md")
+    if artifact.exists():
+        return artifact.read_text(encoding="utf-8").strip()
+    return ("- 今日无扫描产物（非交易日、扫描未运行或数据源降级）。"
+            "清单与台账见 output/screen/weak-reversal/，岗位=观察清单非买入指令"
+            "（R20261110-07）。")
+
+
 def render_themes(config: dict[str, Any], enabled: bool) -> str:
     if not enabled:
         return "### 模块关闭\n\n- `focus_areas` 模块已关闭。"
@@ -1171,6 +1186,8 @@ def build_report(
         EARNINGS_REPORTED_TABLE=earnings_reported,
         EARNINGS_UPCOMING_TABLE=earnings_upcoming,
         THEMES_SECTION=render_themes(config, modules["focus_areas"]),
+        WEAK_REVERSAL_SECTION=render_weak_reversal_section(
+            workspace_root, today.isoformat()),
         HYPOTHESIS_SECTION=build_hypothesis_section(hypotheses, signals, config),
         SOURCES_SECTION=render_sources(modules) + "\n\n" + render_data_coverage(market_data, macro_data, modules),
     )

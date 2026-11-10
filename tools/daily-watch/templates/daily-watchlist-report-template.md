@@ -34,6 +34,10 @@
 
 {EARNINGS_UPCOMING_TABLE}
 
+## 弱票反转观察（gate70 筛选器）
+
+{WEAK_REVERSAL_SECTION}
+
 ## 重点主题
 
 {THEMES_SECTION}
