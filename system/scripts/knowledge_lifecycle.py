@@ -100,6 +100,23 @@ def relative(path: Path, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
 
+_FALLBACK_WARNING_SHOWN = False
+
+
+def _warn_fallback_parser_once() -> None:
+    global _FALLBACK_WARNING_SHOWN
+    if _FALLBACK_WARNING_SHOWN:
+        return
+    _FALLBACK_WARNING_SHOWN = True
+    print(
+        "[knowledge_lifecycle] PyYAML 不可用，启用降级 frontmatter 解析器"
+        "（列表与折行标量已覆盖，嵌套字段不支持）——"
+        "降级模式下 rebuild-index 结果可能不完整，"
+        "建议在装有 PyYAML 的环境运行（如 conda run -n Quant-3.11）",
+        file=sys.stderr,
+    )
+
+
 def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
     try:
         content = path.read_text(encoding="utf-8-sig")
@@ -118,8 +135,10 @@ def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
             return {}, content, "frontmatter is not a mapping"
         return payload, content, None
 
+    _warn_fallback_parser_once()
     values: dict[str, Any] = {}
     current_key: str | None = None
+    fold_key: str | None = None
     for line in raw.splitlines():
         field = re.match(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$", line)
         if field:
@@ -132,14 +151,27 @@ def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
                     for item in value[1:-1].split(",")
                     if item.strip()
                 ]
+                fold_key = None
+            elif value:
+                values[key] = value
+                fold_key = key
             else:
-                values[key] = value or None
+                values[key] = None
+                fold_key = None
             continue
         item = re.match(r"^\s*-\s+(.+?)\s*$", line)
         if item and current_key:
-            values.setdefault(current_key, [])
-            if isinstance(values[current_key], list):
-                values[current_key].append(item.group(1).strip('"\''))
+            # 空 key 的占位 None 会挡住 setdefault，先归一再 append，
+            # 否则「key: + - item」形式的列表字段会整体静默丢失。
+            if values.get(current_key) is None:
+                values[current_key] = []
+            values[current_key].append(item.group(1).strip('"\''))
+            continue
+        continuation = line.strip()
+        if continuation and fold_key and line[:1].isspace():
+            # 折行标量续行：PyYAML 把单换行折叠为空格，这里按同语义拼接，
+            # 防止多行 summary 等折行内容被静默丢弃。
+            values[fold_key] = f"{values[fold_key]} {continuation}"
     return values, content, None
 
 

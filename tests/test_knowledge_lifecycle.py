@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from _test_paths import REPO_ROOT
 
@@ -337,6 +338,99 @@ invalidation_signals: [反例]
         self.assertEqual(
             KNOWLEDGE.transition_errors(independently_confirmed, "active"), []
         )
+
+    FALLBACK_FRONTMATTER = """
+id: EXP-20261111-09
+type: exploration
+title: 降级解析器夹具
+status: tentative
+summary: 折行第一段
+  折行第二段会被 fold 成一行
+review_due: 2099-01-01
+based_on:
+- R1
+- R2
+recall_signals:
+- 链内原型分布
+- 商品冲击
+tags: [估值, 产业链]
+entity_salience:
+  603993.SH: core
+related_note: 嵌套段后的标量字段
+"""
+
+    def test_fallback_parser_keeps_list_fields_and_folded_scalars(self) -> None:
+        path = page(
+            self.root,
+            "exploration",
+            "fallback.md",
+            self.FALLBACK_FRONTMATTER,
+        )
+        with mock.patch.object(KNOWLEDGE, "yaml", None):
+            meta, _, error = KNOWLEDGE.read_page(path)
+        self.assertIsNone(error)
+        self.assertEqual(meta["based_on"], ["R1", "R2"])
+        self.assertEqual(meta["recall_signals"], ["链内原型分布", "商品冲击"])
+        self.assertEqual(meta["tags"], ["估值", "产业链"])
+        self.assertEqual(
+            meta["summary"], "折行第一段 折行第二段会被 fold 成一行"
+        )
+        # 嵌套字段不支持（返回 None），但嵌套段不得吞掉后续字段。
+        self.assertIsNone(meta.get("entity_salience"))
+        self.assertEqual(meta["related_note"], "嵌套段后的标量字段")
+
+    def test_fallback_parser_matches_pyyaml_on_supported_subset(self) -> None:
+        path = page(
+            self.root,
+            "exploration",
+            "fallback-parity.md",
+            self.FALLBACK_FRONTMATTER,
+        )
+        pyyaml_meta, _, error = KNOWLEDGE.read_page(path)
+        self.assertIsNone(error)
+        with mock.patch.object(KNOWLEDGE, "yaml", None):
+            fallback_meta, _, _ = KNOWLEDGE.read_page(path)
+        for field in (
+            "based_on",
+            "recall_signals",
+            "tags",
+            "summary",
+            "related_note",
+        ):
+            self.assertEqual(
+                fallback_meta[field],
+                pyyaml_meta[field],
+                f"fallback 与 PyYAML 在 {field} 上不一致",
+            )
+
+    def test_fallback_parser_warns_once_per_process(self) -> None:
+        path = page(
+            self.root,
+            "exploration",
+            "fallback-warn.md",
+            """
+id: EXP-20261111-10
+type: exploration
+title: 告警夹具
+status: tentative
+summary: x
+review_due: 2099-01-01
+""",
+        )
+        KNOWLEDGE._FALLBACK_WARNING_SHOWN = False
+        try:
+            with mock.patch.object(KNOWLEDGE, "yaml", None):
+                with mock.patch("sys.stderr") as stderr:
+                    KNOWLEDGE.read_page(path)
+                    KNOWLEDGE.read_page(path)
+            warning_writes = [
+                call
+                for call in stderr.write.call_args_list
+                if call.args and "降级 frontmatter 解析器" in call.args[0]
+            ]
+        finally:
+            KNOWLEDGE._FALLBACK_WARNING_SHOWN = False
+        self.assertEqual(len(warning_writes), 1)
 
 
 if __name__ == "__main__":
