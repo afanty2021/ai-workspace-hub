@@ -20,6 +20,11 @@ active-context 是工作记忆，只有「短到每次都会被读完」才有�
 条目的定义：顶层行 `- **YYYY-MM-DD...` 加紧随其后的所有缩进续行，
 直到下一个 `- **YYYY-MM-DD`、下一个 `## ` 或文件结束。
 
+尾换行双侧归一 + 粘连告警：尾行无换行时 cat>> 类追加会把新条目粘上尾行成一行，
+第三道闸门再把粘连行整体归档（吞掉新条目，2026-11-10 第 2 案）。读入侧补齐只修
+外部损伤；apply_plan 压缩末段末条目时也会写出裸尾——写出侧同样归一，读写两侧
+都做才是根除。行内嵌条目起始（粘连残损特征）一律响亮告警，不许被闸门静默吞掉。
+
 用法：
 
     python3 system/scripts/prune_active_context.py              # dry-run，看看会剪什么
@@ -50,6 +55,9 @@ CUTOFF_DAYS = 14
 MAX_ENTRIES = 20
 
 DATE_LINE_RE = re.compile(r"^- \*\*(\d{4})-(\d{2})-(\d{2})")
+# 粘连残损特征：条目起始模式出现在行中（位置 > 0）——cat>> 无尾换行追加的产物。
+# 只告警不改行为；引用类正文（如「见 - **2026-01-05：xxx**」）理论上会误报，容忍。
+EMBEDDED_ENTRY_RE = re.compile(r"- \*\*\d{4}-\d{2}-\d{2}")
 SECTION_RE = re.compile(r"^## ")
 SECTION_HEADING = "## 最近对话延续"
 # 条目身份（日期 + 标题前 60 字），用于整条归档时的幂等去重
@@ -174,6 +182,14 @@ def plan(lines: list[str], today: date, cutoff_days: int, max_entries: int, line
                 still_keep.append(block)
         to_keep = still_keep
 
+    # 粘连残损检测（全文件扫，不止延续段）：只暴露不改动，让残损显性化而不是
+    # 等行长闸门静默吞掉。
+    glued = [
+        index
+        for index, line in enumerate(lines)
+        if (match := EMBEDDED_ENTRY_RE.search(line)) and match.start() > 0
+    ]
+
     return {
         "blocks": blocks,
         "to_archive": to_archive,
@@ -181,11 +197,34 @@ def plan(lines: list[str], today: date, cutoff_days: int, max_entries: int, line
         "to_keep": to_keep,
         "over_count": over_count,
         "cutoff": cutoff,
+        "glued": glued,
     }
 
 
 def archive_path_for(meta_dir: Path, day: date) -> Path:
     return meta_dir / f"active-context-archive-{day.strftime('%Y-%m')}.md"
+
+
+def normalize_trailing_newline(raw: str) -> tuple[str, bool]:
+    """内存版尾换行归一：尾行无换行时补齐，返回 (文本, 是否补齐)。
+
+    尾行无换行（文件不以 \n 结尾）是粘连事故的必要条件：cat>> 类追加会把新条目
+    粘上尾行成一行，第三道行长闸门再把粘连行整体归档、原地只留一条索引（吞掉新
+    条目）。读入侧补齐只修复外部损伤；apply_plan 压缩末段末条目时也会写出裸尾
+    （max 评审 C1），写出侧同样归一——读写两侧都归一才是根除（2026-11-10 第 2 案修根）。
+    """
+    if raw and not raw.endswith("\n"):
+        return raw + "\n", True
+    return raw, False
+
+
+def ensure_trailing_newline(active: Path) -> str:
+    """落盘版：读入并幂等归一尾换行（--apply 路径用；dry-run 只走内存版）。"""
+    raw = active.read_text(encoding="utf-8")
+    normalized, fixed = normalize_trailing_newline(raw)
+    if fixed:
+        active.write_text(normalized, encoding="utf-8")
+    return normalized
 
 
 def apply_plan(active: Path, meta_dir: Path, lines: list[str], result: dict,
@@ -254,7 +293,13 @@ def apply_plan(active: Path, meta_dir: Path, lines: list[str], result: dict,
         else:
             prev_blank = False
         folded.append(line)
-    active.write_text("\n".join(folded), encoding="utf-8")
+    text = "\n".join(folded)
+    # 写出侧归一（max 评审 C1）：延续段是最后一段时，压缩末条目会把 raw.split 的
+    # 尾部 "" 一并 drop，产物以压缩索引行裸尾结束——正是 2026-11-10 第 2 案粘连
+    # 事故的前提形态。读侧补齐只能等下一次运行，写出侧归一才不让脚本自己上膛。
+    if not text.endswith("\n"):
+        text += "\n"
+    active.write_text(text, encoding="utf-8")
     return archived, compressed
 
 
@@ -279,7 +324,17 @@ def main() -> int:
         return 1
 
     today = datetime.strptime(args.today, "%Y-%m-%d").date() if args.today else date.today()
-    raw = active.read_text(encoding="utf-8")
+    raw_disk = active.read_text(encoding="utf-8")
+    raw, newline_fixed = normalize_trailing_newline(raw_disk)
+    if newline_fixed and not args.apply:
+        # dry-run 契约：一个字节都不写（AGENTS.md「dry-run 先看会剪什么」），
+        # 内存补齐只为让预览与 --apply 的实际行为一致。
+        print(
+            "  ⚠ 尾行无换行（粘连事故前提）：dry-run 只在内存补齐不落盘，--apply 时先补齐再剪",
+            file=sys.stderr,
+        )
+    if args.apply:
+        raw = ensure_trailing_newline(active)
     lines = raw.split("\n")
 
     result = plan(lines, today, args.cutoff, args.max_entries, args.line_cap)
@@ -297,6 +352,15 @@ def main() -> int:
     print(f"  整条归档: {len(result['to_archive'])}（其中超条数上限触发 {result['over_count']}）", file=sys.stderr)
     print(f"  压成索引: {len(result['to_compress'])}（超 {args.line_cap}B 行长闸门）", file=sys.stderr)
     print(f"  原样保留: {len(result['to_keep'])}", file=sys.stderr)
+    if result["glued"]:
+        print(
+            f"  🔴 粘连特征 {len(result['glued'])} 行：条目起始嵌在行中"
+            "（cat>> 无尾换行追加的残损），行长闸门会把粘连行整体归档、吞掉被粘条目"
+            "——先人工拆行再 --apply",
+            file=sys.stderr,
+        )
+        for index in result["glued"][:3]:
+            print(f"    L{index + 1}: {lines[index][:100]}", file=sys.stderr)
 
     if not result["to_archive"] and not result["to_compress"]:
         size_now = active.stat().st_size
@@ -321,7 +385,8 @@ def main() -> int:
 
     archived, compressed = apply_plan(active, meta_dir, lines, result, args.cutoff, args.line_cap)
     new_size = active.stat().st_size
-    saved = len(raw.encode("utf-8")) - new_size
+    # 以落盘原貌为基线（补进的尾换行算加法不算省）
+    saved = len(raw_disk.encode("utf-8")) - new_size
     warn = " 🔴 OVER CAP" if new_size > BYTE_CAP else ""
     print(f"\n  ✓ active-context.md: 归档 {archived} 条 / 压缩 {compressed} 条 / "
           f"{new_size}B（省 {saved}B，cap={BYTE_CAP}B）{warn}", file=sys.stderr)
