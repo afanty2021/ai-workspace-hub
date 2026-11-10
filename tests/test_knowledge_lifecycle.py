@@ -346,6 +346,8 @@ title: 降级解析器夹具
 status: tentative
 summary: 折行第一段
   折行第二段会被 fold 成一行
+  # 缩进注释行不应拼入
+promoted_to: null
 review_due: 2099-01-01
 based_on:
 - R1
@@ -354,6 +356,9 @@ recall_signals:
 - 链内原型分布
 - 商品冲击
 tags: [估值, 产业链]
+decision_scenarios:
+  换行直接缩进写正文首段
+  第二段续行
 entity_salience:
   603993.SH: core
 related_note: 嵌套段后的标量字段
@@ -366,7 +371,9 @@ related_note: 嵌套段后的标量字段
             "fallback.md",
             self.FALLBACK_FRONTMATTER,
         )
-        with mock.patch.object(KNOWLEDGE, "yaml", None):
+        with mock.patch.object(KNOWLEDGE, "yaml", None), mock.patch(
+            "sys.stderr"
+        ):
             meta, _, error = KNOWLEDGE.read_page(path)
         self.assertIsNone(error)
         self.assertEqual(meta["based_on"], ["R1", "R2"])
@@ -374,6 +381,12 @@ related_note: 嵌套段后的标量字段
         self.assertEqual(meta["tags"], ["估值", "产业链"])
         self.assertEqual(
             meta["summary"], "折行第一段 折行第二段会被 fold 成一行"
+        )
+        # null 字面量须归一为 None（字符串 'null' 是真值，会骗过晋级门禁）。
+        self.assertIsNone(meta.get("promoted_to"))
+        # 空 key + 缩进正文：首段成为初值，后续续行按 fold 拼接。
+        self.assertEqual(
+            meta["decision_scenarios"], "换行直接缩进写正文首段 第二段续行"
         )
         # 嵌套字段不支持（返回 None），但嵌套段不得吞掉后续字段。
         self.assertIsNone(meta.get("entity_salience"))
@@ -388,13 +401,17 @@ related_note: 嵌套段后的标量字段
         )
         pyyaml_meta, _, error = KNOWLEDGE.read_page(path)
         self.assertIsNone(error)
-        with mock.patch.object(KNOWLEDGE, "yaml", None):
+        with mock.patch.object(KNOWLEDGE, "yaml", None), mock.patch(
+            "sys.stderr"
+        ):
             fallback_meta, _, _ = KNOWLEDGE.read_page(path)
         for field in (
             "based_on",
             "recall_signals",
             "tags",
             "summary",
+            "promoted_to",
+            "decision_scenarios",
             "related_note",
         ):
             self.assertEqual(
@@ -402,6 +419,31 @@ related_note: 嵌套段后的标量字段
                 pyyaml_meta[field],
                 f"fallback 与 PyYAML 在 {field} 上不一致",
             )
+
+    def test_fallback_parser_ignores_unindented_continuation(self) -> None:
+        # 顶格非 key 非列表行不是折行续行（PyYAML 对此报 invalid YAML，
+        # fallback 的安全行为是忽略，绝不拼入标量值）。
+        path = page(
+            self.root,
+            "exploration",
+            "fallback-indent.md",
+            """
+id: EXP-20261111-11
+type: exploration
+title: 首行
+顶格文本行不是折行续行
+status: tentative
+summary: x
+review_due: 2099-01-01
+""",
+        )
+        with mock.patch.object(KNOWLEDGE, "yaml", None), mock.patch(
+            "sys.stderr"
+        ):
+            meta, _, error = KNOWLEDGE.read_page(path)
+        self.assertIsNone(error)
+        self.assertEqual(meta["title"], "首行")
+        self.assertEqual(meta["summary"], "x")
 
     def test_fallback_parser_warns_once_per_process(self) -> None:
         path = page(
@@ -417,6 +459,7 @@ summary: x
 review_due: 2099-01-01
 """,
         )
+        original_flag = KNOWLEDGE._FALLBACK_WARNING_SHOWN
         KNOWLEDGE._FALLBACK_WARNING_SHOWN = False
         try:
             with mock.patch.object(KNOWLEDGE, "yaml", None):
@@ -429,7 +472,7 @@ review_due: 2099-01-01
                 if call.args and "降级 frontmatter 解析器" in call.args[0]
             ]
         finally:
-            KNOWLEDGE._FALLBACK_WARNING_SHOWN = False
+            KNOWLEDGE._FALLBACK_WARNING_SHOWN = original_flag
         self.assertEqual(len(warning_writes), 1)
 
 

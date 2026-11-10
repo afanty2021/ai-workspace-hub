@@ -143,7 +143,11 @@ def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
         field = re.match(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$", line)
         if field:
             key = field.group(1)
-            value = field.group(2).strip().strip('"\'')
+            value = field.group(2).strip()
+            if value in {"null", "~"}:
+                value = ""
+            else:
+                value = value.strip('"\'')
             current_key = key if not value else None
             if value.startswith("[") and value.endswith("]"):
                 values[key] = [
@@ -157,7 +161,8 @@ def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
                 fold_key = key
             else:
                 values[key] = None
-                fold_key = None
+                # 空 key 保留折行挂靠：兼容「summary: 换行后直接缩进写正文」的写法。
+                fold_key = key
             continue
         item = re.match(r"^\s*-\s+(.+?)\s*$", line)
         if item and current_key:
@@ -168,10 +173,23 @@ def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
             values[current_key].append(item.group(1).strip('"\''))
             continue
         continuation = line.strip()
-        if continuation and fold_key and line[:1].isspace():
+        if re.match(r"^\s+[^\s:]+\s*:(\s|$)", line):
+            # 缩进的 key: value 行属于嵌套结构（如 entity_salience/tagging），
+            # PyYAML 会解析为嵌套 mapping 而非标量折行；不支持但须终止挂靠，
+            # 防止被当成正文拼进标量值。
+            fold_key = None
+            continue
+        if (
+            continuation
+            and not continuation.startswith("#")
+            and fold_key
+            and line[:1].isspace()
+        ):
             # 折行标量续行：PyYAML 把单换行折叠为空格，这里按同语义拼接，
-            # 防止多行 summary 等折行内容被静默丢弃。
-            values[fold_key] = f"{values[fold_key]} {continuation}"
+            # 防止多行 summary 等折行内容被静默丢弃；缩进注释行与 PyYAML
+            # 一致按注释剥离，顶格非 key 行不拼接（安全忽略）。
+            base = values[fold_key]
+            values[fold_key] = f"{base} {continuation}" if base else continuation
     return values, content, None
 
 
