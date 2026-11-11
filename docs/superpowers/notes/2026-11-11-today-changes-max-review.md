@@ -36,7 +36,7 @@
 
 ## Recommendations
 
-- ~~机制层：`CROSS_ASSET_HISTORY_SECIDS` 与 `EASTMONEY_GLOBAL_SYMBOLS` 对「实时/回补同 secid」的票做派生一致性断言~~ **已当日落地（用户点名）**：`tests/test_repository_contract.py` 新增 `EastmoneySecidContractTests` 两项——①交集票（当前 8 票）secid 严格相等、无白名单豁免；②单侧独有票登记集（`LIVE_ONLY={000660.KS}`、`HISTORY_ONLY={DX-Y.NYB}`），未登记的单侧新票即红。**落地时勘误本报告原文**：「DX-Y.NYB 分叉需白名单」系评审时误记——核实后 DX 的分叉是跨源不对称（实时主源新浪 DINIW 不走东财、历史才走东财 100.UDI），不在东财实时表内，不构成 secid 冲突，故落登记集而非交集豁免。变异重放三发全红（①交集一侧改 100.DJI→红；②删 DX-Y.NYB→登记集红；③实时表加未登记 NQ1=F→登记集红；首发③ replace 未落上出假绿，验证落点后重放真红——变异必须验证落点的教训再+1）。全套 751+16 绿、ruff 净。
+- ~~机制层：`CROSS_ASSET_HISTORY_SECIDS` 与 `EASTMONEY_GLOBAL_SYMBOLS` 对「实时/回补同 secid」的票做派生一致性断言~~ **已当日落地（用户点名）**：`tests/test_repository_contract.py` 新增 `EastmoneySecidContractTests` 两项——①交集票（当前 8 票）secid 严格相等、无白名单豁免；②单侧独有票登记集（`LIVE_ONLY={000660.KS}`、`HISTORY_ONLY={DX-Y.NYB}`），未登记的单侧新票即红。**落地时勘误本报告原文**：「DX-Y.NYB 分叉需白名单」系评审时误记——核实后 DX 的分叉是跨源不对称（实时主源新浪 DINIW 不走东财、历史才走东财 100.UDI），不在东财实时表内，不构成 secid 冲突，故落登记集而非交集豁免。变异重放三发全红（①交集一侧改 100.DJI→红；②删 DX-Y.NYB→登记集红；③实时表加未登记 NQ1=F→登记集红；首发③ replace 未落上出假绿，验证落点后重放真红——变异必须验证落点的教训再+1）。全套 751+16 绿、改动文件 ruff 净（全仓 30 个存量 ruff 错误均在本次未触碰的 tools/stage-bottom、tools/jinniu、tools/sector-rotation 等目录——2026-11-11 r2 评审勘误补注）。
 
 ## 附：早轮 baaae43 单独评审（0C/0I/3M）留档项本轮处置
 
@@ -48,5 +48,5 @@
 
 ## Assessment
 
-**Ready? Yes**（修复已全部落工作树，749+16 全绿）
+**Ready? Yes**（修复已全部落工作树，751+16 全绿——初稿误写 749，r2 评审勘误）
 **Reasoning:** baaae43 核心声称经代码逐环+本地数据逐位对拍全部属实，docs 提交数字自洽、_index 零漂移；两条 Important（secid 测试盲区、勘误残留）均当日修复并变异/回归验证，无遗留 Critical。

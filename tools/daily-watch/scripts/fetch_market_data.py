@@ -559,7 +559,8 @@ TENCENT_HK_INDEX_SYMBOLS = {"HSTECH": "hkHSTECH"}
 # (usSOX daily K-lines are an empty array — see update_cross_asset_history).
 # Volume caliber differs between tencent and eastmoney for index rows (~1.7%);
 # the digit-for-digit cross-check above holds on price fields only — never use
-# volume as a cross-source anchor (cf. AGENTS 数据源行 volume 不得跨源比较).
+# volume as a cross-source anchor (cf. SOURCE_CALIBER_NOTES["HSTECH"] in
+# generate_daily_report.py — same cross-source volume rule, proven there).
 TENCENT_US_INDEX_SYMBOLS = {"^GSPC": "INX", "^DJI": "DJI", "^IXIC": "IXIC"}
 
 

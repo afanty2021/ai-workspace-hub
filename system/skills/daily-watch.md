@@ -66,7 +66,7 @@ Longbridge Skill/CLI 是独立 Agent 扩展，不是 `tools/daily-watch/` 的内
 | 输出 | 路径 |
 |------|------|
 | 日报 | `output/daily-watch/YYYY-MM/YYYY-MM-DD.md` |
-| 盘前日报 | `output/daily-watch/YYYY-MM/YYYY-MM-DD-premarket.md`（8:00 cron 自动生成：隔夜美股/商品快照+A 股要闻+池内公告；**不写 series、不建证据卡、严禁占用收盘日报路径**，2026-11-12 用户批准新建） |
+| 盘前日报 | `output/daily-watch/YYYY-MM/YYYY-MM-DD-premarket.md`（8:00 cron 自动生成：隔夜美股/商品快照+A 股要闻+池内公告；**不写 series、不建证据卡、不写 active-context、不 git 提交**，账本走 run_archive --kind watch，**严禁占用收盘日报路径**；2026-11-11 用户批准新建、11-12 首跑） |
 | 独立证据 | `evidence/YYYY-MM/E-*.md` |
 | 假设证据 | `hypothesis/H*.md`（只追加证据引用） |
 | 长期结论 | `wiki/explorations/`（可选沉淀） |
@@ -120,4 +120,4 @@ A 股个股/ETF 用交易所后缀（`.SH`/`.SZ`）；通达信 880/881 段板�
 python3 tools/daily-watch/scripts/check_setup.py --init
 ```
 
-每日 16:30 ZCode 定时批量跑六环节（幂等，非交易日自动零增量，1-5 严格串行——与弱票扫描同拉 mootdx/pytdx 禁止并行）：update_market_series + update_finance_snapshots + update_cross_asset_history（跨资产历史增量回补，^SOX 走 Nasdaq 官方 historical、XAUUSD=X 走新浪全球日线、其余东财 push2his 节流内置；整轮限流时不补跑次日自愈）+ update_cn_liquidity（国内 Shibor/社融，社融失败降级只告警）+ weak_scan（gate70 弱票反转扫描，**2026-11-11 用户批准由原 16:10 独立 cron 合并进来**，月初首个交易日加 weak_eval 读数）+ **当日日报生成（dw-today，同日用户批准并入；cron 版按本 skill 核心流程执行，无人值守边界=证据卡只建官方硬事实且 direction/confidence 留 pending、不改假设状态、不写 active-context、16:30 版新闻面以已发布收评为准并注记晚间公告缺口）**——**cron prompt 已并入（2026-11-09 用户批准，Q-20261109-04；11-11 扩六环节）**。另有**每交易日 8:00 盘前日报 cron**（automation-c2895bd5，2026-11-12 用户批准新建）：隔夜美股/商品快照（8:00=ET 前夜收盘后，可信收盘口径但只进报告不写 series）+ A 股要闻 + 池内公告，落 `*-premarket.md`，无人值守边界比收盘版更紧（不建证据卡，重大事件只写「今日关注」提示）。2026-11-11 曾发生 dispatch 有记录但会话未建立的空转首案（friction-log 已记），16:30 cron prompt 已内置「当日数据新鲜度自检」，第 2 次出现按硬规则修根进本 skill 首步。
+每日 16:30 ZCode 定时批量（automation-1e7fca91）跑六环节（幂等，非交易日自动零增量，**六环节严格串行**——1-5 同拉 mootdx/pytdx，禁止并行）：update_market_series + update_finance_snapshots + update_cross_asset_history（跨资产历史增量回补，^SOX 走 Nasdaq 官方 historical、XAUUSD=X 走新浪全球日线、其余东财 push2his 节流内置；整轮限流时不补跑次日自愈）+ update_cn_liquidity（国内 Shibor/社融，社融失败降级只告警）+ weak_scan（gate70 弱票反转扫描，**2026-11-11 用户批准由原 16:10 独立 cron 合并进来**，月初首个交易日加 weak_eval 读数）+ **当日日报生成（dw-today，同日用户批准并入；cron 版按本 skill 核心流程执行，无人值守边界=证据卡只建官方硬事实且 direction/confidence 留 pending、不改假设状态、不写 active-context、16:30 版新闻面以已发布收评为准并注记晚间公告缺口）**——**cron prompt 已并入（2026-11-09 用户批准，Q-20261109-04；11-11 扩六环节）**。另有**每交易日 8:00 盘前日报 cron**（automation-c2895bd5，2026-11-11 用户批准新建、11-12 首跑）：隔夜美股/商品快照（8:00=ET 前夜收盘后，可信收盘口径但只进报告不写 series）+ A 股要闻 + 池内公告，落 `*-premarket.md`，无人值守边界比收盘版更紧（不建证据卡，重大事件只写「今日关注」提示）。2026-11-11 曾发生 dispatch 有记录但会话未建立的空转首案（friction-log 已记），16:30 cron prompt 已内置「当日数据新鲜度自检」，第 2 次出现按硬规则修根进本 skill 首步。
