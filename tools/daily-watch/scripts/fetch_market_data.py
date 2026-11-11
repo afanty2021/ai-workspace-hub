@@ -557,6 +557,9 @@ TENCENT_HK_INDEX_SYMBOLS = {"HSTECH": "hkHSTECH"}
 # this table is the keyless backup; ^IXIC rides along because nasdaq/tencent
 # coverage for it was the same single-source gap. Tencent cannot serve ^SOX
 # (usSOX daily K-lines are an empty array — see update_cross_asset_history).
+# Volume caliber differs between tencent and eastmoney for index rows (~1.7%);
+# the digit-for-digit cross-check above holds on price fields only — never use
+# volume as a cross-source anchor (cf. AGENTS 数据源行 volume 不得跨源比较).
 TENCENT_US_INDEX_SYMBOLS = {"^GSPC": "INX", "^DJI": "DJI", "^IXIC": "IXIC"}
 
 

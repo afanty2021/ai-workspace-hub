@@ -375,6 +375,20 @@ class SinaSourceTests(unittest.TestCase):
             ucah.main(["--tickers", "^TNX"])
         self.assertIn("klt", mock_get.call_args.kwargs["params"])
 
+    def test_main_dispatch_routes_gspc_dji_to_eastmoney_secids(self) -> None:
+        # max 评审 I-1（2026-11-11）：^GSPC/^DJI 历史 secid 此前只有实时侧锁
+        # （test_cn_free_sources 的 100.SPX/100.DJIA 断言），历史侧 dict 分发零
+        # 覆盖——变异 100.DJIA→100.DJI 曾 21 项全绿（回补 empty 日志可见、非静默
+        # 错数，但同族第 4 案形态）。100.DJI/100.SP500 无效（脚本内注释实证），
+        # 锁死防回退。--throttle 0 避免双票间真睡 3 秒。
+        with patch("update_cross_asset_history.requests.get", return_value=_kline_response([
+                "2026-11-10,7549.94,7520.93,7560.00,7510.00,0,0",
+        ])) as mock_get, \
+                patch("market_data_io.resolve_data_root", return_value=self.root):
+            ucah.main(["--tickers", "^GSPC,^DJI", "--throttle", "0"])
+        secids = [c.kwargs["params"]["secid"] for c in mock_get.call_args_list]
+        self.assertEqual(secids, ["100.SPX", "100.DJIA"])
+
 
 if __name__ == "__main__":
     unittest.main()

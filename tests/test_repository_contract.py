@@ -4,6 +4,10 @@ import re
 import unittest
 from pathlib import Path
 
+import _test_paths  # noqa: F401 — 先入 path，再取两个 scripts 模块的 secid 表
+import fetch_market_data
+import update_cross_asset_history
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -153,6 +157,54 @@ class RepositoryContractTests(unittest.TestCase):
         missing = sorted(t for t in tokens if t not in doc)
         self.assertEqual(
             missing, [], f"DATA-SOURCES.md 缺少接线 token 同步: {missing}"
+        )
+
+
+class EastmoneySecidContractTests(unittest.TestCase):
+    """跨模块契约（2026-11-11 max 评审建议落地，同日 I-1 secid 测试盲区
+    的机制级收口）：东财实时表（fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS，
+    push2）与回补表（update_cross_asset_history.CROSS_ASSET_HISTORY_SECIDS，
+    push2his）对同一票必须是**同一份 secid 事实**。此前两表各改各的，
+    「新接线只进一张表 / 改一张忘另一张」无任何红灯（I-1 变异重放坐实
+    过 dict 分发零覆盖）——本测试把「^GSPC/^DJI 2026-11-11 两表同 secid
+    接线」的 做法 变成机制。
+    """
+
+    def test_shared_tickers_use_identical_secids(self) -> None:
+        # 交集票严格相等，无白名单豁免——当前 8 票全一致；若未来出现有意的
+        # 同票 secid 分叉（东财实时段与历史段对某票用不同市场段），须在此
+        # 显式登记分叉及理由，不许静默。
+        live = dict(fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS)
+        hist = dict(update_cross_asset_history.CROSS_ASSET_HISTORY_SECIDS)
+        shared = sorted(set(live) & set(hist))
+        mismatches = {t: (live[t], hist[t]) for t in shared if live[t] != hist[t]}
+        self.assertFalse(
+            mismatches,
+            f"同票两表 secid 分叉（改齐一张表，或在此登记有意分叉的理由）: {mismatches}",
+        )
+
+    def test_single_sided_tickers_are_registered(self) -> None:
+        # 单侧独有票=合法的源覆盖差异（实时与历史本不必同源），但必须显式
+        # 登记——未登记的单侧新票 = 新接线漏接另一张表，红。
+        live_only = set(fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS) - set(
+            update_cross_asset_history.CROSS_ASSET_HISTORY_SECIDS)
+        hist_only = set(update_cross_asset_history.CROSS_ASSET_HISTORY_SECIDS) - set(
+            fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS)
+        # 000660.KS：韩股 keyless 快照独苗（177 段），无历史回补需求。
+        # DX-Y.NYB：实时主源是新浪 DINIW（SINA_GLOBAL_SYMBOLS，不走东财
+        # 实时），历史才走东财 100.UDI——评审时误记为「secid 分叉需白名单」，
+        # 核实后实为跨源不对称，落此登记集而非交集豁免。
+        # 注意 ^SOX 不在此列：历史主源虽是 Nasdaq API，但 251.SOX 在两表
+        # 同 secid 保留（东财降级路径 + --tickers 白名单），仍受交集断言约束。
+        LIVE_ONLY = {"000660.KS"}
+        HISTORY_ONLY = {"DX-Y.NYB"}
+        self.assertEqual(
+            live_only, LIVE_ONLY,
+            f"实时表独有票变动 {sorted(live_only)}：新接线请同步回补表或更新登记",
+        )
+        self.assertEqual(
+            hist_only, HISTORY_ONLY,
+            f"回补表独有票变动 {sorted(hist_only)}：新接线请同步实时表或更新登记",
         )
 
 
