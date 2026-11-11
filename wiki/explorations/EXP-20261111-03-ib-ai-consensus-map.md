@@ -50,6 +50,14 @@ decision_scenarios:
 - AI 相关假设复盘需要对锚投行共识时
 - 阅读新投行 AI 报告、判断其立场在图谱中的位置时
 - 评估渠道/平台型公司受 agent 冲击或机器人链标的敞口时
+related:
+- '[[EXP-20261111-01]]'
+- '[[EXP-20261110-03]]'
+entity_salience: {}
+tagging:
+  status: completed
+  schema_version: 1
+  provider: current_agent
 ---
 
 # EXP-20261111-03：投行 AI 共识图谱（2026Q4）
