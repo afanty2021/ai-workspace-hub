@@ -312,7 +312,7 @@ def render_other_movers(
 # 跨资产例行扫描（Q-20261109-03 德鲁肯米勒借鉴①）：固定顺序对齐 watchlist「海外与
 # 宏观」段与 query_market.LIQUIDITY_TICKERS；quotes 缺的票跳过（抓取失败不造行）。
 # 5d/20d 滚动窗口近似「日线看 8-20 天、周线看 8-20 周」三框，只作观察列不作信号。
-CROSS_ASSET_ORDER = ["^IXIC", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HSTECH"]
+CROSS_ASSET_ORDER = ["^IXIC", "^GSPC", "^DJI", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HSTECH"]
 
 _CROSS_ASSET_MARKETS = {"INDEX", "FX", "CMDTY", "FUT"}
 
@@ -1080,6 +1080,8 @@ def apply_hypothesis_updates(
 # 行情 ticker 与实际交付口径不一致（或需要口径提示）时的注记。
 # ticker 名义来源与真实交付源不同时，读者需要在这里看到，而不是翻 README。
 SOURCE_CALIBER_NOTES = {
+    "^GSPC": "标普500（东财 100.SPX 主源，腾讯 usINX 备份；2026-11-11 接线，收盘对拍 AP/CNBC 逐位一致）",
+    "^DJI": "道琼斯指数（东财 100.DJIA 主源，腾讯 usDJI 备份；同上接线）",
     "HG=F": "交付口径为 LME 三月铜（USD/吨）；ticker 名义是 COMEX 铜（USD/磅），两者价位差约 4 倍",
     "^TNX": "美十债收益率实时快照（东财 171.US10Y；FRED DGS10 T+1 降级备用）",
     "NQ00Y": "小型纳指当月连续期货实时快照（东财 103.NQ00Y，CME E-mini Nasdaq 100；24 小时交易，日报时点为最新成交）",

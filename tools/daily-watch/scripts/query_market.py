@@ -41,6 +41,8 @@ _VIEW_PATTERNS = {
 # SOURCE_CALIBER_NOTES。滚动窗口 5/20/60 近似「日线看 8-20 天、周线看 8-20 周」三框。
 LIQUIDITY_TICKERS: list[tuple[str, str]] = [
     ("^IXIC", "纳斯达克指数"),
+    ("^GSPC", "标普500"),
+    ("^DJI", "道琼斯"),
     ("^SOX", "费城半导体"),
     ("^TNX", "美十债收益率"),
     ("NQ00Y", "小型纳指连续"),

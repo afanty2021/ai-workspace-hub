@@ -19,6 +19,7 @@ from fetch_market_data import (  # noqa: E402
     DEFAULT_THRESHOLDS,
     build_quote_record,
     build_snapshot,
+    fetch_eastmoney_global_quote,
     fetch_eastmoney_quote,
     fetch_fallback_quote,
     fetch_sina_quote,
@@ -63,6 +64,15 @@ SINA_RT_HK_INDEX_PAYLOAD = (
     'var hq_str_rt_hkHSTECH="HSTECH,恒生科技指数,4119.980,4078.230,4158.880,4033.870,'
     '4040.730,-37.500,-0.920,0.000,0.000,42126393.537,1186077858,0.000,0.000,'
     '6025.530,3706.300,2026/11/09,16:08:26,,,,,,";'
+)
+# US index rows for the us prefix (live probe 2026-11-11, usINX verbatim): same
+# layout as us equities — close 7520.93/-0.38% matched eastmoney 100.SPX (which
+# matches the AP/CNBC published 11-10 closes); field 37 is market-cap junk for
+# index rows and stays unconsumed, same as the PE/cap fields for stocks.
+TENCENT_US_INDEX_PAYLOAD = (
+    'v_usINX="200~标普500~.INX~7520.93~7549.94~7513.09~3018981109~0~0~7480.40~0~0~0~0~0~0~0~0~0~7569.86'
+    '~0~0~0~0~0~0~0~0~0~~2026-11-10 17:00:31~-29.01~-0.38~7543.92~7470.43~USD~3018981109~22705545592111'
+    '~~~~~~0.97~~~S&P 500 Index~~7844.52~6316.91~0~~~~9.87~-0.63~ZS~~~-2.61~-3.65~-2.89~~~0.77~~~7520.93~~~~~";'
 )
 # Same layout for US equities (live: usFCX, probe 2026-11-08). Timestamp is
 # 'YYYY-MM-DD HH:MM:SS' (ET); volume in shares; fields 35+ carry the USD
@@ -351,6 +361,92 @@ class TencentQuoteTests(unittest.TestCase):
         self.assertIsNone(fetch_tencent_quote("NQ00Y", "INDEX"))
         self.assertIsNone(fetch_sina_quote("NQ00Y", "INDEX"))
         mock_get.assert_not_called()
+
+    @patch("fetch_market_data.requests.get")
+    def test_us_index_ticker_maps_to_us_prefix(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(TENCENT_US_INDEX_PAYLOAD)
+
+        quote = fetch_tencent_quote("^GSPC", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        # usINX 7520.93/-0.38% == eastmoney 100.SPX == the AP/CNBC 11-10 close.
+        self.assertEqual(quote["price"], 7520.93)
+        self.assertEqual(quote["previousClose"], 7549.94)
+        self.assertEqual(quote["open"], 7513.09)
+        self.assertEqual(quote["change"], -29.01)
+        self.assertEqual(quote["changesPercentage"], -0.38)
+        self.assertEqual(quote["dayHigh"], 7543.92)
+        self.assertEqual(quote["dayLow"], 7470.43)
+        # Index timestamps are ET 'YYYY-MM-DD HH:MM:SS' like us stocks.
+        self.assertEqual(quote["tradeDate"], "2026-11-10")
+        self.assertEqual(quote["source"], "tencent")
+        self.assertIn("q=usINX", str(mock_get.call_args))
+
+    @patch("fetch_market_data.requests.get")
+    def test_us_index_map_covers_dji_and_keeps_bare_gate(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(
+            'v_usDJI="200~道琼斯~.DJI~52231.89~52389.75~52163.21~711363730'
+            + "~x" * 23
+            + '~2026-11-10 17:00:40~-157.86~-0.30~52316.89~51977.08";'
+        )
+
+        quote = fetch_tencent_quote("^DJI", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 52231.89)
+        self.assertEqual(quote["previousClose"], 52389.75)
+        self.assertEqual(quote["changesPercentage"], -0.30)
+        self.assertIn("q=usDJI", str(mock_get.call_args))
+        # The index map is an explicit allowlist too: unmapped INDEX tickers
+        # (e.g. a hypothetical bare NDX) must not probe a wild usNDX request.
+        self.assertIsNone(fetch_tencent_quote("NDX", "INDEX"))
+
+
+class EastmoneyGlobalQuoteTests(unittest.TestCase):
+    @patch("fetch_market_data.requests.get")
+    def test_gspc_maps_to_spx_secid_and_parses_fltt2(self, mock_get: MagicMock) -> None:
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": {
+                "f43": 7520.93,
+                "f44": 7543.92,
+                "f45": 7470.43,
+                "f46": 7513.09,
+                "f47": 2966854592,
+                "f60": 7549.94,
+                "f86": 1794344390,
+                "f169": -29.01,
+                "f170": -0.38,
+            }
+        }
+        mock_get.return_value = response
+
+        quote = fetch_eastmoney_global_quote("^GSPC", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 7520.93)
+        self.assertEqual(quote["previousClose"], 7549.94)
+        self.assertEqual(quote["change"], -29.01)
+        self.assertEqual(quote["changesPercentage"], -0.38)
+        self.assertEqual(quote["dayHigh"], 7543.92)
+        self.assertEqual(quote["dayLow"], 7470.43)
+        self.assertEqual(quote["source"], "eastmoney")
+        # 100 = eastmoney's US-index market segment (100.DJI is the Dow).
+        self.assertEqual(mock_get.call_args.kwargs["params"]["secid"], "100.SPX")
+
+    @patch("fetch_market_data.requests.get")
+    def test_dji_maps_to_djia_secid(self, mock_get: MagicMock) -> None:
+        # 100.DJI/100.SP500/100.INDU all probe null — the valid secid is DJIA.
+        self.assertEqual(
+            fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS["^DJI"], "100.DJIA"
+        )
+        self.assertEqual(
+            fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS["^GSPC"], "100.SPX"
+        )
 
 
 class SinaQuoteTests(unittest.TestCase):

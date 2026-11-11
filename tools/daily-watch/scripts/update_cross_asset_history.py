@@ -19,8 +19,9 @@
    期货日线（SINA_HISTORY_SYMBOLS，与其 hf_XAU 实时快照同源族同日切口径：
    2026-11-09 探测 11-06 行全 OHLC 与快照行逐位一致；2006 年起全史返回，
    本地按回补窗过滤；无东财降级，主源失败按 fail 计）。
-   其余 6 票东财 klines 仍为主源（实测 548-571 行全窗）。腾讯 ifzq 对 usSOX
-   只有实时 qt 档、日线 K 线为空数组，不接入。
+   其余 8 票东财 klines 仍为主源（实测 548-571 行全窗；^GSPC/^DJI 2026-11-11
+   接线，100 段=东财美股指数，11-10 收盘对拍 AP/CNBC 逐位一致）。腾讯 ifzq 对
+   usSOX 只有实时 qt 档、日线 K 线为空数组，不接入。
 """
 
 from __future__ import annotations
@@ -49,6 +50,11 @@ EM_PUSH_HEADERS = {
 # 回补走东财 100.UDI；HSTECH 实时/回补同 secid 124 段=东财港股指数）。
 CROSS_ASSET_HISTORY_SECIDS: dict[str, str] = {
     "^IXIC": "100.NDX",
+    # ^GSPC/^DJI（2026-11-11 接线）：100 段=东财美股指数。实时/回补同 secid；
+    # 11-10 收盘 SPX 7520.93/-0.38%、DJI 52231.89/-0.30% 对拍 AP/CNBC 逐位一致，
+    # 昨收 7549.94/52389.75 与 push2his 11-09 行逐位一致。100.DJI/100.SP500 无效。
+    "^GSPC": "100.SPX",
+    "^DJI": "100.DJIA",
     "^SOX": "251.SOX",
     "^TNX": "171.US10Y",
     "NQ00Y": "103.NQ00Y",

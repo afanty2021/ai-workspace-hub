@@ -547,6 +547,18 @@ def _hk_quote_code(ticker: str) -> str | None:
 # push2 was IP-blocked for the whole session.
 TENCENT_HK_INDEX_SYMBOLS = {"HSTECH": "hkHSTECH"}
 
+# US index codes for the us prefix (2026-11-11 wiring): usINX/ usDJI / usIXIC
+# carry the S&P 500 / Dow / Nasdaq Composite — the same "200~name~code~price~…
+# ~timestamp~change~pct~high~low" layout as us equities (fields 3/4/5/30/31/32/
+# 33/34), so the shared parser below needs no branch of its own. Live probe
+# 2026-11-11: usINX 7520.93/-0.38% and usDJI 52231.89/-0.30% match eastmoney
+# 100.SPX/100.DJIA digit-for-digit (which in turn match the AP/CNBC closes);
+# usIXIC 25065.87/-0.74% matches 100.NDX. ^GSPC/^DJI are eastmoney-primary —
+# this table is the keyless backup; ^IXIC rides along because nasdaq/tencent
+# coverage for it was the same single-source gap. Tencent cannot serve ^SOX
+# (usSOX daily K-lines are an empty array — see update_cross_asset_history).
+TENCENT_US_INDEX_SYMBOLS = {"^GSPC": "INX", "^DJI": "DJI", "^IXIC": "IXIC"}
+
 
 def _us_quote_symbol(ticker: str, market: str) -> str | None:
     """NVDA (market=US) -> 'NVDA' for the Tencent us prefix; None otherwise.
@@ -746,10 +758,13 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
     hk_code = _hk_quote_code(ticker)
     us_symbol = _us_quote_symbol(ticker, market)
     hk_index_symbol = TENCENT_HK_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    us_index_symbol = TENCENT_US_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
     if hk_code is not None:
         symbol = f"hk{hk_code}"
     elif us_symbol is not None:
         symbol = f"us{us_symbol}"
+    elif us_index_symbol is not None:
+        symbol = f"us{us_index_symbol}"
     elif hk_index_symbol is not None:
         symbol = hk_index_symbol
     else:
@@ -776,17 +791,24 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
         # hkHSTECH — live probe 2026-11-09) share the same layout but
         # timestamps are 'YYYY/MM/DD HH:MM:SS' instead of 'YYYYMMDDHHMMSS'.
         # US responses (usFCX style, live-verified 2026-11-08 against S&P
-        # Global closes for FCX/NEM/RIO/BHP/AEM/AAPL) keep the same indexes:
-        # timestamp 'YYYY-MM-DD HH:MM:SS' (ET), volume in SHARES (CN side is
-        # lots). Fields 35+ also expose USD marker(35)/PE(39)/market cap(45,
-        # $bn)/PB(51)/div%(52) which this fetcher does not consume.
+        # Global closes for FCX/NEM/RIO/BHP/AEM/AAPL; usINX/usDJI/usIXIC index
+        # rows live-verified 2026-11-11 against the AP/CNBC closes) keep the
+        # same indexes: timestamp 'YYYY-MM-DD HH:MM:SS' (ET), volume in SHARES
+        # (CN side is lots). Fields 35+ also expose USD marker(35)/PE(39)/
+        # market cap(45, $bn)/PB(51)/div%(52) which this fetcher does not
+        # consume (index rows carry junk there — e.g. usDJI field 37 = ~3.7e13).
         fields = content[data_start + 1 : data_end].split("~")
         if len(fields) < 35:
             return None
         price = parse_float(fields[3])
         if price is None or price <= 0:
             return None
-        if hk_code is not None or us_symbol is not None or hk_index_symbol is not None:
+        if (
+            hk_code is not None
+            or us_symbol is not None
+            or us_index_symbol is not None
+            or hk_index_symbol is not None
+        ):
             trade_date = fields[30][:10].replace("/", "-")
         else:
             trade_date = fields[30][:8]
@@ -1094,12 +1116,18 @@ def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
 # below came from eastmoney's own suggest API (QuoteID) and each was verified
 # live against an independent feed on 2026-10-31 (SOX/IXIC == nasdaq.com,
 # LCPT == sina hf_CAD, 000660 pct == SKHY ADR move) — ^TNX/NQ00Y verified live
-# 2026-11-05 (US10Y 4.8777 vs FRED T+1 4.95 direction, NQ realtime ts).
+# 2026-11-05 (US10Y 4.8777 vs FRED T+1 4.95 direction, NQ realtime ts);
+# ^GSPC/^DJI verified live 2026-11-11 (closes 7520.93/-0.38% and
+# 52231.89/-0.30% vs the AP/CNBC published closes, prev-closes vs push2his).
 # Keyed by the FULL ticker on purpose: stripping suffixes would collide KR
 # 000660 (SK hynix) with CN 000660.SZ (铜陵有色).
 EASTMONEY_GLOBAL_SYMBOLS = {
     "000660.KS": "177.000660",  # KRX (SK hynix) — the only keyless KRX feed
     "HG=F": "109.LCPT",         # LME copper 3M (综合铜03)
+    "^GSPC": "100.SPX",         # 标普500（100=东财美股指数段；2026-11-11 接线，11-10 收盘
+                                # 7520.93/-0.38% 对拍 AP/CNBC 逐位一致；100.SP500 无效）
+    "^DJI": "100.DJIA",         # 道琼斯（2026-11-11 接线，11-10 收盘 52231.89/-0.30%
+                                # 对拍一致；100.DJI/100.INDU 无效）
     "^SOX": "251.SOX",          # PHLX semiconductor, backup to the nasdaq API
     "^IXIC": "100.NDX",         # eastmoney's NDX is the composite, not NASDAQ-100
     "^TNX": "171.US10Y",        # 美国10年期国债收益率，实时（FRED 是 T+1 官方序列，降级备用）
@@ -1259,7 +1287,8 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
     # Keyless scraper fallbacks: eastmoney/tencent cover CN A-share + ETF
     # (incl. ones tushare `daily` misses) and HK single stocks via
     # _hk_quote_code; tencent additionally serves US equities via the us
-    # prefix (eastmoney's US 105/106 market codes remain unverified from this
+    # prefix plus the US/HK index rows in TENCENT_*_INDEX_SYMBOLS (eastmoney's
+    # US 105/106 market codes remain unverified from this
     # network and are intentionally NOT wired); sina stays CN-only
     # (_cn_quote_symbol -> None for non-CN).
     chain.append(("eastmoney", lambda: fetch_eastmoney_quote(ticker, market)))
