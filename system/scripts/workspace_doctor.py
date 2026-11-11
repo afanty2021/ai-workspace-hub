@@ -11,10 +11,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:  # Core Mode remains dependency-free.
-    yaml = None
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from frontmatter_parse import parse_frontmatter_file  # noqa: E402
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -74,49 +74,10 @@ def relative(path: Path, root: Path) -> str:
 
 
 def read_frontmatter(path: Path) -> tuple[dict[str, Any], str | None]:
-    try:
-        content = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError) as exc:
-        return {}, str(exc)
-    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", content, re.DOTALL)
-    if not match:
-        return {}, "missing frontmatter"
-    if yaml is not None:
-        try:
-            payload = yaml.safe_load(match.group(1)) or {}
-        except yaml.YAMLError as exc:
-            return {}, f"invalid YAML: {exc}"
-        return (payload, None) if isinstance(payload, dict) else ({}, "frontmatter is not a mapping")
-
-    values: dict[str, Any] = {}
-    current_key: str | None = None
-    for line in match.group(1).splitlines():
-        field = re.match(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$", line)
-        if field:
-            key = field.group(1)
-            value = field.group(2).strip().strip('"\'')
-            current_key = key if not value else None
-            if value.startswith("[") and value.endswith("]"):
-                values[key] = [
-                    item.strip().strip('"\'')
-                    for item in value[1:-1].split(",")
-                    if item.strip()
-                ]
-            else:
-                values[key] = value or None
-            continue
-        list_item = re.match(r"^-\s+(.+?)\s*$", line)
-        if list_item and current_key:
-            if not isinstance(values.get(current_key), list):
-                values[current_key] = []
-            values[current_key].append(list_item.group(1).strip('"\''))
-            continue
-        nested = re.match(r"^\s+([^:]+):\s*(.*?)\s*$", line)
-        if nested and current_key:
-            if not isinstance(values.get(current_key), dict):
-                values[current_key] = {}
-            values[current_key][nested.group(1).strip()] = nested.group(2).strip('"\'')
-    return values, None
+    # 解析实现在共享模块 frontmatter_parse（与 knowledge_lifecycle /
+    # workspace_status 同源，防三份降级解析器各自漂移）。
+    meta, _, error = parse_frontmatter_file(path)
+    return meta, error
 
 
 def as_list(value: Any) -> list[str]:

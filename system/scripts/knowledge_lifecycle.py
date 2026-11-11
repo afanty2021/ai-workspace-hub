@@ -13,10 +13,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:  # Core Mode remains dependency-free.
-    yaml = None
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from frontmatter_parse import parse_frontmatter_file  # noqa: E402
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -100,97 +100,10 @@ def relative(path: Path, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
 
-_FALLBACK_WARNING_SHOWN = False
-
-
-def _warn_fallback_parser_once() -> None:
-    global _FALLBACK_WARNING_SHOWN
-    if _FALLBACK_WARNING_SHOWN:
-        return
-    _FALLBACK_WARNING_SHOWN = True
-    print(
-        "[knowledge_lifecycle] PyYAML 不可用，启用降级 frontmatter 解析器"
-        "（列表与折行标量已覆盖，嵌套字段不支持）——"
-        "降级模式下 rebuild-index 结果可能不完整，"
-        "建议在装有 PyYAML 的环境运行（如 conda run -n Quant-3.11）",
-        file=sys.stderr,
-    )
-
-
 def read_page(path: Path) -> tuple[dict[str, Any], str, str | None]:
-    try:
-        content = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError) as exc:
-        return {}, "", str(exc)
-    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", content, re.DOTALL)
-    if not match:
-        return {}, content, "missing frontmatter"
-    raw = match.group(1)
-    if yaml is not None:
-        try:
-            payload = yaml.safe_load(raw) or {}
-        except yaml.YAMLError as exc:
-            return {}, content, f"invalid YAML: {exc}"
-        if not isinstance(payload, dict):
-            return {}, content, "frontmatter is not a mapping"
-        return payload, content, None
-
-    _warn_fallback_parser_once()
-    values: dict[str, Any] = {}
-    current_key: str | None = None
-    fold_key: str | None = None
-    for line in raw.splitlines():
-        field = re.match(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$", line)
-        if field:
-            key = field.group(1)
-            value = field.group(2).strip()
-            if value in {"null", "~"}:
-                value = ""
-            else:
-                value = value.strip('"\'')
-            current_key = key if not value else None
-            if value.startswith("[") and value.endswith("]"):
-                values[key] = [
-                    item.strip().strip('"\'')
-                    for item in value[1:-1].split(",")
-                    if item.strip()
-                ]
-                fold_key = None
-            elif value:
-                values[key] = value
-                fold_key = key
-            else:
-                values[key] = None
-                # 空 key 保留折行挂靠：兼容「summary: 换行后直接缩进写正文」的写法。
-                fold_key = key
-            continue
-        item = re.match(r"^\s*-\s+(.+?)\s*$", line)
-        if item and current_key:
-            # 空 key 的占位 None 会挡住 setdefault，先归一再 append，
-            # 否则「key: + - item」形式的列表字段会整体静默丢失。
-            if values.get(current_key) is None:
-                values[current_key] = []
-            values[current_key].append(item.group(1).strip('"\''))
-            continue
-        continuation = line.strip()
-        if re.match(r"^\s+[^\s:]+\s*:(\s|$)", line):
-            # 缩进的 key: value 行属于嵌套结构（如 entity_salience/tagging），
-            # PyYAML 会解析为嵌套 mapping 而非标量折行；不支持但须终止挂靠，
-            # 防止被当成正文拼进标量值。
-            fold_key = None
-            continue
-        if (
-            continuation
-            and not continuation.startswith("#")
-            and fold_key
-            and line[:1].isspace()
-        ):
-            # 折行标量续行：PyYAML 把单换行折叠为空格，这里按同语义拼接，
-            # 防止多行 summary 等折行内容被静默丢弃；缩进注释行与 PyYAML
-            # 一致按注释剥离，顶格非 key 行不拼接（安全忽略）。
-            base = values[fold_key]
-            values[fold_key] = f"{base} {continuation}" if base else continuation
-    return values, content, None
+    # 解析实现在共享模块 frontmatter_parse（与 workspace_doctor /
+    # workspace_status 同源，防三份降级解析器各自漂移）。
+    return parse_frontmatter_file(path)
 
 
 def as_list(value: Any) -> list[str]:

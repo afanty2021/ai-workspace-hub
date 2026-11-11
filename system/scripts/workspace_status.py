@@ -11,10 +11,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:  # Core Mode remains dependency-free.
-    yaml = None
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from frontmatter_parse import parse_frontmatter_file  # noqa: E402
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -32,35 +32,11 @@ def find_workspace_root(start: Path) -> Path:
 
 
 def parse_frontmatter(path: Path) -> dict[str, Any]:
-    try:
-        content = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError):
-        return {}
-    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", content, re.DOTALL)
-    if not match:
-        return {}
-    if yaml is not None:
-        try:
-            payload = yaml.safe_load(match.group(1)) or {}
-            return payload if isinstance(payload, dict) else {}
-        except yaml.YAMLError:
-            return {}
-
-    values: dict[str, Any] = {}
-    for line in match.group(1).splitlines():
-        field = re.match(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$", line)
-        if not field:
-            continue
-        value = field.group(2).strip().strip('"\'')
-        if value.startswith("[") and value.endswith("]"):
-            values[field.group(1)] = [
-                item.strip().strip('"\'')
-                for item in value[1:-1].split(",")
-                if item.strip()
-            ]
-        else:
-            values[field.group(1)] = value or None
-    return values
+    # 解析实现在共享模块 frontmatter_parse（与 knowledge_lifecycle /
+    # workspace_doctor 同源，防三份降级解析器各自漂移）；错误时返回 {}
+    # 与旧降级行为一致（status 看板容错读，不因单文件损坏中断）。
+    meta, _, _error = parse_frontmatter_file(path)
+    return meta
 
 
 def relative(path: Path, root: Path) -> str:

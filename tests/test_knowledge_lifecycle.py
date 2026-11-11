@@ -3,12 +3,25 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from _test_paths import REPO_ROOT
+
+# frontmatter_parse 须与 knowledge_lifecycle 内部 import 的是同一个
+# sys.modules 实例，mock.patch.object(FM, "yaml") 才能真正切换解析路径。
+sys.path.insert(0, str(REPO_ROOT / "system" / "scripts"))
+import frontmatter_parse as FM  # noqa: E402
+
+# 副本陷阱哨兵：若 FM 是 spec_from_file_location 等方式加载的副本
+# （不共享 globals），下面的 fallback 测试会静默假绿（PyYAML 语义恰好
+# 同样满足多数断言），此断言让回归在此处响亮失败。
+assert FM is sys.modules["frontmatter_parse"], (
+    "FM 必须是 sys.modules 里的同一 frontmatter_parse 实例"
+)
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -352,15 +365,23 @@ review_due: 2099-01-01
 based_on:
 - R1
 - R2
+- "R3-quoted"
 recall_signals:
 - 链内原型分布
 - 商品冲击
 tags: [估值, 产业链]
+cache_meta: {}
 decision_scenarios:
   换行直接缩进写正文首段
   第二段续行
 entity_salience:
   603993.SH: core
+  dormant_flag: null
+  empty_flag:
+  quoted_empty_n: ""
+quoted_note: '单引号标量值'
+quoted_note_dq: "双引号标量值"
+quoted_empty: ''
 related_note: 嵌套段后的标量字段
 """
 
@@ -371,12 +392,10 @@ related_note: 嵌套段后的标量字段
             "fallback.md",
             self.FALLBACK_FRONTMATTER,
         )
-        with mock.patch.object(KNOWLEDGE, "yaml", None), mock.patch(
-            "sys.stderr"
-        ):
+        with mock.patch.object(FM, "yaml", None), mock.patch("sys.stderr"):
             meta, _, error = KNOWLEDGE.read_page(path)
         self.assertIsNone(error)
-        self.assertEqual(meta["based_on"], ["R1", "R2"])
+        self.assertEqual(meta["based_on"], ["R1", "R2", "R3-quoted"])
         self.assertEqual(meta["recall_signals"], ["链内原型分布", "商品冲击"])
         self.assertEqual(meta["tags"], ["估值", "产业链"])
         self.assertEqual(
@@ -388,8 +407,24 @@ related_note: 嵌套段后的标量字段
         self.assertEqual(
             meta["decision_scenarios"], "换行直接缩进写正文首段 第二段续行"
         )
-        # 嵌套字段不支持（返回 None），但嵌套段不得吞掉后续字段。
-        self.assertIsNone(meta.get("entity_salience"))
+        # 一层嵌套 dict 在降级模式下可解析（与 PyYAML 等价），
+        # 嵌套值同款 null/~ 归一、裸空值→None、带引号空串→''。
+        self.assertEqual(
+            meta.get("entity_salience"),
+            {
+                "603993.SH": "core",
+                "dormant_flag": None,
+                "empty_flag": None,
+                "quoted_empty_n": "",
+            },
+        )
+        # 单/双引号剥壳后保留纯值，两侧引号各自锁定（防单边剥壳回归）。
+        self.assertEqual(meta["quoted_note"], "单引号标量值")
+        self.assertEqual(meta["quoted_note_dq"], "双引号标量值")
+        # 带引号空串保持 ''（PyYAML 语义），不落 None。
+        self.assertEqual(meta["quoted_empty"], "")
+        # 内联空 dict 对齐 PyYAML 空 dict 语义（非字符串 '{}'）。
+        self.assertEqual(meta.get("cache_meta"), {})
         self.assertEqual(meta["related_note"], "嵌套段后的标量字段")
 
     def test_fallback_parser_matches_pyyaml_on_supported_subset(self) -> None:
@@ -401,9 +436,7 @@ related_note: 嵌套段后的标量字段
         )
         pyyaml_meta, _, error = KNOWLEDGE.read_page(path)
         self.assertIsNone(error)
-        with mock.patch.object(KNOWLEDGE, "yaml", None), mock.patch(
-            "sys.stderr"
-        ):
+        with mock.patch.object(FM, "yaml", None), mock.patch("sys.stderr"):
             fallback_meta, _, _ = KNOWLEDGE.read_page(path)
         for field in (
             "based_on",
@@ -412,6 +445,11 @@ related_note: 嵌套段后的标量字段
             "summary",
             "promoted_to",
             "decision_scenarios",
+            "entity_salience",
+            "cache_meta",
+            "quoted_note",
+            "quoted_note_dq",
+            "quoted_empty",
             "related_note",
         ):
             self.assertEqual(
@@ -437,9 +475,7 @@ summary: x
 review_due: 2099-01-01
 """,
         )
-        with mock.patch.object(KNOWLEDGE, "yaml", None), mock.patch(
-            "sys.stderr"
-        ):
+        with mock.patch.object(FM, "yaml", None), mock.patch("sys.stderr"):
             meta, _, error = KNOWLEDGE.read_page(path)
         self.assertIsNone(error)
         self.assertEqual(meta["title"], "首行")
@@ -459,10 +495,10 @@ summary: x
 review_due: 2099-01-01
 """,
         )
-        original_flag = KNOWLEDGE._FALLBACK_WARNING_SHOWN
-        KNOWLEDGE._FALLBACK_WARNING_SHOWN = False
+        original_flag = FM._FALLBACK_WARNING_SHOWN
+        FM._FALLBACK_WARNING_SHOWN = False
         try:
-            with mock.patch.object(KNOWLEDGE, "yaml", None):
+            with mock.patch.object(FM, "yaml", None):
                 with mock.patch("sys.stderr") as stderr:
                     KNOWLEDGE.read_page(path)
                     KNOWLEDGE.read_page(path)
@@ -472,7 +508,7 @@ review_due: 2099-01-01
                 if call.args and "降级 frontmatter 解析器" in call.args[0]
             ]
         finally:
-            KNOWLEDGE._FALLBACK_WARNING_SHOWN = original_flag
+            FM._FALLBACK_WARNING_SHOWN = original_flag
         self.assertEqual(len(warning_writes), 1)
 
 
