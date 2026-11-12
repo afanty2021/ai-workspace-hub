@@ -191,12 +191,15 @@ class EastmoneySecidContractTests(unittest.TestCase):
         hist_only = set(update_cross_asset_history.CROSS_ASSET_HISTORY_SECIDS) - set(
             fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS)
         # 000660.KS：韩股 keyless 快照独苗（177 段），无历史回补需求。
+        # 000300（沪深300）：历史权威时序走 index/series 核心指数管道
+        # （mootdx index_bars，update_market_series._CORE_INDICES），不进
+        # push2his 回补表——快照走东财 1.000300 + 腾讯/新浪 sh000300 双备份。
         # DX-Y.NYB：实时主源是新浪 DINIW（SINA_GLOBAL_SYMBOLS，不走东财
         # 实时），历史才走东财 100.UDI——评审时误记为「secid 分叉需白名单」，
         # 核实后实为跨源不对称，落此登记集而非交集豁免。
         # 注意 ^SOX 不在此列：历史主源虽是 Nasdaq API，但 251.SOX 在两表
         # 同 secid 保留（东财降级路径 + --tickers 白名单），仍受交集断言约束。
-        LIVE_ONLY = {"000660.KS"}
+        LIVE_ONLY = {"000660.KS", "000300"}
         HISTORY_ONLY = {"DX-Y.NYB"}
         self.assertEqual(
             live_only, LIVE_ONLY,

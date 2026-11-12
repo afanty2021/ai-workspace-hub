@@ -309,10 +309,11 @@ def render_other_movers(
     return "\n".join(rows)
 
 
-# 跨资产例行扫描（Q-20261109-03 德鲁肯米勒借鉴①）：固定顺序对齐 watchlist「海外与
-# 宏观」段与 query_market.LIQUIDITY_TICKERS；quotes 缺的票跳过（抓取失败不造行）。
-# 5d/20d 滚动窗口近似「日线看 8-20 天、周线看 8-20 周」三框，只作观察列不作信号。
-CROSS_ASSET_ORDER = ["^IXIC", "^GSPC", "^DJI", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HSTECH"]
+# 跨资产例行扫描（Q-20261109-03 德鲁肯米勒借鉴①）：固定顺序对齐 watchlist「A 股
+# 核心指数」+「海外与宏观」两段与 query_market.LIQUIDITY_TICKERS；quotes 缺的票跳过
+# （抓取失败不造行）。5d/20d 滚动窗口近似「日线看 8-20 天、周线看 8-20 周」三框，
+# 只作观察列不作信号。000300 置首（A 股锚，2026-11-12 入池）。
+CROSS_ASSET_ORDER = ["000300", "^IXIC", "^GSPC", "^DJI", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HSTECH"]
 
 _CROSS_ASSET_MARKETS = {"INDEX", "FX", "CMDTY", "FUT"}
 
@@ -320,7 +321,8 @@ CROSS_ASSET_NOTE = (
     "> 口径：日涨跌=抓取时点行情（北京时间下午抓取时美股/商品对应 ET 前一交易日或盘中，"
     "与官方收盘日可能偏移一天）；5d/20d=本地 series 滚动累计（2026-11-09 已完成 800 天回补："
     "^SOX 主源 Nasdaq 官方、XAUUSD=X 主源新浪全球日线、其余东财 push2his，各票 ~2024-09 起"
-    "全窗深度；「—」=样本不足，仅新增票积累期出现）；^TNX/美元指数等口径注记见信息来源段。"
+    "全窗深度；000300 走 index/series 核心指数管道（mootdx，2026-11-03 起）；"
+    "「—」=样本不足，仅新增票积累期出现）；^TNX/美元指数等口径注记见信息来源段。"
     "宏观敏感票裁决前读 `workspace/monitoring/liquidity-dashboard.md`（流动性状态仪表）。"
 )
 
@@ -340,11 +342,16 @@ def load_rolling_stats(
     文件缺失/行数不足/torn 行 → 对应窗口 "—"（积累中），不炸不编数。"""
     from market_data_io import resolve_data_root
 
-    series_dir = (data_root or resolve_data_root()) / "market" / "series"
+    root = data_root or resolve_data_root()
+    series_dir = root / "market" / "series"
     out: dict[str, dict[str, str]] = {}
     for ticker in tickers:
         closes: list[float] = []
         path = series_dir / f"{ticker}.jsonl"
+        # 裸 000/399 交易所指数段：权威时序在 index/series/（核心指数管道，
+        # market_data_io.index_series_file 同口径），market/series 无此文件。
+        if not path.exists() and re.fullmatch(r"(000|399)\d{3}", ticker):
+            path = root / "index" / "series" / f"{ticker}.jsonl"
         try:
             if path.exists():
                 for line in path.read_text(encoding="utf-8").splitlines():

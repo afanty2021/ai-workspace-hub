@@ -40,6 +40,7 @@ _VIEW_PATTERNS = {
 # 对齐（NVDA/000660.KS 个股不入仪表）；口径注记见 generate_daily_report.py
 # SOURCE_CALIBER_NOTES。滚动窗口 5/20/60 近似「日线看 8-20 天、周线看 8-20 周」三框。
 LIQUIDITY_TICKERS: list[tuple[str, str]] = [
+    ("000300", "沪深300"),
     ("^IXIC", "纳斯达克指数"),
     ("^GSPC", "标普500"),
     ("^DJI", "道琼斯"),
@@ -158,15 +159,29 @@ def liquidity_snapshot(con, data_root: Path,
                        windows: tuple[int, ...] = _LIQUIDITY_WINDOWS) -> list[dict[str, Any]]:
     """跨资产流动性快照：每票最新值 + 各窗口滚动涨跌（%），行数不足的窗口置 None。
 
-    纯本地读 market/series/（零网络）；跨资产票由日报持久化钩子逐日累积，历史深度
+    纯本地读 series 视图（零网络）；跨资产票由日报持久化钩子逐日累积，历史深度
     不足属预期（「积累中」，Q-20261109-03）。缺文件的票给 n=0 行不炸——仪表宁缺
-    勿假。"""
+    勿假。裸 000/399 指数段（000300 沪深300，2026-11-12 入池）经 _view_for 路由到
+    index_series 视图；该目录缺失（全新环境）时相应票降级 n=0 而非整表崩。"""
     ensure_view(con, data_root, "market_quotes")
+    index_view_ready = True
+    try:
+        ensure_view(con, data_root, "index_series")
+    except RuntimeError:
+        index_view_ready = False
     out: list[dict[str, Any]] = []
     for ticker, name in LIQUIDITY_TICKERS:
+        view = _view_for(ticker)
+        if view == "index_series" and not index_view_ready:
+            out.append({
+                "ticker": ticker, "name": name, "n": 0,
+                "as_of": None, "close": None,
+                **{f"pct_{w}d": None for w in windows},
+            })
+            continue
         rows = _rows(
             con,
-            "SELECT date, close FROM market_quotes WHERE filename LIKE ? "
+            f"SELECT date, close FROM {view} WHERE filename LIKE ? "
             "AND close IS NOT NULL ORDER BY date",
             (f"%{ticker}.jsonl",))
         closes = [r["close"] for r in rows]

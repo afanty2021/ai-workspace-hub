@@ -563,6 +563,15 @@ TENCENT_HK_INDEX_SYMBOLS = {"HSTECH": "hkHSTECH"}
 # generate_daily_report.py — same cross-source volume rule, proven there).
 TENCENT_US_INDEX_SYMBOLS = {"^GSPC": "INX", "^DJI": "DJI", "^IXIC": "IXIC"}
 
+# CN exchange indexes for bare 000/399 codes (2026-11-12 wiring): sh000300
+# carries CSI 300 through the same stock-layout response as sh600276 (live
+# probe 2026-11-12: 4097.26/+0.53% matches sina sh000300 digit-for-digit;
+# pre_close 4075.71 matches index/series/000300.jsonl). Bare codes must NOT
+# enter _cn_quote_symbol — a bare 6-digit is ambiguous (000001 = 上证指数 on
+# SH but 平安银行 on SZ), so index rows resolve only via this explicit table
+# (same pattern as TENCENT_HK_INDEX_SYMBOLS above).
+TENCENT_CN_INDEX_SYMBOLS = {"000300": "sh000300"}
+
 
 def _us_quote_symbol(ticker: str, market: str) -> str | None:
     """NVDA (market=US) -> 'NVDA' for the Tencent us prefix; None otherwise.
@@ -763,6 +772,7 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
     us_symbol = _us_quote_symbol(ticker, market)
     hk_index_symbol = TENCENT_HK_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
     us_index_symbol = TENCENT_US_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    cn_index_symbol = TENCENT_CN_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
     if hk_code is not None:
         symbol = f"hk{hk_code}"
     elif us_symbol is not None:
@@ -771,6 +781,8 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
         symbol = f"us{us_index_symbol}"
     elif hk_index_symbol is not None:
         symbol = hk_index_symbol
+    elif cn_index_symbol is not None:
+        symbol = cn_index_symbol
     else:
         symbol = _cn_quote_symbol(ticker)
     if symbol is None:
@@ -840,6 +852,12 @@ def fetch_tencent_quote(ticker: str, market: str) -> dict[str, Any] | None:
 # Field layout differs from the CN series — see _fetch_sina_hk_index_quote.
 SINA_HK_INDEX_SYMBOLS = {"HSTECH": "rt_hkHSTECH"}
 
+# CN exchange indexes (2026-11-12): sh000300 shares the CN stock layout (live
+# probe — name,open,pre_close,price,high,low,...), so the shared CN parser
+# handles it; no separate fetcher needed. Bare codes never enter
+# _cn_quote_symbol (ambiguity note at TENCENT_CN_INDEX_SYMBOLS).
+SINA_CN_INDEX_SYMBOLS = {"000300": "sh000300"}
+
 
 def _fetch_sina_hk_index_quote(ticker: str, symbol: str) -> dict[str, Any] | None:
     """rt_hk series layout (comma-separated): 0=code 1=name 2=open 3=pre_close
@@ -894,7 +912,9 @@ def fetch_sina_quote(ticker: str, market: str) -> dict[str, Any] | None:
     hk_index_symbol = SINA_HK_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
     if hk_index_symbol is not None:
         return _fetch_sina_hk_index_quote(ticker, hk_index_symbol)
-    symbol = _cn_quote_symbol(ticker)
+    symbol = SINA_CN_INDEX_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if symbol is None:
+        symbol = _cn_quote_symbol(ticker)
     if symbol is None:
         return None
     try:
@@ -1137,6 +1157,10 @@ EASTMONEY_GLOBAL_SYMBOLS = {
     "^TNX": "171.US10Y",        # 美国10年期国债收益率，实时（FRED 是 T+1 官方序列，降级备用）
     "NQ00Y": "103.NQ00Y",       # 小型纳指当月连续（CME E-mini Nasdaq 100 期货），实时
     "HSTECH": "124.HSTECH",     # 恒生科技指数（124=东财港股指数段；2026-11-09 实测 11-06 收 4078.23 与 R20261108-13 对拍一致）
+    "000300": "1.000300",       # 沪深300指数（1=东财沪市指数段；2026-11-12 接线。push2
+                                # 本机反爬断连时段由腾讯/新浪 sh000300 双备份承载——
+                                # 2026-11-12 盘中 4097.26/+0.53% 两源逐位一致、昨收
+                                # 4075.71 对拍 index/series/000300.jsonl 逐位一致）
 }
 
 
