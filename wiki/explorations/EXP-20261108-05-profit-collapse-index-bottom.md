@@ -9,7 +9,7 @@ summary: 指数/板块级下跌先拆归因：利润塌缩型（跌分母不跌�
   2026（-44.8% 回撤中利润 -31%、前瞻 PE 仅 17.7→16.9x；分位三低但溢价仅 +1.1pp vs 2024-01 底部 +3.8pp）。
 created_at: 2026-11-08
 updated_at: 2026-11-12
-last_reviewed_at: 2026-11-08
+last_reviewed_at: 2026-11-12
 review_due: 2027-01-31
 based_on:
 - output/research/2026-11-08-hstech-index.md

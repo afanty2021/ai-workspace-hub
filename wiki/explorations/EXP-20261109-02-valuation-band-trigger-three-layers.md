@@ -6,7 +6,7 @@ status: tentative
 summary: 指数 Forward P/E 跌破 -1σ（13.9x）后 1-3 年后续回报历史上一致为正（2002-03/2008-11/2011/2012-13 四时段），但三层限制：①分母陷阱——深跌常是价格先崩、盈利预测未砍，大底反在 P/E 回升段（2009-03 大底 forward P/E 反弹 15-20x），E 下修中的低倍数=假便宜；②分布漂移——静态 30 年带系统性迟到（1998/2020-03/2022-10 三个好买点均未触带）；③稀缺性=机会成本（下方时间约 10-15%）。执行映射：触发=加仓斜率（分批+三件套确认：E 修正收敛/信用利差见顶/流动性转向），不是入场开关；13.9x 不是固定点位（触发线是 E 的函数）。
 created_at: 2026-11-09
 updated_at: 2026-11-12
-last_reviewed_at: 2026-11-09
+last_reviewed_at: 2026-11-12
 review_due: 2027-02-28
 based_on:
 - /Users/berton/Github/Invest/8CDCF33145D4373619FD9599B68458DE.jpg（J.P. Morgan Guide to the Markets — U.S.，数据 as of 2026-11-05；2026-11-09 估值带问答会话）
@@ -18,7 +18,8 @@ domain:
 - 估值
 - 指数
 - 裁决框架
-ticker: []
+ticker:
+- 000300.SH
 concepts:
 - 估值带三层读法
 - 分母陷阱
@@ -42,6 +43,7 @@ related:
 - '[[EXP-20261108-05-profit-collapse-index-bottom]]'
 - '[[EXP-20261106-03-rightside-confirmation-opportunity-cost]]'
 - '[[德鲁肯米勒]]'
+- '[[000300]]'
 entity_salience: {}
 tagging:
   status: completed
