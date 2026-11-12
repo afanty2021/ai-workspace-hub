@@ -183,3 +183,52 @@ class TemplateContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DerivedRowTests(unittest.TestCase):
+    """派生行（Q-20261112-24）：COMEX-LME 价差 / 金铜比。
+
+    期望值硬编码（换算系数 2204.62 lb/公吨 若被误改如 2000，本组全红）。
+    """
+
+    @staticmethod
+    def _q(extra: list[dict]) -> list[dict]:
+        return list(_QUOTES) + extra  # _QUOTES 已含 HG=F 伦敦铜 13755.5
+
+    def test_comex_lme_spread_cents_scale(self) -> None:
+        # HG00Y 报美分/磅（东财 101.HG00Y 实测刻度）：629¢/lb
+        # 629 × 2204.62 / 100 = 13,867.06 USD/t；− 13,755.5 = +111.56 → 升水
+        quotes = self._q([{"ticker": "HG00Y", "name": "COMEX铜连续", "market": "CMDTY",
+                           "price": 629.0, "changesPercentage": 0.1}])
+        text = render_cross_asset_table(quotes)
+        self.assertIn("| COMEX-LME | 铜价差（关税交易仪表） | +112 USD/t | 升水 |", text)
+
+    def test_comex_lme_spread_usd_scale_normalized(self) -> None:
+        # 同价以美元/磅刻度（6.29 USD/lb）出现 → <20 归一 ×100，结果须与上例逐位一致
+        quotes = self._q([{"ticker": "HG00Y", "name": "COMEX铜连续", "market": "CMDTY",
+                           "price": 6.29, "changesPercentage": 0.1}])
+        self.assertIn("+112 USD/t | 升水", render_cross_asset_table(quotes))
+
+    def test_comex_lme_backwardation(self) -> None:
+        # LME 抬到 14,000 → 13,867.06 − 14,000 = −132.94 → 倒挂
+        quotes = self._q([{"ticker": "HG00Y", "name": "COMEX铜连续", "market": "CMDTY",
+                           "price": 629.0, "changesPercentage": 0.1},
+                          {"ticker": "HG=F", "name": "伦敦铜", "market": "CMDTY",
+                           "price": 14000.0, "changesPercentage": 0.0}])
+        self.assertIn("-133 USD/t | 倒挂", render_cross_asset_table(quotes))
+
+    def test_gold_copper_ratio_and_missing_comex_leg(self) -> None:
+        # 缺 HG00Y：COMEX-LME 整行跳过；金铜比（金 4000 / 铜 13755.5 = 0.2908）仍在
+        quotes = self._q([{"ticker": "XAUUSD=X", "name": "伦敦金", "market": "CMDTY",
+                           "price": 4000.0, "changesPercentage": 0.0}])
+        text = render_cross_asset_table(quotes)
+        rows = [ln for ln in text.splitlines() if ln.startswith("| COMEX-LME")]
+        self.assertEqual(rows, [])
+        self.assertIn("| 金铜比 | 伦敦金/伦铜 | 0.2908 | — | — | — |", text)
+
+    def test_no_cmdty_legs_no_derived_rows(self) -> None:
+        # 无 HG=F（也删金铜比腿）：两派生行都不出
+        quotes = [q for q in _QUOTES if q["ticker"] != "HG=F"]
+        text = render_cross_asset_table(quotes)
+        self.assertNotIn("COMEX-LME | 铜价差", text)
+        self.assertNotIn("金铜比", text)

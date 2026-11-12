@@ -81,12 +81,22 @@ def ensure_view(con, data_root: Path, view: str) -> None:
         f"SELECT * FROM read_json_auto('{pattern}', filename=true, ignore_errors=true)")
 
 
+_VIEWS = frozenset({"market_quotes", "index_series", "sector_index"})
+
+
 def _view_for(ticker: str) -> str:
     """裸 6 位按段位路由：88 前缀 = TDX 板块 → sector_index；000/399 前缀 = 交易所
     指数 → index_series；其余（.SH/.SZ 后缀、海外票、其它裸代码）→ market_quotes。
 
     段位→市场口径唯一定义在 market_data_io.py（_CN_PREFIX_WHITELIST 邻近注释块），
-    本函数是同一口径的查询侧投影——改段位先改那边。"""
+    本函数是同一口径的查询侧投影——改段位先改那边。返回值进 f-string SQL，
+    只许 _VIEWS 白名单字面量（防注入防线 + 风格统一）。"""
+    view = _route_view(ticker)
+    assert view in _VIEWS, f"unknown view: {view}"
+    return view
+
+
+def _route_view(ticker: str) -> str:
     if re.fullmatch(r"\d{6}", ticker):
         if ticker.startswith("88"):
             return "sector_index"

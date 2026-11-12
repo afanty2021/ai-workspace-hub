@@ -354,6 +354,9 @@ def load_rolling_stats(
         # market/series 影子文件（000300.jsonl 单行、东财 volume 股口径），
         # 影子存在时回退永不触发，快照序列会静默稀释权威 mootdx 管道。
         # persist 已停写裸码，历史影子一律无视。
+        # 约定前提：A 股个股在 watchlist 中必须带 .SH/.SZ 后缀（parse_watchlist
+        # 口径），否则裸 6 位个股码（如许继 000400）会被本路由静默读
+        # index/series 落空出 "—"——裸 000/399 段位只保留给指数。
         if re.fullmatch(r"(000|399)\d{3}", ticker):
             path = root / "index" / "series" / f"{ticker}.jsonl"
         try:
@@ -422,7 +425,7 @@ def render_cross_asset_table(
         # 两源刻度不同也不至于让价差错 100 倍）。
         if comex < 20:
             comex = comex * 100
-        spread = comex * 2204.62 / 100 - lme  # 1 短吨 = 2204.62 lb
+        spread = comex * 2204.62 / 100 - lme  # 1 公吨 = 2204.62 lb（勿改 2000：短吨是错口径）
         rows.append(
             f"| COMEX-LME | 铜价差（关税交易仪表） | {spread:+.0f} USD/t | "
             f"{'倒挂' if spread < 0 else '升水'} | — | — |"
@@ -1124,7 +1127,7 @@ SOURCE_CALIBER_NOTES = {
     "^GSPC": "标普500（东财 100.SPX 主源，腾讯 usINX 备份；2026-11-11 接线，收盘对拍 AP/CNBC 逐位一致）",
     "^DJI": "道琼斯指数（东财 100.DJIA 主源，腾讯 usDJI 备份；同上接线）",
     "HG=F": "交付口径为 LME 三月铜（USD/吨）；ticker 名义是 COMEX 铜（USD/磅），两者价位差约 4 倍",
-    "HG00Y": "COMEX 铜当月连续（东财 101.HG00Y 主源，新浪 hf_HG 备用，2026-11-12 接线实测对拍昨结 629 ¢/lb 与 11-11 COMEX 收盘 6.29 一致）；报价为美分/磅，价差行已按 1 短吨=2204.62 磅折吨，COMEX-LME 价差=美国精炼铜关税交易退潮仪表（8 月 +700 → 2026-11-12 +32 USD/t）",
+    "HG00Y": "COMEX 铜当月连续（东财 101.HG00Y 主源，新浪 hf_HG 备用，2026-11-12 接线实测对拍昨结 629 ¢/lb 与 11-11 COMEX 收盘 6.29 一致）；报价为美分/磅，价差行已按 1 公吨=2204.62 磅折吨，COMEX-LME 价差=美国精炼铜关税交易退潮仪表（8 月 +700 → 2026-11-12 +32 USD/t）",
     "^TNX": "美十债收益率实时快照（东财 171.US10Y；FRED DGS10 T+1 降级备用）",
     "NQ00Y": "小型纳指当月连续期货实时快照（东财 103.NQ00Y，CME E-mini Nasdaq 100；24 小时交易，日报时点为最新成交）",
     "XAUUSD=X": "现货金（伦敦金），USD/盎司",
