@@ -27,7 +27,7 @@
 grep -rh "^id: RYYYYMMDD" output/research/ --include="*.md" | sort | uniq
 ```
 
-再把公司/主题、ticker、产业链位置、周期阶段、约束类型、催化类型和决策场景写成一组明确关键词。运行（`--research-id` 已被其他报告占用时脚本会拒绝执行并指出占用文件）：
+再把公司/主题、ticker、产业链位置、周期阶段、约束类型、催化类型和决策场景写成一组明确关键词。**先创建报告骨架文件**（`--research-file` 要求文件已存在，脚本会把 `preflight_id / knowledge_used / wiki_pages_loaded` 写进其 frontmatter），再运行（`--research-id` 已被其他报告占用时脚本会拒绝执行并指出占用文件）：
 
 ```bash
 python3 system/scripts/research_preflight.py --root . \
