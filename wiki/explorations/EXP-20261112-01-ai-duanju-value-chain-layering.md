@@ -23,8 +23,8 @@ ticker:
 - 603533
 - 300418
 - 300133
-- "1024"
-- "0772"
+- "1024.HK"
+- "0772.HK"
 concepts:
 - 价值链利润分层
 - 成本倒挂
@@ -54,8 +54,8 @@ entity_salience:
   300364: core
   300418: core
   603533: core
-  1024: core
-  0772: reference
+  1024.HK: core
+  0772.HK: reference
   300133: mention
 tagging:
   status: completed
