@@ -159,6 +159,35 @@ class RepositoryContractTests(unittest.TestCase):
             missing, [], f"DATA-SOURCES.md 缺少接线 token 同步: {missing}"
         )
 
+    def test_fetch_symbol_tables_are_registered_in_agents_md(self) -> None:
+        """反向盲区修根（2026-11-12 r2 评审 I-1，接线文档漏登同族第 5 案风险）：
+        上面的测试只锁「AGENTS 写了 → DATA-SOURCES 必须跟」，而「接线进了
+        fetch_market_data.py 的显式映射表、AGENTS.md 数据源表却零登记」方向
+        无锁——7df7bf0 沪深300 接线即首案（`sh000300`/`1.000300` 五处零登记，
+        靠评审兜住；探测还带出 171.US10Y/100.NDX/109.LCPT/177.000660/DGS10/
+        DINIW/hf_CAD 七个同族存量缺口，已随本测试一并登记）。本测试把方向
+        反过来：全部 *_SYMBOLS 映射表的每个 value 必须在 AGENTS.md 出现
+        （子串级），新接线只改代码不改文档直接红。AGENTS 登记后，反引号
+        包裹的 token 会被上面的测试连锁锁到 DATA-SOURCES，两层互补。
+        """
+        agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        tables = {
+            name: mapping
+            for name, mapping in vars(fetch_market_data).items()
+            if name.endswith("_SYMBOLS") and isinstance(mapping, dict)
+        }
+        self.assertTrue(tables, "fetch_market_data 解析不到任何映射表")
+        missing = sorted(
+            f"{name}: {ticker} -> {symbol}"
+            for name, mapping in tables.items()
+            for ticker, symbol in mapping.items()
+            if symbol not in agents
+        )
+        self.assertEqual(
+            missing, [],
+            f"接线已进映射表但 AGENTS.md 数据源表未登记（同族第 5 案防线）: {missing}",
+        )
+
 
 class EastmoneySecidContractTests(unittest.TestCase):
     """跨模块契约（2026-11-11 max 评审建议落地，同日 I-1 secid 测试盲区
