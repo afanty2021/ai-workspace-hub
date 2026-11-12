@@ -349,8 +349,12 @@ def load_rolling_stats(
         closes: list[float] = []
         path = series_dir / f"{ticker}.jsonl"
         # 裸 000/399 交易所指数段：权威时序在 index/series/（核心指数管道，
-        # market_data_io.index_series_file 同口径），market/series 无此文件。
-        if not path.exists() and re.fullmatch(r"(000|399)\d{3}", ticker):
+        # market_data_io.index_series_file 同口径）。路由必须无条件先于任何
+        # path.exists() 判断（2026-11-12 C-1 修根）：persist 钩子曾对裸码写
+        # market/series 影子文件（000300.jsonl 单行、东财 volume 股口径），
+        # 影子存在时回退永不触发，快照序列会静默稀释权威 mootdx 管道。
+        # persist 已停写裸码，历史影子一律无视。
+        if re.fullmatch(r"(000|399)\d{3}", ticker):
             path = root / "index" / "series" / f"{ticker}.jsonl"
         try:
             if path.exists():
@@ -1098,6 +1102,7 @@ SOURCE_CALIBER_NOTES = {
     "03800.HK": "HKD 计价；港股成交量单位为股（CN 侧为手，跨市场比较需 ×/÷100）",
     "562800.SH": "mootdx/TDX 对沪市 56xxxx 段 ETF 价位系统性 ×10（精度位元数据缺陷，2026-11-06 八服务器实测；涨跌幅正确，价格/昨收/高低偏大 10 倍，用户拍板保持现状记档）",
     "HSTECH": "指数 volume/amount 无统一口径：主源东财 volume ~2e9 级，备份源腾讯 ~4e6 / 新浪 ~4e7 级且两备份恒差 10×（同一底层数不同缩放，2026-11-09 对拍：腾讯 4,212,639.35 vs 新浪 42,126,393.54 数字逐位同）；价格/涨跌幅三源逐位一致，volume/amount 不得跨源比较（max 评审 M-5）",
+    "000300": "沪深300 指数：快照价格/涨跌幅三源一致（东财 1.000300 主源，腾讯/新浪 sh000300 双备份，2026-11-12 对拍逐位一致）；volume 口径东财快照=股、mootdx 权威序列（index/series）=手，差 100×，不得跨源比较（r2 评审 M-7；persist 钩子已停写裸码，market/series 无此票影子行）",
 }
 
 

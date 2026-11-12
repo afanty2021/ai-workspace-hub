@@ -69,6 +69,12 @@ _US_REG_CLOSE_ET = dt_time(16, 0)   # 美股常规收盘；半日提前收盘不
 # bar）顶上即事故复发。eod/fred 收盘口径、sina/eastmoney 现价口径（日期=抓取日，
 # 自洽）、CN 侧批量权威覆盖——均不过闸。非美股票经四源抓取最坏延一天，永不丢行。
 _US_REALTIME_SOURCES = frozenset({"nasdaq", "fmp", "finnhub", "yfinance"})
+# 裸 000/399 交易所指数段（000300 沪深300 等）：series 权威写者是
+# update_market_series._CORE_INDICES（mootdx → index/series/），query_market._view_for
+# 与 load_rolling_stats 对裸码也只读 index/series 视图。market/series 的裸码行是
+# 任何读者都够不着的影子文件，且东财快照 volume 是股、mootdx 序列是手（差 100×），
+# 一旦被滚动窗口读到即口径污染——2026-11-12 C-1 修根，停写。
+_BARE_INDEX_CODE = re.compile(r"(000|399)\d{3}")
 
 
 def _us_session_closed(row_day: str, source: str | None, now_et: datetime) -> bool:
@@ -130,6 +136,9 @@ def append_series_from_snapshot(snapshot: dict[str, Any], data_root: Path,
     total = 0
     for quote in snapshot.get("quotes") or []:
         ticker = quote.get("ticker")
+        if ticker and _BARE_INDEX_CODE.fullmatch(ticker):
+            log(f"Note: {ticker} 裸指数码跳过 series upsert（权威写者 update_market_series → index/series/）")
+            continue
         row = quote_to_series_row(quote)
         if not ticker or row is None:
             if ticker:

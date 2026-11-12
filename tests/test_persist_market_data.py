@@ -99,6 +99,29 @@ class SeriesAppendTests(unittest.TestCase):
         self.assertTrue(series_file(self.root, "600276.SH").exists())
         self.assertFalse(series_file(self.root, "^SOX").exists())  # 坏日期只进快照不进 series
 
+    def test_bare_index_codes_skip_series_upsert(self) -> None:
+        # C-1 修根锁（2026-11-12 max 评审）：裸 000/399 指数段权威时序由
+        # update_market_series 写 index/series/，query_market._view_for 与
+        # load_rolling_stats 对裸码也只读 index/series 视图——market/series 的
+        # 裸码行是任何读者都够不着的影子文件，且东财快照 volume 是股、mootdx
+        # 序列是手（差 100×）。当日 000300.jsonl 已实际写出并把日报 5d/20d 打成
+        # 「—」，此处锁死停写；删掉 _BARE_INDEX_CODE 跳过 → n=3 且影子重生，测试红。
+        n = pmd.append_series_from_snapshot(
+            _snapshot([_quote("000300"), _quote("399006"), _quote("600276.SH")]), self.root)
+        self.assertEqual(n, 1)
+        self.assertFalse(series_file(self.root, "000300").exists())
+        self.assertFalse(series_file(self.root, "399006").exists())
+        self.assertTrue(series_file(self.root, "600276.SH").exists())
+
+    def test_bare_code_skip_never_touches_suffixed_stocks(self) -> None:
+        # (000|399)\d{3} 只对裸码 fullmatch：带后缀的深市个股（000001.SZ 平安银行）
+        # 必须照常入 series——歧义防御不能误伤个股管道。
+        n = pmd.append_series_from_snapshot(
+            _snapshot([_quote("000001.SZ"), _quote("399001.SZ")]), self.root)
+        self.assertEqual(n, 2)
+        self.assertTrue(series_file(self.root, "000001.SZ").exists())
+        self.assertTrue(series_file(self.root, "399001.SZ").exists())
+
     def test_snapshot_writer_fills_null_only(self) -> None:
         # 预置批量权威行（完整 OHLCV），钩子行只能补 null 不能覆盖
         pmd.append_series_from_snapshot(_snapshot([_quote("600276.SH")]), self.root)

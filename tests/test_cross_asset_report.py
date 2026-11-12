@@ -107,6 +107,38 @@ class RollingStatsTests(unittest.TestCase):
         self.assertEqual(stats["^TNX"]["5d"], "—")   # 基点 0.0 不炸
         self.assertEqual(stats["^TNX"]["20d"], "—")  # 行数不足
 
+    def test_bare_index_codes_route_to_index_series_unconditionally(self) -> None:
+        # C-1 修根锁（2026-11-12 max 评审）：裸 000/399 段路由必须无条件先于
+        # path.exists()——persist 钩子曾写出 market/series/000300.jsonl 影子
+        # （东财快照序列），旧序「影子存在→不回退」让快照序列静默顶掉权威
+        # mootdx 管道、当日日报 5d/20d 误出「—」。变异：把路由改回
+        # `not path.exists() and` 前置守卫 → 000300 读到影子 +2.50/—，测试红。
+        index_dir = self.root / "index" / "series"
+        index_dir.mkdir(parents=True)
+        # 权威 index/series/000300.jsonl：21 行，closes[-21]=80、末 6 行 100..105
+        # → 5d=+5.00、20d=(105-80)/80=+31.25（20d 只在权威文件凑得够 21 行）。
+        closes = [80.0] + [90.0] * 14 + [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+        (index_dir / "000300.jsonl").write_text(
+            "".join(
+                f'{{"date": "2026-10-{d:02d}", "close": {c}, "source": "mootdx-index"}}\n'
+                for d, c in zip(range(1, 22), closes)),
+            encoding="utf-8")
+        # 影子：market/series/000300.jsonl 6 行 200..205（被误读时 5d=+2.50）。
+        (self.root / "market" / "series" / "000300.jsonl").write_text(
+            "".join(
+                f'{{"date": "2026-11-{d:02d}", "close": {200 + i}, "source": "eastmoney"}}\n'
+                for i, d in enumerate(range(2, 8))),
+            encoding="utf-8")
+        # 反向案例：裸码只有 market/series 影子、无权威文件 → 一律 "—"（宁缺勿假，
+        # 旧序会读影子算出 +X.XX 假值）。
+        (self.root / "market" / "series" / "399006.jsonl").write_text(
+            '{"date": "2026-11-06", "close": 2655.5, "source": "eastmoney"}\n'
+            '{"date": "2026-11-07", "close": 2660.0, "source": "eastmoney"}\n', encoding="utf-8")
+        stats = load_rolling_stats(["000300", "399006"], self.root)
+        self.assertEqual(stats["000300"]["5d"], "+5.00")    # 权威管道，非影子的 +2.50
+        self.assertEqual(stats["000300"]["20d"], "+31.25")
+        self.assertEqual(stats["399006"]["5d"], "—")         # 裸码无视 market/series 影子
+
     def test_movers_tables_carry_new_columns(self) -> None:
         rolling = {"600276.SH": {"5d": "+1.37", "20d": "-3.21"}}
         key_text = render_key_movers(

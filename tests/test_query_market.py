@@ -189,6 +189,40 @@ class QueryTests(unittest.TestCase):
         self.assertAlmostEqual(tnx["pct_1d"], 0.97)   # (104-103)/103
         self.assertIsNone(tnx["pct_5d"])              # 基点 0.0 → None 不炸
 
+    def test_liquidity_reads_bare_index_from_index_series_view(self) -> None:
+        # C-1/I-4 锁（2026-11-12）：liquidity_snapshot 必须经 _view_for 路由读
+        # index_series 视图——000300 权威序列在 index/series/，market/series 无
+        # 此文件（persist 已停写裸码）。路由回归（改回硬编码 market_quotes）会让
+        # 本票 n=0，测试红。
+        (self.root / "index" / "series" / "000300.jsonl").write_text(
+            '{"date": "2026-11-03", "close": 4075.71, "source": "mootdx-index"}\n'
+            '{"date": "2026-11-04", "close": 4043.93, "source": "mootdx-index"}\n',
+            encoding="utf-8")
+        snaps = self.qm.liquidity_snapshot(self.con, self.root)
+        hs300 = [s for s in snaps if s["ticker"] == "000300"][0]
+        self.assertEqual(hs300["n"], 2)
+        self.assertEqual(hs300["close"], 4043.93)
+        self.assertAlmostEqual(hs300["pct_1d"], -0.78, places=2)  # 快照四舍五入 2 位
+        # 置首契约：A 股锚 000300 在纳斯达克之前。
+        self.assertLess([s["ticker"] for s in snaps].index("000300"),
+                        [s["ticker"] for s in snaps].index("^IXIC"))
+
+    def test_liquidity_degrades_when_index_series_dir_missing(self) -> None:
+        # C-1/I-4 锁（2026-11-12）：全新环境无 index/series/ 目录时 000300 票降级
+        # n=0 而非 ensure_view RuntimeError 炸整表——删掉 index_view_ready 的
+        # try/except 分支本测红；其余票不受连坐（仪表宁缺勿假）。
+        import shutil
+
+        shutil.rmtree(self.root / "index" / "series")
+        snaps = self.qm.liquidity_snapshot(self.con, self.root)
+        hs300 = [s for s in snaps if s["ticker"] == "000300"][0]
+        self.assertEqual(hs300["n"], 0)
+        self.assertIsNone(hs300["close"])
+        self.assertIsNone(hs300["pct_1d"])
+        self.assertEqual(len(snaps), len(self.qm.LIQUIDITY_TICKERS))
+        tnx = [s for s in snaps if s["ticker"] == "^TNX"][0]
+        self.assertEqual(tnx["n"], 5)  # market_quotes 侧照常
+
     def test_liquidity_md_output(self) -> None:
         # --md：markdown 表输出（monitoring 仪表直接贴）
         stdout = io.StringIO()

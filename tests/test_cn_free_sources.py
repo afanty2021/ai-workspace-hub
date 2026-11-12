@@ -91,6 +91,22 @@ TENCENT_US_PAYLOAD = (
 TENCENT_US_TRUNCATED_PAYLOAD = (
     'v_usFCX="200~x~FCX.N~59.42~57.90~59.09~16248755' + "~x" * 27 + '";'
 )
+# CN exchange index via the stock layout (2026-11-12 wiring, close-time probe
+# 2026-11-12: close 4043.93/-0.78% matches the mootdx index/series 11-12 row
+# digit-for-digit; pre_close 4075.71 = the 11-11 close). Index volume/amount
+# calibers differ across sources (HSTECH precedent) — never cross-compare.
+TENCENT_CN_INDEX_PAYLOAD = (
+    'v_sh000300="1~沪深300指数~000300~4043.93~4075.71~4063.25~175464628'
+    + "~x" * 23
+    + '~20261112150003~-31.78~-0.78~4100.05~4034.52";'
+)
+# Same CN stock layout for sina (2026-11-12 close probe). Field order matches
+# SINA_PAYLOAD: 0=name 1=open 2=pre_close 3=price 4=high 5=low 8=volume(shares)
+# 30=date. Sina omits change; the parser computes it from pre_close.
+SINA_CN_INDEX_PAYLOAD = (
+    'var hq_str_sh000300="沪深300,4063.25,4075.71,4043.93,4100.05,4034.52,'
+    '4043.93,4043.93,17546462800,567890000000,' + "x," * 20 + '2026-11-12,15:00:03,00";'
+)
 EASTMONEY_PAYLOAD = {
     "data": {
         "f43": 48.36,
@@ -403,6 +419,32 @@ class TencentQuoteTests(unittest.TestCase):
         # (e.g. a hypothetical bare NDX) must not probe a wild usNDX request.
         self.assertIsNone(fetch_tencent_quote("NDX", "INDEX"))
 
+    @patch("fetch_market_data.requests.get")
+    def test_cn_index_ticker_maps_to_sh_prefix_via_explicit_table(self, mock_get: MagicMock) -> None:
+        # C-1/I-4 锁（2026-11-12 接线）：裸 000300 走显式 CN 指数表——裸码禁入
+        # _cn_quote_symbol，因为 000001 在 SH=上证指数/SZ=平安银行有歧义。删掉
+        # TENCENT_CN_INDEX_SYMBOLS 或其 elif 分支 → 本测请求侧/数值侧双双变红。
+        mock_get.return_value = _text_response(TENCENT_CN_INDEX_PAYLOAD)
+
+        quote = fetch_tencent_quote("000300", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4043.93)
+        self.assertEqual(quote["previousClose"], 4075.71)
+        self.assertEqual(quote["open"], 4063.25)
+        self.assertEqual(quote["change"], -31.78)
+        self.assertEqual(quote["changesPercentage"], -0.78)
+        self.assertEqual(quote["dayHigh"], 4100.05)
+        self.assertEqual(quote["dayLow"], 4034.52)
+        # CN 时间戳走 [:8] 原始切片（YYYYMMDD），ISO 归一发生在 build_quote_record。
+        self.assertEqual(quote["tradeDate"], "20261112")
+        self.assertEqual(quote["source"], "tencent")
+        self.assertIn("q=sh000300", str(mock_get.call_args))
+        # 歧义防御同锁：裸 000001 不在任何显式表 → 不发请求干净拒绝。
+        self.assertIsNone(fetch_tencent_quote("000001", "CN"))
+        self.assertEqual(mock_get.call_count, 1)
+
 
 class EastmoneyGlobalQuoteTests(unittest.TestCase):
     @patch("fetch_market_data.requests.get")
@@ -447,6 +489,38 @@ class EastmoneyGlobalQuoteTests(unittest.TestCase):
         self.assertEqual(
             fetch_market_data.EASTMONEY_GLOBAL_SYMBOLS["^GSPC"], "100.SPX"
         )
+
+    @patch("fetch_market_data.requests.get")
+    def test_hs300_maps_to_sh_index_secid_and_parses_fltt2(self, mock_get: MagicMock) -> None:
+        # C-1/I-4 锁（2026-11-12 接线）：000300 主源走东财沪市指数段。
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": {
+                "f43": 4043.93,
+                "f44": 4100.05,
+                "f45": 4034.52,
+                "f46": 4063.25,
+                "f47": 175464628,
+                "f60": 4075.71,
+                "f86": 1794628800,
+                "f169": -31.78,
+                "f170": -0.78,
+            }
+        }
+        mock_get.return_value = response
+
+        quote = fetch_eastmoney_global_quote("000300", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4043.93)
+        self.assertEqual(quote["previousClose"], 4075.71)
+        self.assertEqual(quote["dayHigh"], 4100.05)
+        self.assertEqual(quote["dayLow"], 4034.52)
+        self.assertEqual(quote["source"], "eastmoney")
+        # 1 = eastmoney 沪市指数段（对照：100 美指段 / 124 港指段 / 116 港股个股）。
+        self.assertEqual(mock_get.call_args.kwargs["params"]["secid"], "1.000300")
 
 
 class SinaQuoteTests(unittest.TestCase):
@@ -519,6 +593,32 @@ class SinaQuoteTests(unittest.TestCase):
         with patch("fetch_market_data._note_fetch_failure") as mock_note:
             self.assertIsNone(fetch_sina_quote("HSTECH", "INDEX"))
         mock_note.assert_not_called()
+
+    @patch("fetch_market_data.requests.get")
+    def test_cn_index_uses_stock_layout_via_explicit_map(self, mock_get: MagicMock) -> None:
+        # C-1/I-4 锁（2026-11-12 接线）：sh000300 与 CN 个股同布局、走共享解析器；
+        # SINA_CN_INDEX_SYMBOLS 显式表命中优先于 _cn_quote_symbol。删掉表项 →
+        # 落 _cn_quote_symbol（裸码 None）→ 本测红。
+        mock_get.return_value = _text_response(SINA_CN_INDEX_PAYLOAD)
+
+        quote = fetch_sina_quote("000300", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4043.93)
+        self.assertEqual(quote["previousClose"], 4075.71)
+        self.assertEqual(quote["open"], 4063.25)
+        self.assertAlmostEqual(quote["change"], -31.78)
+        self.assertAlmostEqual(quote["changesPercentage"], -31.78 / 4075.71 * 100)
+        self.assertEqual(quote["dayHigh"], 4100.05)
+        self.assertEqual(quote["dayLow"], 4034.52)
+        self.assertEqual(quote["volume"], 17546462800 / 100)  # 股→手 归一
+        self.assertEqual(quote["tradeDate"], "2026-11-12")
+        self.assertEqual(quote["source"], "sina")
+        self.assertIn("list=sh000300", str(mock_get.call_args))
+        # 歧义防御同锁：裸 000001 无显式映射，禁入 _cn_quote_symbol。
+        self.assertIsNone(fetch_sina_quote("000001", "CN"))
+        self.assertEqual(mock_get.call_count, 1)
 
 
 class MootdxOutageDegradationTests(unittest.TestCase):
