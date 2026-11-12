@@ -970,11 +970,15 @@ NASDAQ_INDEX_SYMBOLS = {"^IXIC": "COMP", "^SOX": "SOX"}
 # FRED publishes the official H.15 daily close with roughly a one-day lag.
 FRED_SERIES_SYMBOLS = {"^TNX": "DGS10"}
 # Sina global codes: DINIW = ICE US Dollar Index; hf_XAU = spot gold (USD/oz);
-# hf_CAD = LME copper 3M (USD/tonne). hf_ field layout follows akshare 1.18's
+# hf_CAD = LME copper 3M (USD/tonne); hf_HG = COMEX copper front-month
+# continuous (US cents/lb, 2026-11-12 verified: 616.1 c/lb vs COMEX Dec close
+# 6.29 USD/lb prior day; sits in the SAME hq.sinajs.cn request family as
+# hf_CAD so the COMEX-LME spread is computed atomically, never cross-source).
+# hf_ field layout follows akshare 1.18's
 # production parser; DINIW has no published contract, so the layout below was
 # cross-checked against two independent references and is guarded by length
 # checks (feed values drift into None + warning instead of wrong numbers).
-SINA_GLOBAL_SYMBOLS = {"DX-Y.NYB": "DINIW", "XAUUSD=X": "hf_XAU", "HG=F": "hf_CAD"}
+SINA_GLOBAL_SYMBOLS = {"DX-Y.NYB": "DINIW", "XAUUSD=X": "hf_XAU", "HG=F": "hf_CAD", "HG00Y": "hf_HG"}
 
 
 def fetch_nasdaq_index_quote(ticker: str, market: str) -> dict[str, Any] | None:
@@ -1148,6 +1152,9 @@ def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
 EASTMONEY_GLOBAL_SYMBOLS = {
     "000660.KS": "177.000660",  # KRX (SK hynix) — the only keyless KRX feed
     "HG=F": "109.LCPT",         # LME copper 3M (综合铜03)
+    "HG00Y": "101.HG00Y",       # COMEX copper front-month continuous (美铜连续,
+                                # US cents/lb; suggest API 实测 2026-11-12,与伦铜
+                                # 109.LCPT 分属 109/101 两个市场段)
     "^GSPC": "100.SPX",         # 标普500（100=东财美股指数段；2026-11-11 接线，11-10 收盘
                                 # 7520.93/-0.38% 对拍 AP/CNBC 逐位一致；100.SP500 无效）
     "^DJI": "100.DJIA",         # 道琼斯（2026-11-11 接线，11-10 收盘 52231.89/-0.30%

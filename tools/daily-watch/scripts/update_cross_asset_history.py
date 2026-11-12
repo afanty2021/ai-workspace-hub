@@ -60,6 +60,7 @@ CROSS_ASSET_HISTORY_SECIDS: dict[str, str] = {
     "NQ00Y": "103.NQ00Y",
     "DX-Y.NYB": "100.UDI",
     "HG=F": "109.LCPT",
+    "HG00Y": "101.HG00Y",
     "HSTECH": "124.HSTECH",
 }
 
