@@ -172,13 +172,14 @@ promoted_to:
 domain: []
 ticker: []
 concepts: []
-related: []
 entity_salience: {}
 tags: []
 recall_signals: []
 decision_scenarios: []
 ---
 ```
+
+> `related` 字段在 exploration 卡已废弃（2026-11-13 用户拍板，Q-20261113-12）：实体互链由 `ticker`+`entity_salience` 覆盖、概念互链由 `concepts` 覆盖，不再随形态进卡同步维护；存量卡的旧 `related` 列表保留为历史数据。source-summary 卡的 `related`（tagger 自动页面关联）不受此决策影响。
 
 ### `wiki/patterns/` 与 `wiki/rules/`
 
