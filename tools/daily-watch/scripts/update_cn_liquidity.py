@@ -37,7 +37,7 @@ SHIBOR_INDICATORS = {
 }
 
 # 东财 datacenter 中美国债收益率报表的期限字段（akshare bond_zh_us_rate 同源映射；
-# 2026-11-13 实测 9,387 行回溯至 1990——只取 CN 10Y，其余按需扩）
+# 2026-11-13 实测 9,387 行回溯至 1990——但 pageSize=500 只拉最近 500 行滚动窗，深史不回补；只取 CN 10Y，其余按需扩）
 CN_TREASURY_INDICATORS = {
     "cn-10y-treasury": ("EMM00166466", "中国10年期国债收益率", "%"),
 }
@@ -60,7 +60,9 @@ def _dc_get_json(url: str, label: str) -> dict[str, Any]:
                 time.sleep(1.0)
                 continue
             raise RuntimeError(f"{label} datacenter 请求失败: {exc}") from exc
-    if not (payload or {}).get("success"):
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{label} datacenter 响应非对象: {type(payload).__name__}")
+    if not payload.get("success"):
         raise RuntimeError(f"{label} datacenter 响应 success 非 truthy")
     return payload
 
@@ -72,7 +74,7 @@ def _dc_rows(payload: dict[str, Any], date_key: str, value_key: str) -> list[dic
     for item in rows:
         day = str(item.get(date_key) or "")[:10]
         value = item.get(value_key)
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and isinstance(value, (int, float)):
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and isinstance(value, (int, float)) and not isinstance(value, bool):
             out.append({"date": day, "value": float(value)})
     out.reverse()  # 请求倒序 → 落盘正序
     return out
@@ -112,7 +114,7 @@ def fetch_social_financing_rows() -> list[dict[str, str]]:
         month = str(item.get("date") or "")  # 形如 201501 / 2015-01
         m = re.fullmatch(r"(\d{4})-?(\d{2})", month)
         value = item.get("tiosfs")
-        if m and isinstance(value, (int, float)):
+        if m and isinstance(value, (int, float)) and not isinstance(value, bool):
             out.append({"period": f"{m.group(1)}-{m.group(2)}", "value": float(value)})
     out.sort(key=lambda x: x["period"])
     return out
@@ -213,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             used.add("eastmoney-datacenter")
         except Exception as exc:  # noqa: BLE001 — 同 Shibor：东财主通道失败=非零
             fail = True
-            missing.append({"item": "cn-10y-treasury", "reason": str(exc)})
+            missing.append({"item": "cn10y", "reason": str(exc)})
             log(f"Warning: 中国国债收益率更新失败: {exc}")
     if args.only in ("social", "all"):
         try:
