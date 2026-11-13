@@ -21,12 +21,13 @@
 
 **口径注记（2026-11-09 澄清）**：快照行日期=UTC 抓取时点、回补 K 线=标的本地交易日，两者对同一 ET 收盘日标注一致；此前记的「^SOX 9390 vs 9011 源间差异」实为**日期错位**——push2his 2026-11-05 收盘 9011.14 = H1 档案崩盘日基准，9390.25 是 ET 11-06 收盘（反弹日）。**H1 温度计判定仍以 hypothesis 档案数字为准**；快照盘中值由回补 batch 档权威覆盖。^TNX 东财实时主源（171.US10Y）、FRED DGS10 T+1 降级；DX-Y.NYB 实时新浪 DINIW / 历史 100.UDI；详注 `generate_daily_report.py` SOURCE_CALIBER_NOTES。
 
-## 国内流动性（2026-11-09 接线，东财 datacenter + MOFCOM）
+## 国内流动性（2026-11-09 接线，东财 datacenter + MOFCOM；2026-11-13 增中国 10Y 国债）
 
 | 指标 | 最新读数 | 序列 | 口径 |
 |---|---|---|---|
 | Shibor 隔夜 | 1.283%（2026-11-06，5d -0.6bp） | 500 日（data/custom/shibor-overnight） | 东财 datacenter RPT_IMP_INTRESTRATEN；日度 |
 | Shibor 1 周 | 1.346%（2026-11-06，5d -3.3% ≈ -4.6bp；方向参考 ^TNX 同窗 -2.38%） | 500 日（data/custom/shibor-1w） | 同上；**DR007 严格口径（存款类质押回购加权）未接——Shibor-1W 为信用拆借口径，与质押回购有口径差** |
+| **中国 10Y 国债** | **1.6032%（2026-11-12，5d -0.1bp）** | 467 日（data/custom/cn-10y-treasury，2024-12-24 起） | 东财 datacenter `RPTA_WEB_TREASURYYIELD`（Q-20261113-04，2026-11-13 接线）；**中债估值 EOD 日频 T+1——与 ^TNX（实时快照、美债）不同源不同步，两行并列不互为备份**；国内红利股息差锚读数以此为准 |
 | 社融增量 | 6,245 亿元（2026-04，前值 2026-03 52,240 亿） | 136 个月（data/custom/social-financing） | MOFCOM shrzgmQuery；月度，T+1 月发布；失败降级只告警 |
 
 刷新命令：`python tools/daily-watch/scripts/update_cn_liquidity.py`（M2 未接——社融已覆盖信用扩张维度，需要时挂账）。

@@ -58,6 +58,51 @@ class ShiborTests(unittest.TestCase):
         self.assertEqual(mock_get.call_count, 2)
 
 
+class CnTreasuryTests(unittest.TestCase):
+    @patch("update_cn_liquidity.requests.get",
+           return_value=_dc_response([
+               {"SOLAR_DATE": "2026-11-12 00:00:00", "EMM00166466": 1.6032},
+               {"SOLAR_DATE": "2026-11-11 00:00:00", "EMM00166466": 1.6039},
+               {"SOLAR_DATE": "bad", "EMM00166466": 1.5},          # 非法日期剔除
+               {"SOLAR_DATE": "2026-11-10 00:00:00", "EMM00166466": None},  # 缺值剔除（T+1 空行）
+           ]))
+    def test_parse_field_and_reorder(self, mock_get) -> None:
+        rows = ucl.fetch_cn_treasury_rows("EMM00166466")
+        self.assertEqual([r["date"] for r in rows], ["2026-11-11", "2026-11-12"])
+        self.assertEqual(rows[-1]["value"], 1.6032)
+        url = mock_get.call_args.args[0]
+        self.assertIn("RPTA_WEB_TREASURYYIELD", url)
+        self.assertIn("EMM00166466", url)  # 期限字段进 columns
+
+    def test_main_cn10y_writes_series_and_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("update_cn_liquidity.requests.get", return_value=_dc_response(
+                    [{"SOLAR_DATE": "2026-11-12 00:00:00", "EMM00166466": 1.6032}])), \
+                    patch("market_data_io.resolve_data_root", return_value=root):
+                rc = ucl.main(["--only", "cn10y"])
+            self.assertEqual(rc, 0)
+            rows = [json.loads(line) for line in
+                    (root / "custom" / "cn-10y-treasury.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[0]["value"], 1.6032)
+            ledger = [json.loads(line) for line in
+                      (root / ".state" / "run-log.jsonl").read_text(encoding="utf-8").splitlines()
+                      if line.strip()]
+            self.assertEqual([r["type"] for r in ledger], ["open", "data-close"])
+            self.assertTrue(ledger[1]["data_targets"][0]["path"].endswith(
+                "custom/cn-10y-treasury.jsonl"))
+            self.assertEqual(ledger[1]["data_targets"][0]["anchor_date"], "2026-11-12")
+            self.assertEqual(ledger[1]["sources_used"], ["eastmoney-datacenter"])
+
+    def test_cn10y_failure_fails_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("update_cn_liquidity.update_cn_treasury",
+                       side_effect=RuntimeError("dc down")), \
+                    patch("market_data_io.resolve_data_root", return_value=Path(tmp)):
+                rc = ucl.main(["--only", "cn10y"])
+            self.assertEqual(rc, 1)  # 同 Shibor 语义：东财主通道失败=非零（vs 社融降级）
+
+
 class SocialFinancingTests(unittest.TestCase):
     @patch("update_cn_liquidity.requests.post", return_value=MagicMock(
         json=lambda: [{"date": "202603", "tiosfs": 52240.0},
