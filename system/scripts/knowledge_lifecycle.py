@@ -273,6 +273,11 @@ def render_index(root: Path, knowledge_type: str) -> str:
 
 
 def rebuild_indexes(root: Path, apply: bool) -> list[dict[str, Any]]:
+    """重建三个 _index；apply=False 为 dry-run（只预览变更）。
+
+    注意：折叠 gate 在 dry-run 下同样拦截（提前 return + exit 2）——
+    dry-run 只免落盘不免体检，折叠语料下想看「会改什么」须先修折叠。
+    """
     results: list[dict[str, Any]] = []
     violations = audit_frontmatter_lists(root)
     if violations:

@@ -1,7 +1,7 @@
 """frontmatter 列表折叠断言（EXP-08-01 同日两案修根）。
 
-2026-11-13：EXP-20260108-01（实为 EXP-20261108-01）ticker 列表因缩进不一致被
-YAML 折叠成单字符串，同日两次（I-1 f273dc4 + 牧原进卡复发）。修根=
+2026-11-13：EXP-20261108-01 的 ticker 列表因缩进不一致被 YAML 折叠成
+单字符串，同日复发两次（f273dc4 I-1 + 牧原进卡）。修根=
 rebuild-index / wiki_tagger 读写两侧接 check_list_integrity，折叠即报错。
 """
 
@@ -200,3 +200,33 @@ ticker:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GenericFoldCheckTests(unittest.TestCase):
+    """清单外字段的折叠指纹（2026-11-13 max 评审 Minor：枚举漏检）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _check(self, path: Path) -> list[str]:
+        return FM.check_list_integrity(path)
+
+    def test_unknown_field_single_folded_item_flagged(self) -> None:
+        path = self.root / "u.md"
+        path.write_text(
+            "---\nid: E1\nsome_field:\n- a.md - b.md - c.md\n---\n# n\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(any("some_field" in v for v in self._check(path)))
+
+    def test_unknown_field_prose_dash_not_flagged(self) -> None:
+        path = self.root / "p.md"
+        path.write_text(
+            "---\nid: E1\nsome_field:\n- 正常散文项 - 带破折号\n- 另一项\n---\n# n\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self._check(path), [])

@@ -121,7 +121,7 @@ class AppendMapTests(unittest.TestCase):
             "id: E8\nentity_salience:\n  601899.SH: core\ntags:\n- a\n",
         )
         result = APPEND.append_to_file(
-            path, map_field="entity_salience", entry=("002714.SZ", "core")
+            path, map_field="entity_salience", entries=[("002714.SZ", "core")]
         )
         self.assertTrue(result["written"])
         m = meta(path)
@@ -135,7 +135,7 @@ class AppendMapTests(unittest.TestCase):
             self.root, "i.md", "id: E9\nentity_salience:\n  601899.SH: core\n"
         )
         result = APPEND.append_to_file(
-            path, map_field="entity_salience", entry=("601899.SH", "mention")
+            path, map_field="entity_salience", entries=[("601899.SH", "mention")]
         )
         self.assertFalse(result["written"])
         self.assertEqual(meta(path)["entity_salience"], {"601899.SH": "core"})
@@ -143,3 +143,94 @@ class AppendMapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RendererAndEncodingTests(unittest.TestCase):
+    """评审 I-2/I-3 + --entry 可重复（2026-11-13 max 评审当日尾批）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_special_yaml_chars_quoted_stay_str(self) -> None:
+        path = write(
+            self.root,
+            "q.md",
+            """
+id: E1
+concepts:
+- 双高型战略溢价定价
+""",
+        )
+        APPEND.append_to_file(
+            path,
+            list_field="concepts",
+            items=["a: b", "[x]", "*ref", "#注释", "分位差 >40pct 时（分裂）"],
+        )
+        m = meta(path)
+        tail = m["concepts"][1:]
+        self.assertTrue(all(isinstance(c, str) for c in tail))
+        self.assertIn("a: b", tail)
+        self.assertIn("[x]", tail)
+        self.assertIn("*ref", tail)
+        self.assertIn("#注释", tail)
+
+    def test_repeatable_map_entries_all_applied(self) -> None:
+        path = write(
+            self.root,
+            "m.md",
+            """
+id: E1
+entity_salience:
+  601899.SH: core
+""",
+        )
+        result = APPEND.append_to_file(
+            path,
+            map_field="entity_salience",
+            entries=[("000333.SZ", "core"), ("600900.SH", "core")],
+        )
+        self.assertEqual(len(result["applied"]), 2)
+        self.assertEqual(
+            meta(path)["entity_salience"],
+            {"601899.SH": "core", "000333.SZ": "core", "600900.SH": "core"},
+        )
+
+    def test_bom_and_crlf_preserved(self) -> None:
+        path = self.root / "bom.md"
+        path.write_bytes(
+            b"\xef\xbb\xbf"
+            + "---\r\nid: E1\r\nticker:\r\n- 601899.SH\r\n---\r\n\r\n# note\r\n".encode(
+                "utf-8"
+            )
+        )
+        APPEND.append_to_file(path, list_field="ticker", items=["600900.SH"])
+        raw = path.read_bytes()
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+        self.assertIn(b"\r\n", raw)
+        self.assertNotIn(b"\n600900", raw.replace(b"\r\n", b""))
+        m = yaml.safe_load(raw.decode("utf-8-sig").split("---")[1])
+        self.assertEqual(m["ticker"], ["601899.SH", "600900.SH"])
+
+
+class InlineQuotedCommaTests(unittest.TestCase):
+    """内联列表引号内逗号不切（2026-11-13 max 评审 Minor）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_quoted_comma_kept_in_one_item(self) -> None:
+        path = write(
+            self.root,
+            "i.md",
+            "id: E1\nrelated: ['a, b', c]",
+        )
+        APPEND.append_to_file(path, list_field="related", items=["d"])
+        self.assertEqual(meta(path)["related"], ["a, b", "c", "d"])

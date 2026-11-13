@@ -16,9 +16,9 @@ parse 不报错、项数变少。本工具三点保证：
     python system/scripts/append_frontmatter.py wiki/explorations/X.md \
         --list ticker --item 002714.SZ --item 02714.HK
 
-    # 嵌套映射追加（如 entity_salience）
+    # 嵌套映射追加（如 entity_salience，--entry 可重复）
     python system/scripts/append_frontmatter.py wiki/explorations/X.md \
-        --map entity_salience --entry 002714.SZ=core
+        --map entity_salience --entry 002714.SZ=core --entry 02714.HK=core
 
     # 预览不落盘
     ... --dry-run
@@ -52,16 +52,84 @@ def _list_items(payload: dict, field: str) -> list:
     return []
 
 
+def _dump_scalar(value: str) -> str:
+    """safe_dump 出单行标量：剥掉文档级裸标量后附的显式结束符 `...` 与换行。"""
+    dumped = yaml.safe_dump(value, allow_unicode=True, default_flow_style=False)
+    return dumped.strip().removesuffix("...").rstrip("\n")
+
+
+def _render_scalar(value: str) -> str:
+    """把列表项渲染为 YAML 标量行（带 `- ` 前缀）。
+
+    裸拼 `- {it}` 对含 `: `、`[x]`、`*ref`、`#` 等特殊字符的项会被解析成
+    dict/list/注释/别名，且项数复验（只比 len）与折叠指纹检查（只查 str 项）
+    都拦不住——round-trip 不等时改为 safe_dump 加引号。探测用标量上下文
+    （safe_load(value)），不要把候选拼成 `- value` 再解析（那是序列，永不相等）。
+    """
+    if _parses_as_same_str(value):
+        return f"- {value}"
+    return f"- {_dump_scalar(value)}"
+
+
+def _render_map_scalar(value: str) -> str:
+    """同 _render_scalar，用于映射的 key/value（无 `- ` 前缀）。"""
+    if _parses_as_same_str(value):
+        return value
+    return _dump_scalar(value)
+
+
+def _parses_as_same_str(value: str) -> bool:
+    try:
+        parsed = yaml.safe_load(value)
+    except yaml.YAMLError:
+        return False
+    return isinstance(parsed, str) and parsed == value
+
+
+def _split_inline_list(inner: str) -> list[str]:
+    """切分内联列表 `key: [a, b, 'c, d']` 的内容：引号内的逗号不切。"""
+    pieces: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    for ch in inner:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            pieces.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        pieces.append("".join(buf).strip())
+    # 剥外层成对引号：内容值交给 _render_scalar 按需重新安全加引号
+    out = []
+    for p in pieces:
+        if len(p) >= 2 and p[0] == p[-1] and p[0] in "'\"":
+            p = p[1:-1]
+        out.append(p)
+    return [p for p in out if p]
+
+
 def append_to_file(
     path: Path,
     *,
     list_field: str | None = None,
     items: list[str] | None = None,
     map_field: str | None = None,
-    entry: tuple[str, str] | None = None,
+    entries: list[tuple[str, str]] | None = None,
     dry_run: bool = False,
 ) -> dict:
-    text = path.read_text(encoding="utf-8-sig")
+    # 保留 BOM 与换行风格（读侧 utf-8-sig + universal newlines 会剥掉二者，写出前还原）
+    raw_bytes = path.read_bytes()
+    has_bom = raw_bytes.startswith(b"\xef\xbb\xbf")
+    text = raw_bytes.decode("utf-8-sig")
+    has_crlf = "\r\n" in text
+    text = text.replace("\r\n", "\n")
     match = _FRONTMATTER_RE.match(text)
     if not match:
         raise SystemExit(f"ERROR: {path.name} 无 frontmatter")
@@ -110,7 +178,7 @@ def append_to_file(
                 insert_at = len(lines)
                 while insert_at > 0 and not lines[insert_at - 1].strip():
                     insert_at -= 1
-                addition = [f"{list_field}:"] + [f"- {it}" for it in new_items]
+                addition = [f"{list_field}:"] + [_render_scalar(it) for it in new_items]
                 lines[insert_at:insert_at] = addition
             else:
                 start, end = block
@@ -122,8 +190,8 @@ def append_to_file(
                     inner = inline.group(1).strip()
                     rendered = [f"{list_field}:"]
                     if inner:
-                        rendered += [f"- {piece.strip()}" for piece in inner.split(",")]
-                    rendered += [f"- {it}" for it in new_items]
+                        rendered += [_render_scalar(piece) for piece in _split_inline_list(inner)]
+                    rendered += [_render_scalar(it) for it in new_items]
                     lines[start:end] = rendered
                 else:
                     indent = (
@@ -134,33 +202,33 @@ def append_to_file(
                     insert_at = end
                     while insert_at > start + 1 and not lines[insert_at - 1].strip():
                         insert_at -= 1
-                    addition = [f"{indent}- {it}" for it in new_items]
+                    addition = [f"{indent}{_render_scalar(it)}" for it in new_items]
                     lines[insert_at:insert_at] = addition
             applied += [f"{list_field}: {it}" for it in new_items]
 
-    # ── 嵌套映射追加 ─────────────────────────────────────────
+    # ── 嵌套映射追加（--entry 可重复）─────────────────────────
     if map_field is not None:
-        if entry is None:
+        if not entries:
             raise SystemExit("ERROR: --map 需要 --entry KEY=VALUE")
-        key, value = entry
-        current = payload.get(map_field)
-        if current is not None and not isinstance(current, dict):
-            raise SystemExit(f"ERROR: 字段 {map_field} 不是映射")
-        if isinstance(current, dict) and key in current:
-            skipped.append(f"{map_field}.{key}（已存在={current[key]}）")
-        else:
+        for key, value in entries:
+            current = payload.get(map_field)
+            if current is not None and not isinstance(current, dict):
+                raise SystemExit(f"ERROR: 字段 {map_field} 不是映射")
+            if isinstance(current, dict) and key in current:
+                skipped.append(f"{map_field}.{key}（已存在={current[key]}）")
+                continue
             block = field_block_range(map_field)
             if block is None:
                 insert_at = len(lines)
                 while insert_at > 0 and not lines[insert_at - 1].strip():
                     insert_at -= 1
-                lines[insert_at:insert_at] = [f"{map_field}:", f"  {key}: {value}"]
+                lines[insert_at:insert_at] = [f"{map_field}:", f"  {_render_map_scalar(key)}: {_render_map_scalar(value)}"]
             else:
                 start, end = block
                 insert_at = end
                 while insert_at > start + 1 and not lines[insert_at - 1].strip():
                     insert_at -= 1
-                lines[insert_at:insert_at] = [f"  {key}: {value}"]
+                lines[insert_at:insert_at] = [f"  {_render_map_scalar(key)}: {_render_map_scalar(value)}"]
             applied.append(f"{map_field}.{key}={value}")
 
     if not applied:
@@ -168,6 +236,10 @@ def append_to_file(
 
     new_raw = "\n".join(lines)
     new_text = f"---\n{new_raw}\n---\n{body}"
+    if has_crlf:
+        new_text = new_text.replace("\n", "\r\n")
+    if has_bom:
+        new_text = "\ufeff" + new_text
 
     # 写出前三重复验：解析成功 + 目标项数 + 无折叠
     try:
@@ -185,7 +257,7 @@ def append_to_file(
                 f"解析得 {actual} 项——疑似折叠"
             )
     tmp = path.with_suffix(path.suffix + ".tmp-append")
-    tmp.write_text(new_text, encoding="utf-8")
+    tmp.write_bytes(new_text.encode("utf-8"))
     violations = check_list_integrity(tmp)
     if violations:
         tmp.unlink(missing_ok=True)
@@ -196,7 +268,7 @@ def append_to_file(
 
     if dry_run:
         return {"path": str(path), "applied": applied, "skipped": skipped, "written": False, "dry_run": True}
-    path.write_text(new_text, encoding="utf-8")
+    path.write_bytes(new_text.encode("utf-8"))
     return {"path": str(path), "applied": applied, "skipped": skipped, "written": True}
 
 
@@ -206,25 +278,25 @@ def main() -> int:
     parser.add_argument("--list", dest="list_field", help="列表字段名（如 ticker/based_on）")
     parser.add_argument("--item", action="append", default=[], help="待追加项（可重复）")
     parser.add_argument("--map", dest="map_field", help="嵌套映射字段名（如 entity_salience）")
-    parser.add_argument("--entry", help="KEY=VALUE（配合 --map）")
+    parser.add_argument("--entry", action="append", default=[], help="KEY=VALUE（配合 --map，可重复）")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if not args.list_field and not args.map_field:
         parser.error("需要 --list 或 --map")
     if args.list_field and not args.item:
         parser.error("--list 需要 --item")
-    entry = None
-    if args.entry:
-        if "=" not in args.entry:
+    entries = []
+    for e in args.entry:
+        if "=" not in e:
             parser.error("--entry 格式须为 KEY=VALUE")
-        key, value = args.entry.split("=", 1)
-        entry = (key, value)
+        key, value = e.split("=", 1)
+        entries.append((key, value))
     result = append_to_file(
         args.file,
         list_field=args.list_field,
         items=args.item,
         map_field=args.map_field,
-        entry=entry,
+        entries=entries,
         dry_run=args.dry_run,
     )
     import json

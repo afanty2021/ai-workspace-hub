@@ -150,8 +150,11 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
 # 字符串（'688702.SH - 688981.SH - 002714.SZ'），parse 不报错、项数静默
 # 变少——本检查在解析前对原始文本做两道防线：
 # ① 缩进一致性：同一列表块内所有 `- ` 项的缩进宽度必须一致；
-# ② 折叠指纹：已知列表型字段的已解析标量若命中「token - token」折叠
-#    指纹（无空格 token + 空格-空格-空格 分隔），说明折叠已经发生。
+# ② 折叠指纹：已解析列表中的标量若命中「token - token」折叠指纹
+#    （无空格 token + 空格-空格-空格 分隔），说明折叠已经发生。
+#    分两档强度：枚举清单内的已知列表字段逐项查（任何一个命中即报）；
+#    清单外字段只在「整表恰好一项且命中指纹」时报——折叠必并成单项，
+#    合法散文项含 " - " 的多_item 表不误伤。
 _LIST_KEYS_FOLD_CHECK = {
     "based_on",
     "ticker",
@@ -216,12 +219,15 @@ def check_list_integrity(path: Path) -> list[str]:
     else:
         payload = _parse_fallback(raw)
     if isinstance(payload, dict):
-        for key in _LIST_KEYS_FOLD_CHECK:
-            value = payload.get(key)
+        for key, value in payload.items():
             if not isinstance(value, list):
                 continue
+            known_field = key in _LIST_KEYS_FOLD_CHECK
             for item in value:
-                if isinstance(item, str) and _FOLDED_ITEM_RE.match(item):
+                if not (isinstance(item, str) and _FOLDED_ITEM_RE.match(item)):
+                    continue
+                # 清单外字段：折叠必并成单项，多项表里的散文 " - " 项不报
+                if known_field or len(value) == 1:
                     violations.append(
                         f"{path.name}: 字段 {key} 的列表项「{item}」命中折叠指纹"
                         "（疑似多项被 YAML 合并为单字符串）"
