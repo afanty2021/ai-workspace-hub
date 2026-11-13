@@ -16,7 +16,7 @@ from typing import Any
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
-from frontmatter_parse import parse_frontmatter_file  # noqa: E402
+from frontmatter_parse import check_list_integrity, parse_frontmatter_file  # noqa: E402
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -274,6 +274,14 @@ def render_index(root: Path, knowledge_type: str) -> str:
 
 def rebuild_indexes(root: Path, apply: bool) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    violations = audit_frontmatter_lists(root)
+    if violations:
+        # 修根断言（EXP-08-01 同日两案）：frontmatter 列表折叠即报错，
+        # 不让索引在缺项元数据上静默重建。
+        for violation in violations:
+            print(f"ERROR: [frontmatter 列表折叠] {violation}", file=sys.stderr)
+        results.append({"type": "frontmatter_list_violations", "count": len(violations)})
+        return results
     for knowledge_type, relpath in INDEX_PATHS.items():
         path = root / relpath
         content = render_index(root, knowledge_type)
@@ -284,6 +292,14 @@ def rebuild_indexes(root: Path, apply: bool) -> list[dict[str, Any]]:
             path.write_text(content, encoding="utf-8")
         results.append({"type": knowledge_type, "path": relpath, "changed": changed, "applied": apply and changed})
     return results
+
+
+def audit_frontmatter_lists(root: Path) -> list[str]:
+    """对全部知识卡跑列表折叠断言（EXP-08-01 修根，详见 frontmatter_parse）。"""
+    violations: list[str] = []
+    for page in iter_pages(root):
+        violations.extend(check_list_integrity(page["path"]))
+    return violations
 
 
 def normalized(value: str) -> str:
@@ -566,6 +582,8 @@ def main() -> int:
     if args.command == "rebuild-index":
         result = rebuild_indexes(root, args.apply)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if any(item.get("type") == "frontmatter_list_violations" for item in result):
+            return 2
         return 0
     if args.command == "load":
         if not args.context and not args.all_active and not any((args.domain, args.ticker, args.scenario, args.signal)):

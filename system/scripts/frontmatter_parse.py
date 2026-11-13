@@ -143,6 +143,92 @@ def _parse_fallback(raw: str) -> dict[str, Any]:
     return values
 
 
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
+
+# 列表折叠检测（EXP-08-01 同日两案修根）：手工 Edit frontmatter 列表时
+# 缩进不一致（首项列首 0 空格、后续项 2 空格等）会被 PyYAML 折叠成单
+# 字符串（'688702.SH - 688981.SH - 002714.SZ'），parse 不报错、项数静默
+# 变少——本检查在解析前对原始文本做两道防线：
+# ① 缩进一致性：同一列表块内所有 `- ` 项的缩进宽度必须一致；
+# ② 折叠指纹：已知列表型字段的已解析标量若命中「token - token」折叠
+#    指纹（无空格 token + 空格-空格-空格 分隔），说明折叠已经发生。
+_LIST_KEYS_FOLD_CHECK = {
+    "based_on",
+    "ticker",
+    "related",
+    "domain",
+    "concepts",
+    "tags",
+    "linked_entities",
+    "linked_hypotheses",
+    "knowledge_used",
+    "wiki_pages_loaded",
+    "evidence",
+}
+_FOLDED_ITEM_RE = re.compile(r"^\S+(?:\s+-\s+\S+)+$")
+
+
+def check_list_integrity(path: Path) -> list[str]:
+    """Return violation messages for folded/misindented frontmatter lists.
+
+    空 list = 通过。检测对 PyYAML 与 fallback 两种解析路径都成立
+    （第 ② 道走解析结果，第 ① 道走原始文本）。
+    """
+    try:
+        content = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        return [f"{path.name}: 无法读取（{exc}）"]
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return []
+    raw = match.group(1)
+    violations: list[str] = []
+
+    # ① 原始文本：同列表块内缩进一致性
+    current_key: str | None = None
+    current_indent: int | None = None
+    for lineno, line in enumerate(raw.splitlines(), start=2):  # +1 frontmatter 起始行
+        item = re.match(r"^(\s*)-\s", line)
+        if item:
+            # 列表项先于顶层 key 判定：合法列表允许项与 key 同列（0 缩进）
+            if current_key:
+                indent = len(item.group(1))
+                if current_indent is None:
+                    current_indent = indent
+                elif indent != current_indent:
+                    violations.append(
+                        f"{path.name}: 第 {lineno} 行列表项缩进 {indent} 与本块首项 "
+                        f"{current_indent} 不一致（字段 {current_key.rstrip(':')}）——"
+                        "YAML 会把缩进异常项折叠进前一项"
+                    )
+            continue
+        if not line[:1].isspace() and line.strip():
+            top = re.match(r"^[A-Za-z_][\w-]*:(?:\s|$)", line)
+            current_key = top.group(0) if top else None
+            current_indent = None
+
+    # ② 解析结果：已知列表字段的折叠指纹
+    if yaml is not None:
+        try:
+            payload = yaml.safe_load(raw) or {}
+        except yaml.YAMLError:
+            return violations
+    else:
+        payload = _parse_fallback(raw)
+    if isinstance(payload, dict):
+        for key in _LIST_KEYS_FOLD_CHECK:
+            value = payload.get(key)
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, str) and _FOLDED_ITEM_RE.match(item):
+                    violations.append(
+                        f"{path.name}: 字段 {key} 的列表项「{item}」命中折叠指纹"
+                        "（疑似多项被 YAML 合并为单字符串）"
+                    )
+    return violations
+
+
 def parse_frontmatter_file(path: Path) -> tuple[dict[str, Any], str, str | None]:
     """Return (meta, content, error); error is None on success."""
     try:

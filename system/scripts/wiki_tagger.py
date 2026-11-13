@@ -17,7 +17,11 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+_SCRIPTS_DIR = REPO_ROOT / "system" / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from frontmatter_parse import check_list_integrity  # noqa: E402
 from system.lib.llm_client import (  # noqa: E402
     LLMError,
     chat,
@@ -331,6 +335,13 @@ def tag_file(
     cache_entries: dict[str, dict[str, Any]] | None = None,
     refresh: bool = False,
 ) -> dict[str, Any]:
+    # 读侧防线：存量文件已有折叠列表时拒绝处理（先修文件再打标），
+    # 防止 tagger 在坏文件上写出并掩盖问题。
+    pre_violations = check_list_integrity(path)
+    if pre_violations:
+        raise TaggingError(
+            "文件 frontmatter 列表已折叠，须先修复再打标：" + "；".join(pre_violations)
+        )
     document = read_document(path)
     tagging_state = document.metadata.get("tagging")
     if isinstance(tagging_state, dict) and tagging_state.get("status") == "completed":
@@ -373,6 +384,13 @@ def tag_file(
             changed.append("tagging")
     if apply and changed:
         write_document(path, Document(metadata=merged, body=document.body))
+        # 修根断言（EXP-08-01 同日两案）：写出后校验列表完整性，折叠即报错，
+        # 防止 tagger 自己的写出路径成为缺项元数据的源头（读写两侧都设防）。
+        violations = check_list_integrity(path)
+        if violations:
+            raise TaggingError(
+                "tagger 写出后 frontmatter 列表校验失败：" + "；".join(violations)
+            )
     return {
         "path": path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path),
         "status": "updated" if apply and changed else "preview" if changed else "unchanged",
