@@ -5,9 +5,9 @@
 
 ## 当前版本
 
-- version: `1.0`
+- version: `1.1`
 - calibrated_research_count: `7`
-- last_updated: `2026-11-07`
+- last_updated: `2026-11-13`
 
 ## 已确认偏好
 
