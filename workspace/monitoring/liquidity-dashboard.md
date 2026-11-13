@@ -29,6 +29,7 @@
 | Shibor 1 周 | 1.346%（2026-11-06，5d -3.3% ≈ -4.6bp；方向参考 ^TNX 同窗 -2.38%） | 500 日（data/custom/shibor-1w） | 同上；**DR007 严格口径（存款类质押回购加权）未接——Shibor-1W 为信用拆借口径，与质押回购有口径差** |
 | **中国 10Y 国债** | **1.6032%（2026-11-12，5d -0.1bp）** | 467 日（data/custom/cn-10y-treasury，2024-12-24 起） | 东财 datacenter `RPTA_WEB_TREASURYYIELD`（Q-20261113-04，2026-11-13 接线）；**中债估值 EOD 日频 T+1——与 ^TNX（实时快照、美债）不同源不同步，两行并列不互为备份**；国内红利股息差锚读数以此为准 |
 | 社融增量 | 6,245 亿元（2026-04，前值 2026-03 52,240 亿） | 136 个月（data/custom/social-financing） | MOFCOM shrzgmQuery；月度，T+1 月发布；失败降级只告警 |
+| **非银存款告警（月读）** | **+19.1%（2026-09，39.3 万亿）→ 正常（绿）** | 2015-01 起 141 个月（output/research/nonbank-deposit-liquidity/） | 人行信贷收支表「非银行业金融机构存款」；**告警线：连续 2 个月 YoY <10% = 资金离场（黄）；<0 = 红**。滞后 4-6 个月确认指标非领先（2026-11-13 回测，同期相关仅 0.19）。刷新：每月中旬人行发布新年度 xlsx 后人工跑 `output/research/nonbank-deposit-liquidity/fetch_and_analyze.py` 改读数；**不接 cron**——月频数据日频拉取无意义，人行官网 URL 逐年变 + WAF 脆弱 |
 
 刷新命令：`python tools/daily-watch/scripts/update_cn_liquidity.py`（M2 未接——社融已覆盖信用扩张维度，需要时挂账）。
 
