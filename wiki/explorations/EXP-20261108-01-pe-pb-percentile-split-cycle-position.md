@@ -16,8 +16,8 @@ based_on:
 - output/research/2026-11-08-yuntianhua-600096.md
 - output/research/2026-11-08-hunan-yuneng-301358.md
 - output/research/R20261112-08-juxing-603477.md
-  - output/research/R20261112-11-shengke-688702.md
-  - output/research/2026-11-13-smic-688981-deep-research.md
+- output/research/R20261112-11-shengke-688702.md
+- output/research/2026-11-13-smic-688981-deep-research.md
 linked_hypotheses: []
 promoted_to: null
 supersedes: null
@@ -38,8 +38,8 @@ ticker:
 - 600096.SH
 - 301358.SZ
 - 603477.SH
-  - 688702.SH
-  - 688981.SH
+- 688702.SH
+- 688981.SH
 concepts:
 - PE-PB分位分裂
 - E位置定价
