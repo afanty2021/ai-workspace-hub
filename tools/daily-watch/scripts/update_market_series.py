@@ -105,7 +105,7 @@ def list_cn_symbols() -> list[tuple[str, int]]:
 
 
 def _upsert_bars(path: Path, data_root: Path, code: str, backfill: int, *, source: str,
-                 index: bool = False,
+                 index: bool = False, repair: bool = False,
                  sink: list[tuple[Path, str]] | None = None) -> str:
     """结果语义（I2）：'written'=真写；'empty'=服务器空返回；'locked'=锁被其它进程持有。
 
@@ -122,7 +122,7 @@ def _upsert_bars(path: Path, data_root: Path, code: str, backfill: int, *, sourc
     with series_lock(data_root, path.name) as acquired:
         if not acquired:
             return "locked"
-        upsert_series_rows(path, rows, writer="batch")
+        upsert_series_rows(path, rows, writer="batch", repair=repair)
         if sink is not None:
             rows_now = read_series_rows(path)
             if rows_now:
@@ -158,7 +158,7 @@ def run_stocks_update(data_root: Path, *, backfill: int = 30,
                 stats["skip"] += 1
                 continue
             outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx",
-                                   sink=sink)
+                                   repair=force, sink=sink)
             if outcome == "written":
                 stats["ok"] += 1
             else:
@@ -248,7 +248,7 @@ def _run_list_round(data_root: Path, scope: str, items: list[dict], *, backfill:
                 stats["skip"] += 1
                 continue
             outcome = _upsert_bars(path, data_root, code, backfill, source="mootdx-index",
-                                   index=True, sink=sink)
+                                   index=True, repair=force, sink=sink)
             if outcome == "written":
                 stats["ok"] += 1
             else:
@@ -307,6 +307,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tickers", help="逗号分隔子集，调试用（如 600276.SH,300476.SZ）")
     parser.add_argument("--force", action="store_true",
                         help="绕过闸门与逐票 skip 强制重拉（历史回补/盘中数据修正用；tickers 路径不写完成标记）。"
+                             "--force 同时映射 repair=True 解锁历史行覆盖（Q-20261110-08 A 案防改写门，"
+                             "与 update_cross_asset_history 同款——非 force 的普通重拉对非尾部 30 交易日"
+                             "既存非空字段拒绝覆盖属预期）。"
                              "警告：15:00 收盘前执行会把动态 bar 当收盘写进 series 并推进完成标记，"
                              "收盘后须再跑一次同命令 --force 修正")
     args = parser.parse_args(argv)

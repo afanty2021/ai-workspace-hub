@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,12 +58,21 @@ def snapshot_data_paths(paths: list[Path], manifest_path: Path) -> dict:
     """
     entries: list[dict] = []
     for base in paths:
+        if not base.exists():
+            # 评审 I-3：不存在路径静默产出 0 文件清单=给报告绑上「空数据态」的
+            # 合法指纹（假信心）——预注册依赖漂出指纹链必须炸，接线变更须同步 runner。
+            raise FileNotFoundError(
+                f"快照路径不存在: {base}——预注册数据依赖漂出指纹链（Q-20261110-08 B）")
         prefix = "" if base.is_file() else f"{base.name}/"
+        base_entries = 0
         for f in _iter_files(base):
             rel = f.name if base.is_file() else f.relative_to(base).as_posix()
             entries.append({"path": f"{prefix}{rel}",
                             "bytes": f.stat().st_size,
                             "sha256": _file_digest(f)})
+            base_entries += 1
+        if not base.is_file() and base_entries == 0:
+            print(f"Warning: 快照目录为空（0 文件）: {base}", file=sys.stderr)
     entries.sort(key=lambda e: e["path"])
     digest_src = "\n".join(f"{e['path']}:{e['sha256']}" for e in entries)
     fingerprint = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()

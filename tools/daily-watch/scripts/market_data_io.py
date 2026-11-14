@@ -227,7 +227,7 @@ def upsert_series_rows(path: Path, incoming: list[dict], writer: str, *,
             rejected.append(day)
     if rejected:
         log(f"Warning: {path.name} 拒绝 {len(rejected)} 个历史日期的字段覆盖"
-            f"（{rejected[0]}..{rejected[-1]}，writer=batch 非尾部 {repair_window}"
+            f"（{min(rejected)}..{max(rejected)}，writer=batch 非尾部 {repair_window}"
             " 行修复窗内）——确认修复请显式 repair=True / --repair")
     rows = [by_date[day] for day in sorted(by_date)]
     atomic_write_text(path, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))

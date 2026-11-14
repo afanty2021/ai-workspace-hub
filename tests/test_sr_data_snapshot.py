@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from _test_paths import REPO_ROOT  # noqa: F401
 
 import data_snapshot as ds  # noqa: E402
@@ -83,3 +85,19 @@ def test_report_line_contains_short_fp_and_manifest(tmp_path: Path) -> None:
     assert snap["fingerprint"][:16] in line        # 短指纹
     assert str(m) in line                          # manifest 路径
     assert "2 文件" in line                        # 文件数
+
+
+def test_missing_path_raises_not_silent_empty(tmp_path: Path) -> None:
+    # 评审 I-3：不存在路径静默产出 files=0 的合法指纹=给报告绑「空数据态」假信心
+    # （TRACKER_LOG 改名/移档场景），必须炸
+    with pytest.raises(FileNotFoundError, match="快照路径不存在"):
+        ds.snapshot_data_paths([tmp_path / "no-such-dir"], tmp_path / "m.json")
+
+
+def test_empty_dir_warns_and_zero_entries(tmp_path: Path, capsys) -> None:
+    # 存在但空目录：不炸（可能合法），但必须告警可见
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    snap = ds.snapshot_data_paths([empty], tmp_path / "m.json")
+    assert snap["files"] == 0
+    assert "空" in capsys.readouterr().err

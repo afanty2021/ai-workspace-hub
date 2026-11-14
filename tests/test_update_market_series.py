@@ -534,5 +534,55 @@ class UpsertSinkAnchorTests(unittest.TestCase):
             self.assertEqual(sink, [(path, "2026-11-09")])  # 文件尾，非 fetch 最大 11-06
 
 
+class ForceRepairMappingTests(unittest.TestCase):
+    """Q-20261110-08 A 案解锁闭环（max 评审 I-1）：update_market_series 的
+    --force 必须映射 repair=True——否则「盘中脏数据拖过 30 交易日再 --force 修正」
+    拉得到数据但 upsert 拒写，A 股域确认性修复不可达（update_cross_asset_history
+    已映射，此处是最后一个 --force 载体）。"""
+
+    def _seed_series(self, root: Path) -> Path:
+        # 35 行：首行 2026-09-01 在尾部 30 行修复窗之外；尾行 11-10 < latest 11-13
+        # → 无 force 时逐票 skip 不触发，upsert 必然被调用（区分度前提）。
+        path = series_file(root, ums.normalize_cn_symbol("600276", 1))
+        rows = [{"date": f"2026-09-{d:02d}" if d < 15 else f"2026-10-{d - 14:02d}",
+                 "open": 9.0, "high": 11.0, "low": 8.0, "close": 10.0,
+                 "volume": 100.0, "amount": 8.0e7, "source": "mootdx"}
+                for d in range(1, 36)]
+        rows[-1]["date"] = "2026-11-10"
+        upsert_series_rows(path, rows, writer="batch")
+        return path
+
+    def test_force_maps_repair_and_overwrites_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self._seed_series(root)
+            # 服务器重述：窗外历史日 2026-09-01 close 10.0→11.0 + 尾部新日期
+            fake = FakeMootdx(bars=_bars_frame(
+                ["2026-09-01", "2026-11-11", "2026-11-12", "2026-11-13"],
+                [11.0, 50.0, 50.5, 51.0]))
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_stocks_update(root, tickers=["600276.SH"],
+                                              latest="2026-11-13", force=True)
+            self.assertEqual(stats["ok"], 1)
+            by_date = {r["date"]: r for r in read_series_rows(path)}
+            self.assertEqual(by_date["2026-09-01"]["close"], 11.0)  # repair 解锁改写
+
+    def test_no_force_rejects_history_rewrite(self) -> None:
+        # 反事实腿：同一场景无 force → 窗外历史行被防改写门拒绝，原值保留
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self._seed_series(root)
+            fake = FakeMootdx(bars=_bars_frame(
+                ["2026-09-01", "2026-11-11", "2026-11-12", "2026-11-13"],
+                [11.0, 50.0, 50.5, 51.0]))
+            with patch.object(ums, "_mootdx_call", fake):
+                stats = ums.run_stocks_update(root, tickers=["600276.SH"],
+                                              latest="2026-11-13", force=False)
+            self.assertEqual(stats["ok"], 1)
+            by_date = {r["date"]: r for r in read_series_rows(path)}
+            self.assertEqual(by_date["2026-09-01"]["close"], 10.0)  # 拒绝改写
+            self.assertEqual(by_date["2026-11-13"]["close"], 51.0)  # 新日期照常追加
+
+
 if __name__ == "__main__":
     unittest.main()

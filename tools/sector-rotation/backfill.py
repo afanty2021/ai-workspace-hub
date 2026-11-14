@@ -93,6 +93,10 @@ def run_backfill(targets: list[tuple[str, bool]], data_root: Path,
                 stats["skip"] += 1
                 log(f"Warning: {symbol} 锁被其它进程持有，本轮跳过（重跑可续）")
                 continue
+            # Q-20261110-08 A 案（评审 I-2 注记）：防改写门同样护 source 写者标签——
+            # cron 先建仓的新候选票（31..total-1 行）此处重拉全史时，source
+            # mootdx/mootdx-index → mootdx-backfill 的字段差异属预期拒绝（保留原
+            # provenance），告警非回归；OHLCV 真差异被拒更是本意（改史须显式确认）。
             upsert_series_rows(path, rows, writer="batch")
         stats["ok"] += 1
     log(f"回补汇总: {stats}")
