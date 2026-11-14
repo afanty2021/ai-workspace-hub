@@ -62,26 +62,30 @@ def df_to_rows(sym: str, df) -> list[dict]:
     return rows
 
 
-def _write_series(rel_dir: str, sym: str, rows: list[dict]) -> None:
+def _write_series(rel_dir: str, sym: str, rows: list[dict], *,
+                  repair: bool = False) -> None:
     path = DATA_ROOT / rel_dir / f"{sym}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with series_lock(DATA_ROOT, f"us-{sym}") as acquired:
         if not acquired:
             print(f"[SKIP] {sym} 拿不到锁，跳过写入")
             return
-        upsert_series_rows(path, rows, "batch")
+        upsert_series_rows(path, rows, "batch", repair=repair)
 
 
-def run_fetch() -> None:
+def run_fetch(*, repair: bool = False) -> None:
+    """repair=True 显式解锁历史行字段覆盖（Q-20261110-08 A 案）——默认模式下
+    yahoo 复权重算/全历史重述的非尾部差异被拒并告警，防止 R20261107-03 归档
+    数据态被静默改写的重演。"""
     df = _download(US_MEMBERS + BENCH)
     for sym in US_MEMBERS:
         rows = df_to_rows(sym, df)
-        _write_series("sector/series", sym, rows)   # 信号价 = 执行价同源（退化情形）
-        _write_series("market/series", sym, rows)
+        _write_series("sector/series", sym, rows, repair=repair)  # 信号价=执行价同源（退化情形）
+        _write_series("market/series", sym, rows, repair=repair)
         print(f"{sym}: {len(rows)} 行 ({rows[0]['date']} → {rows[-1]['date']})")
     for sym in BENCH:
         rows = df_to_rows(sym, df)
-        _write_series("market/series", sym, rows)
+        _write_series("market/series", sym, rows, repair=repair)
         print(f"{sym}: {len(rows)} 行")
 
 
@@ -160,11 +164,11 @@ def run_verify(*, raw_compare: bool = False) -> int:
 
 def main(argv: list[str]) -> int:
     if argv[:1] == ["fetch"]:
-        run_fetch()
+        run_fetch(repair="--repair" in argv[1:])
         return 0
     if argv[:1] == ["verify"]:
         return run_verify(raw_compare="--raw-compare" in argv)
-    print("用法: us_backfill.py fetch | verify [--raw-compare]")
+    print("用法: us_backfill.py fetch [--repair] | verify [--raw-compare]")
     return 2
 
 

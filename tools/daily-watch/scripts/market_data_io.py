@@ -174,12 +174,25 @@ def read_series_rows(path: Path) -> list[dict]:
     return rows
 
 
-def upsert_series_rows(path: Path, incoming: list[dict], writer: str) -> int:
-    """三档合并（spec §5.2）。返回变更行数；调用方负责持锁。"""
+def upsert_series_rows(path: Path, incoming: list[dict], writer: str, *,
+                       repair: bool = False, repair_window: int = 30) -> int:
+    """三档合并（spec §5.2）。返回变更行数；调用方负责持锁。
+
+    历史行防改写（Q-20261110-08 A 案，R20261110-05 静默改史修根）：batch 写者
+    对「既存日期 + 非尾部 repair_window 交易日」的既有非空字段默认拒绝覆盖——
+    yahoo 复权重算/源全历史重述不得静默改史。修复窗取 30=update_market_series
+    默认拉取根数（日常 cron 重叠区全在窗内，行为零变化）。例外始终允许：
+    ① 新日期追加；② 旧值 None 的补空位（填洞不是改写事实）。显式 repair=True
+    解锁全量覆盖（确认性修复，如 --force 脏数据修复场景）。
+    """
     if not incoming:
         return 0
     existing = read_series_rows(path)
     by_date = {row["date"]: dict(row) for row in existing}
+    tail_dates: set[str] = set()
+    if existing and not repair:
+        tail_dates = {row["date"] for row in existing[-repair_window:]}
+    rejected: list[str] = []
     changed = 0
     for new in incoming:
         day = new["date"]
@@ -190,20 +203,32 @@ def upsert_series_rows(path: Path, incoming: list[dict], writer: str) -> int:
             continue
         merged = dict(cur)
         touched = False
+        blocked = False
         for key, val in new.items():
             if key == "date" or val is None:
                 continue
-            if writer == "batch":  # ② 权威写者：按字段覆盖
-                if merged.get(key) != val:
-                    merged[key] = val
-                    touched = True
-            else:  # ③ snapshot：只补 null 空位
+            if writer != "batch":  # ③ snapshot：只补 null 空位
                 if merged.get(key) is None:
                     merged[key] = val
                     touched = True
+            elif merged.get(key) is None:  # ② 补空位：填洞不是改写，始终允许
+                merged[key] = val
+                touched = True
+            elif merged.get(key) != val:
+                if repair or day in tail_dates:  # ②a 显式修复/尾部修复窗内
+                    merged[key] = val
+                    touched = True
+                else:  # ②b 历史行字段覆盖：默认拒绝（防静默改史）
+                    blocked = True
         if touched:
             by_date[day] = merged
             changed += 1
+        if blocked:
+            rejected.append(day)
+    if rejected:
+        log(f"Warning: {path.name} 拒绝 {len(rejected)} 个历史日期的字段覆盖"
+            f"（{rejected[0]}..{rejected[-1]}，writer=batch 非尾部 {repair_window}"
+            " 行修复窗内）——确认修复请显式 repair=True / --repair")
     rows = [by_date[day] for day in sorted(by_date)]
     atomic_write_text(path, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
     return changed

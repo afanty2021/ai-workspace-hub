@@ -122,6 +122,94 @@ class UpsertTests(unittest.TestCase):
                 "volume": None, "amount": amount, "source": "mootdx"}
 
 
+class HistoryGuardTests(unittest.TestCase):
+    """Q-20261110-08 A 案：batch 写者历史行防改写（R20261110-05 静默改史修根）。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.path = self.root / "XLK.jsonl"
+        # 40 行升序 series（2009-01-01 起每日一行），值=d 序数；amount 全 null
+        # ——历史行补洞场景的注入位（填洞与改写在防护语义上是两类）。
+        lines = [json.dumps({"date": f"2009-01-{d:02d}", "open": float(d),
+                             "high": float(d), "low": float(d), "close": float(d),
+                             "volume": 1000.0 * d, "amount": None,
+                             "source": "yfinance"}, ensure_ascii=False)
+                 for d in range(1, 41)]
+        self.path.write_text("".join(ln + "\n" for ln in lines), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _row(d: str, close: float, amount: float | None = None) -> dict:
+        return {"date": d, "open": None, "high": None, "low": None, "close": close,
+                "volume": None, "amount": amount, "source": "yfinance"}
+
+    def _close(self, d: str) -> float:
+        for r in mio.read_series_rows(self.path):
+            if r["date"] == d:
+                return float(r["close"])
+        raise AssertionError(f"{d} 不存在")
+
+    def test_history_overwrite_rejected_by_default(self) -> None:
+        # 2009-01-05 距尾部 36 个交易日 > repair_window=3 → close 覆盖被拒
+        mio.upsert_series_rows(self.path, [self._row("2009-01-05", 999.0)],
+                               "batch", repair_window=3)
+        self.assertEqual(self._close("2009-01-05"), 5.0)  # 旧值保留
+
+    def test_tail_window_overwrite_allowed(self) -> None:
+        # 尾部 3 个交易日（01-38/39/40）内覆盖允许——近期修订/源错误修复
+        n = mio.upsert_series_rows(self.path, [self._row("2009-01-38", 999.0)],
+                                   "batch", repair_window=3)
+        self.assertEqual(n, 1)
+        self.assertEqual(self._close("2009-01-38"), 999.0)
+
+    def test_default_window_boundary(self) -> None:
+        # 默认 repair_window=30：existing[-30:] 含倒数第 30 行（01-11），
+        # 倒数第 31 行（01-10）窗外被拒——边界逐行验证
+        mio.upsert_series_rows(self.path, [self._row("2009-01-11", 111.0),
+                                           self._row("2009-01-10", 110.0)], "batch")
+        self.assertEqual(self._close("2009-01-11"), 111.0)  # 窗内允许
+        self.assertEqual(self._close("2009-01-10"), 10.0)   # 窗外拒绝
+
+    def test_null_fill_always_allowed(self) -> None:
+        # 历史行补 null 空位=填洞不是改写事实——窗外也允许（close 覆盖仍被拒）
+        row = self._row("2009-01-05", 999.0, amount=55.0)
+        mio.upsert_series_rows(self.path, [row], "batch", repair_window=3)
+        got = {r["date"]: r for r in mio.read_series_rows(self.path)}["2009-01-05"]
+        self.assertEqual(got["amount"], 55.0)   # null 补上
+        self.assertEqual(got["close"], 5.0)     # 旧值保留
+
+    def test_repair_unlocks_full_overwrite(self) -> None:
+        # 显式 repair=True（--repair/--force 载体）解锁全量覆盖
+        mio.upsert_series_rows(self.path, [self._row("2009-01-05", 999.0)],
+                               "batch", repair_window=3, repair=True)
+        self.assertEqual(self._close("2009-01-05"), 999.0)
+
+    def test_new_date_append_unaffected(self) -> None:
+        # 新日期追加（①类）与窗无关——深回补补早期缺口不受防护影响
+        n = mio.upsert_series_rows(self.path, [self._row("2008-12-31", 1.0)],
+                                   "batch", repair_window=3)
+        self.assertEqual(n, 1)
+        self.assertEqual(mio.read_series_rows(self.path)[0]["date"], "2008-12-31")
+
+    def test_snapshot_writer_unaffected(self) -> None:
+        # snapshot 档本就只补 null——历史行 close 改动既不被允许也无告警语义变化
+        row = self._row("2009-01-05", 999.0, amount=55.0)
+        n = mio.upsert_series_rows(self.path, [row], "snapshot", repair_window=3)
+        self.assertEqual(n, 1)  # amount 补洞计 1 行
+        got = {r["date"]: r for r in mio.read_series_rows(self.path)}["2009-01-05"]
+        self.assertEqual(got["close"], 5.0)
+
+    def test_source_field_also_guarded(self) -> None:
+        # source 字段差异（yfinance→eastmoney）同样属历史改写，窗外拒绝
+        row = {"date": "2009-01-05", "close": None, "source": "eastmoney"}
+        mio.upsert_series_rows(self.path, [row], "batch", repair_window=3)
+        got = {r["date"]: r for r in mio.read_series_rows(self.path)}["2009-01-05"]
+        self.assertEqual(got["source"], "yfinance")
+
+
 class AtomicAndLockTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

@@ -47,8 +47,9 @@ from sector_rotation.models import (  # noqa: E402
     L2_HIDDEN, L2_HIDDEN_PAPER, MIMOModel, ROCState, WeightState)
 from sector_rotation.weekly import weekly_gross_returns  # noqa: E402
 from repro_paper import (  # noqa: E402
-    N_GRID, ZERO, _run, annual_group_returns, alpha_vs_paper,
+    N_GRID, US_DATA, ZERO, _run, annual_group_returns, alpha_vs_paper,
     build_frame, exec_iso_year, year_bounds)
+from data_snapshot import snapshot_data_paths, snapshot_report_line  # noqa: E402
 
 OUT = (REPO_ROOT / "output" / "sector-rotation" / "2026-11"
        / "us-repro-ablation-2026-11-07.md")
@@ -147,6 +148,9 @@ def main(argv: list[str]) -> int:
     if OUT.exists() and "--force-out" not in argv:
         print(f"[FAIL] 报告已存在：{OUT}——防误覆盖消融证据，确认覆盖传 --force-out")
         return 1
+    # 数据态绑定（Q-20261110-08 B）：消融锚定行对拍归档数字，数据态漂移须显形
+    snap = snapshot_data_paths([US_DATA],
+                               OUT.with_name(OUT.stem + "-data-manifest.json"))
     wf = build_frame()
     start, end = year_bounds(wf)
     # 消融前置自检：volume 特征在消费窗+暖机段全齐备（否则 V1 的 ok 过滤会
@@ -158,7 +162,8 @@ def main(argv: list[str]) -> int:
     report = ["# US 复现消融报告——论文原文五候选逐一实施（提案 §12.9）", "",
               f"窗口与锚：与归档轮同源（year_bounds {wf.fridays[start]}.."
               f"{wf.fridays[end - 1]}，尾段 2023+ 零触及）；volume 特征 "
-              f"{warm}:{end} 全齐备断言通过。", ""]
+              f"{warm}:{end} 全齐备断言通过。", "",
+              snapshot_report_line(snap), ""]
     rows_by_variant: dict[str, dict[int, dict]] = {}
     t0 = time.time()
     for name, kw in VARIANTS:

@@ -289,7 +289,10 @@ def update_ticker(data_root: Path, ticker: str, secid: str, *,
         if not acquired:
             log(f"Warning: {ticker} 锁被其它进程持有，本次未更新")
             return "fail"
-        changed = upsert_series_rows(path, fetched, writer="batch")
+        changed = upsert_series_rows(path, fetched, writer="batch",
+                                     repair=force)  # --force 语义=快照脏数据
+                                     # 修复（Q-20261110-08 A 案：显式修复
+                                     # 解锁历史行覆盖；默认仅尾部窗可改）
         if sink is not None:
             rows_now = read_series_rows(path)
             if rows_now:
@@ -307,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tickers", help=f"逗号分隔子集，只接受 "
                         f"{sorted({**CROSS_ASSET_HISTORY_SECIDS, **SINA_HISTORY_SYMBOLS})}")
     parser.add_argument("--force", action="store_true",
-                        help="忽略 series 尾行、重拉整个回补窗口（快照脏数据修复用）")
+                        help="忽略 series 尾行、重拉整个回补窗口，并解锁历史行"
+                             "字段覆盖（快照脏数据修复用；Q-20261110-08 A 案）")
     parser.add_argument("--throttle", type=float, default=3.0,
                         help="票间间隔秒数（push2his IP 级限流防御，默认 3.0）")
     args = parser.parse_args(argv)

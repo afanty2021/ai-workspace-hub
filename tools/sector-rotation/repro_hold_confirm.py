@@ -26,8 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sector_rotation.models import MIMOModel, ROCState  # noqa: E402
 from repro_paper import (  # noqa: E402
-    N_GRID, REF2BP, ZERO, _run, annual_group_returns, alpha_vs_paper,
+    N_GRID, REF2BP, US_DATA, ZERO, _run, annual_group_returns, alpha_vs_paper,
     build_frame, exec_iso_year, year_bounds)
+from data_snapshot import snapshot_data_paths, snapshot_report_line  # noqa: E402
 
 OUT = (REPO_ROOT / "output" / "sector-rotation" / "2026-11"
        / "us-hold-confirm-2026-11-07.md")
@@ -133,6 +134,9 @@ def main(argv: list[str]) -> int:
     if OUT.exists() and "--force-out" not in argv:
         print(f"[FAIL] 报告已存在：{OUT}——单次消费证据防覆盖，确认传 --force-out")
         return 1
+    # 数据态绑定（Q-20261110-08 B）：消费跑读数前落依赖数据 hash 清单
+    snap = snapshot_data_paths([US_DATA],
+                               OUT.with_name(OUT.stem + "-data-manifest.json"))
     wf = build_frame()
     _, c_end = year_bounds(wf)
     start, end = tail_bounds(wf)
@@ -152,6 +156,7 @@ def main(argv: list[str]) -> int:
     verdict = family_verdict({n: cells[n]["mean_alpha"] for n in N_GRID})
     report = ["# US 持有制方案族——2023+ 尾段确认窗（R20261107-03）", "",
               f"预注册冻结配置：{FROZEN}", "",
+              snapshot_report_line(snap), "",
               f"窗口：决策 {wf.fridays[start]}..{wf.fridays[end - 1]} 共 "
               f"{end - start} 周（执行周 ISO 年 2023-2026）· 与消费窗 "
               f"[..{wf.fridays[c_end - 1]}] 零重叠（间隔恰为永久弃决策 "

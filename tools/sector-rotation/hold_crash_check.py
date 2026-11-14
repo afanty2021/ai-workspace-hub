@@ -30,6 +30,7 @@ from sector_rotation.models import MIMOModel, ROCState  # noqa: E402
 from repro_paper import (  # noqa: E402
     N_GRID, US_DATA, ZERO, _run, alpha_vs_paper, annual_group_returns,
     build_frame, exec_iso_year)
+from data_snapshot import snapshot_data_paths, snapshot_report_line  # noqa: E402
 
 OUT = (REPO_ROOT / "output" / "sector-rotation" / "2026-11"
        / "us-hold-crash-check-2026-11-10.md")
@@ -167,6 +168,11 @@ def main(argv: list[str]) -> int:
         print(f"[FAIL] 报告已存在：{OUT}——单次消费防覆盖，确认传 --force-out")
         return 1
 
+    # 数据态绑定（Q-20261110-08 B）：快照含 TRACKER_LOG——状态载体门的对靶
+    # 对象本身也是依赖数据，重放门与数据态绑定同指纹链。
+    snap = snapshot_data_paths(
+        [US_DATA, TRACKER_LOG],
+        OUT.with_name(OUT.stem + "-data-manifest.json"))
     wf = build_frame()
     start, rec_end = recon_bounds(wf)
     t1030, t1106 = rec_end, rec_end + 1
@@ -178,6 +184,7 @@ def main(argv: list[str]) -> int:
 
     lines = ["# US 沉默持有方案族——崩盘段检验（R20261110-05）", "",
              f"预注册冻结配置：{FROZEN}", "",
+             snapshot_report_line(snap), "",
              f"重建窗：决策 {wf.fridays[start]}..{TAIL_END} 共 199 周；扩展 exec W45="
              f"决策 2026-10-30（11-02..11-06，含崩盘 11-05/06）；决策 2026-11-06 "
              "gate-only（W46 无数据）。", "",

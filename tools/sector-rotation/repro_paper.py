@@ -36,6 +36,7 @@ from sector_rotation.portfolio import RiskState  # noqa: E402
 from sector_rotation.universe import load_universe  # noqa: E402
 from sector_rotation.walkforward import run_walkforward  # noqa: E402
 from us_backfill import SPY_ANCHORS, annual_close_returns, check_anchors  # noqa: E402
+from data_snapshot import snapshot_data_paths, snapshot_report_line  # noqa: E402
 
 YEARS = list(range(2012, 2023))
 N_GRID = [13, 26, 52]
@@ -263,6 +264,10 @@ def main(argv: list[str]) -> int:
     if OUT.exists() and "--force-out" not in argv:
         print(f"[FAIL] 报告已存在：{OUT}——防误覆盖归档证据，确认覆盖请传 --force-out")
         return 1
+    # 数据态绑定（Q-20261110-08 B）：消费跑读数前落依赖数据 hash 清单——
+    # 归档数字自此可对拍「运行时数据态」，us_backfill 改史立刻显形。
+    snap = snapshot_data_paths([US_DATA],
+                               OUT.with_name(OUT.stem + "-data-manifest.json"))
     wf = build_frame()
     start, end = year_bounds(wf)
     # 自检（提案 §9，计划评审 I-4）：全窗 valid==11 + SPY 锚点带——缩宇宙/数据
@@ -273,7 +278,8 @@ def main(argv: list[str]) -> int:
     anchor_errs = check_anchors(spy_annual, SPY_ANCHORS)
     assert not anchor_errs, anchor_errs
     report = ["# US 复现报告（SSRN 4280640 × 自研引擎）",
-              "", f"预注册配置：{PREREG_CONFIG}", ""]
+              "", f"预注册配置：{PREREG_CONFIG}", "",
+              snapshot_report_line(snap), ""]
     errors, t1 = tier1(wf, start, end, US_DATA)
     report += t1
     if errors:
