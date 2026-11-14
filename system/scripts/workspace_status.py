@@ -57,6 +57,65 @@ def pending_queue_rows(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+_MODULE_NUM_RE = re.compile(r"四模块第\s*([0-9]+(?:\s*[/~]\s*[0-9]+)*)\s*次")
+
+
+def _expand_module_numbers(raw: str) -> list[int]:
+    """展开「四模块第 X 次」捕获组：支持 N、N/M（斜杠合写）、N~M（区间）三种写法。"""
+    tokens = [t.strip() for t in re.split(r"[/~]", raw) if t.strip()]
+    numbers = [int(t) for t in tokens]
+    if "~" in raw and len(numbers) >= 2:
+        return list(range(numbers[0], numbers[-1] + 1))
+    return numbers
+
+
+def check_module_number_ledger(root: Path) -> dict[str, Any]:
+    """四模块序号账本全局对账（Q-20261114-04 修根 B）：报告声明 vs profile 观察行。
+
+    防线目标（friction-log 2026-11-14 两案，漏记/撞号家族第 3 案）：
+    ① 漏记——报告正文声明了序号但 profile「本轮观察」缺该行；
+    ② 撞号——同一序号被多份不同报告声明（无人值守批次子 agent 自记序号旁路）；
+    ③ profile 撞行——同一序号多行。
+    单向检查：报告正文不写序号声明的票不报（序号声明非报告必填项）。
+    """
+    research_dir = root / "output" / "research"
+    report_nums: dict[int, set[str]] = {}
+    for path in sorted(research_dir.rglob("*.md")):
+        # preflight/ 是回执目录：回执文本会引用其他研究的序号（命卡上下文），
+        # 不研究报告本体（真实冒烟 2026-11-14：18/19/31 撞号均为回执引用误报）。
+        if "preflight" in path.relative_to(research_dir).parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for match in _MODULE_NUM_RE.finditer(text):
+            for n in _expand_module_numbers(match.group(1)):
+                report_nums.setdefault(n, set()).add(relative(path, root))
+    profile_path = root / "workspace" / "research-profile.md"
+    profile_nums: dict[int, int] = {}
+    if profile_path.is_file():
+        text = profile_path.read_text(encoding="utf-8", errors="ignore")
+        section = text
+        if "## 本轮观察" in text:
+            section = text.split("## 本轮观察", 1)[1].split("\n## ", 1)[0]
+        for match in _MODULE_NUM_RE.finditer(section):
+            for n in _expand_module_numbers(match.group(1)):
+                profile_nums[n] = profile_nums.get(n, 0) + 1
+    missing = sorted(n for n in report_nums if n not in profile_nums)
+    dup_reports = {
+        str(n): sorted(paths)
+        for n, paths in sorted(report_nums.items())
+        if len(paths) > 1
+    }
+    dup_profile = sorted(n for n, c in profile_nums.items() if c > 1)
+    return {
+        "reports_declared": len(report_nums),
+        "profile_rows": len(profile_nums),
+        "missing_in_profile": missing,
+        "duplicate_across_reports": dup_reports,
+        "duplicate_in_profile": dup_profile,
+        "ok": not (missing or dup_reports or dup_profile),
+    }
+
+
 def is_overdue(value: Any) -> bool:
     if not value:
         return False
@@ -200,6 +259,20 @@ def collect_status(root: Path) -> dict[str, Any]:
     if not recommendations:
         recommendations.append("当前没有积压；可以开始新研究或生成今日日报。")
 
+    ledger = check_module_number_ledger(root)
+    if not ledger["ok"]:
+        parts = []
+        if ledger["missing_in_profile"]:
+            parts.append("报告声明但 profile 缺观察行：" + "、".join(map(str, ledger["missing_in_profile"])))
+        if ledger["duplicate_across_reports"]:
+            parts.append(
+                "撞号（多报告同序号）："
+                + "、".join(f"第 {n} 次×{len(fs)}" for n, fs in ledger["duplicate_across_reports"].items())
+            )
+        if ledger["duplicate_in_profile"]:
+            parts.append("profile 重复行：" + "、".join(map(str, ledger["duplicate_in_profile"])))
+        recommendations.append("四模块序号账本异常——" + "；".join(parts) + "。")
+
     return {
         "workspace": str(root),
         "active_research": active_research,
@@ -221,6 +294,7 @@ def collect_status(root: Path) -> dict[str, Any]:
             "version": version_match.group(1).strip() if version_match else "unknown",
             "calibrated_research_count": int(count_match.group(1)) if count_match else 0,
         },
+        "module_number_ledger": ledger,
         "recommendations": recommendations,
     }
 
@@ -238,6 +312,7 @@ def render_text(status: dict[str, Any]) -> str:
             f"到期知识卡：{len(status['knowledge_lifecycle']['overdue_reviews'])}",
             f"知识晋级候选：{len(status['knowledge_lifecycle']['promotion_candidates'])}",
             f"执行股票池：{'READY' if status['watchlist_ready'] else 'MISSING'}",
+            f"四模块序号账本：{'OK' if status['module_number_ledger']['ok'] else '异常'}（报告声明 {status['module_number_ledger']['reports_declared']} 序号 / profile {status['module_number_ledger']['profile_rows']} 行）",
             "",
             "建议下一步：",
         ]
