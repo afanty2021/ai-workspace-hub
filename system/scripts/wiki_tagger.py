@@ -120,6 +120,62 @@ def _ticker_list(value: Any) -> list[str]:
     return result
 
 
+def _bare_code(token: str) -> str:
+    """剥离交易所前/后缀，返回与文件名可比对的本体码（保留前导零）。"""
+    if token.startswith(("HK.", "US.")):
+        return token.split(".", 1)[1]
+    return token.split(".", 1)[0]
+
+
+def _entity_identity(path: Path) -> str | None:
+    """entity 卡的文件名即本体身份：纯数字 4-6 位码，或 ticker 样式符号。"""
+    if path.parent.name != "entities":
+        return None
+    stem = path.stem
+    if stem.isdigit() and 4 <= len(stem) <= 6:
+        return stem
+    if TICKER_RE.fullmatch(stem.upper()):
+        return stem.upper()
+    return None
+
+
+def ticker_filename_violations(
+    path: Path, metadata: dict[str, Any], *, require_identity: bool = False
+) -> list[str]:
+    """entity 卡 ticker↔文件名一致性校验（2026-11-13 修根，tagger 错码案）。
+
+    病理链：裸 A 股/基金码被 YAML 1.1 按八进制解析（010736→4574、
+    002415→1293、000333→219，仅前导 0 且数字 0-7 的码触发），tagger
+    重写后错值固化落盘。本校验以 str 化后的码比对文件名，八进制污染
+    与真实错码一并拦截。
+    """
+    identity = _entity_identity(path)
+    if identity is None:
+        return []
+    tickers = _ticker_list(metadata.get("ticker"))
+    if not tickers:
+        if require_identity:
+            return [
+                f"未解析出有效 ticker（疑似八进制污染裸码），entity 卡应含本体码 {identity}"
+            ]
+        return []
+    violations: list[str] = []
+    bares = [_bare_code(ticker) for ticker in tickers]
+    if identity not in bares:
+        violations.append(f"ticker {tickers} 缺本体码 {identity}（文件名即身份）")
+    if identity.isdigit():
+        for ticker, bare in zip(tickers, bares):
+            # 豁免：本体自身 / 带交易所后缀的跨市场腿（00883+600938.SH、1211.HK）/
+            # 符号码（9988 卡上的 BABA）/ 同族前缀码（基金份额 968176/968075）。
+            if bare == identity or "." in ticker or not bare.isdigit():
+                continue
+            if bare[:3] != identity[:3]:
+                violations.append(
+                    f"ticker {ticker} 与本体 {identity} 无关且无交易所后缀（疑似错码或八进制污染）"
+                )
+    return violations
+
+
 def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize model output and discard values outside the public schema."""
     domains = [
@@ -352,6 +408,14 @@ def tag_file(
             "generated": {},
             "cache_hit": False,
         }
+    # 读侧防线 ②（tagger 错码案修根）：entity 卡存量 ticker 与文件名不一致
+    # （含八进制污染裸码）时拒绝打标，先修文件再标；已完成卡由 scan 子命令负责。
+    existing_ticker_violations = ticker_filename_violations(path, document.metadata)
+    if existing_ticker_violations:
+        raise TaggingError(
+            "entity 卡存量 ticker 与文件名不一致，须先修复再打标："
+            + "；".join(existing_ticker_violations)
+        )
     vocabulary = vocabulary or collect_vocabulary(
         root, infer_wiki_root(path, root)
     )
@@ -383,6 +447,18 @@ def tag_file(
             merged["tagging"] = marker
             changed.append("tagging")
     if apply and changed:
+        # 写侧防线 ②（tagger 错码案修根）：ticker 先整体 str 化——dump 出的
+        # 裸 int 码（如 600900）固化为带引号字符串，杜绝将来 0 开头码再被
+        # YAML 1.1 八进制解析；随后做 entity 卡一致性校验，错码即拒、不落盘。
+        if isinstance(merged.get("ticker"), list):
+            merged["ticker"] = [str(item) for item in merged["ticker"]]
+        ticker_violations = ticker_filename_violations(
+            path, merged, require_identity=True
+        )
+        if ticker_violations:
+            raise TaggingError(
+                "ticker↔文件名一致性校验失败，拒绝写入：" + "；".join(ticker_violations)
+            )
         write_document(path, Document(metadata=merged, body=document.body))
         # 修根断言（EXP-08-01 同日两案）：写出后校验列表完整性，折叠即报错，
         # 防止 tagger 自己的写出路径成为缺项元数据的源头（读写两侧都设防）。
@@ -430,6 +506,34 @@ def _resolve_target(root: Path, value: str) -> Path:
     return path.resolve() if path.is_absolute() else (root / path).resolve()
 
 
+def run_ticker_scan(target: Path, root: Path) -> int:
+    """扫描 entity 卡 ticker↔文件名一致性（八进制污染、错码、坏 YAML 一并暴露）。"""
+    if not target.is_dir():
+        print(f"ERROR: target does not exist: {target}", file=sys.stderr)
+        return 2
+    problems = 0
+    for path in sorted(target.rglob("*.md")):
+        try:
+            document = read_document(path)
+        except (OSError, TaggingError) as exc:
+            print(f"- [UNREADABLE] {path.name}: {exc}")
+            problems += 1
+            continue
+        violations = ticker_filename_violations(
+            path, document.metadata, require_identity=True
+        )
+        if violations:
+            display = (
+                path.relative_to(root).as_posix()
+                if path.is_relative_to(root)
+                else str(path)
+            )
+            print(f"- [MISMATCH] {display}: " + "；".join(violations))
+            problems += 1
+    print(f"entity ticker↔文件名扫描：{problems} 个问题")
+    return 1 if problems else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Workspace root")
@@ -453,6 +557,8 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_parser.add_argument("target", nargs="?", default="wiki")
     backfill_parser.add_argument("--max-files", type=int)
     backfill_parser.add_argument("--apply", action="store_true", help="Write validated metadata")
+    scan_parser = subparsers.add_parser("scan", help="扫描 entity 卡 ticker↔文件名一致性")
+    scan_parser.add_argument("target", nargs="?", default="wiki/entities")
     return parser
 
 
@@ -469,6 +575,8 @@ def main(
             env_path = root / env_path
         load_dotenv(env_path)
     target = _resolve_target(root, args.target)
+    if args.command == "scan":
+        return run_ticker_scan(target, root)
     cache_path = args.cache_file
     if not cache_path.is_absolute():
         cache_path = root / cache_path

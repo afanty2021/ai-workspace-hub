@@ -209,6 +209,164 @@ class WikiTaggerWriteTests(unittest.TestCase):
             self.assertEqual(concepts, ["External Concept"])
 
 
+class WikiTaggerTickerIdentityTests(unittest.TestCase):
+    """tagger 错码案修根（2026-11-13）：裸 0 开头码被 YAML 1.1 八进制解析
+    （010736→4574、002415→1293、000333→219），tagger 重写后错值固化。"""
+
+    def make_entity(
+        self,
+        root: Path,
+        name: str,
+        ticker_lines: str,
+        *,
+        tagging: str | None = None,
+        body: str = "sample body",
+    ) -> Path:
+        entities = root / "wiki" / "entities"
+        entities.mkdir(parents=True, exist_ok=True)
+        tagging_block = (
+            f"tagging:\n  status: {tagging}\n  schema_version: 1\n" if tagging else ""
+        )
+        page = entities / f"{name}.md"
+        page.write_text(
+            "---\n"
+            f"title: {name}\n"
+            "type: entity\n"
+            "domain: [investing]\n"
+            f"ticker:\n{ticker_lines}"
+            "concepts: []\n"
+            "related: []\n"
+            "entity_salience: {}\n"
+            "tags: []\n"
+            f"{tagging_block}"
+            "---\n\n"
+            f"# {name}\n\n{body}\n",
+            encoding="utf-8",
+        )
+        return page
+
+    def test_octal_polluted_ticker_rejected_before_llm_call(self) -> None:
+        # 实案复刻：002415.md 裸码 `- 002415` → 解析为 int 1293 → 读侧拒绝，
+        # LLM 不被调用、文件不被改写。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = self.make_entity(root, "002415", "  - 002415\n")
+            before = page.read_text(encoding="utf-8")
+
+            def fail_if_called(*_args, **_kwargs) -> str:
+                raise AssertionError("错码卡必须在 LLM 调用前被拒绝")
+
+            with self.assertRaises(wiki_tagger.TaggingError) as ctx:
+                wiki_tagger.tag_file(page, root=root, apply=True, chat_func=fail_if_called)
+
+            self.assertIn("002415", str(ctx.exception))
+            self.assertEqual(page.read_text(encoding="utf-8"), before)
+
+    def test_write_rejects_generated_ticker_missing_identity(self) -> None:
+        # 实案变体：本体 ticker 为空、LLM 返回无关码 → 写侧拒绝、文件不落盘。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = self.make_entity(root, "002415", "  []\n")
+            before = page.read_text(encoding="utf-8")
+            payload = dict(MODEL_OUTPUT, ticker=["1293"], entity_salience={"1293": "mention"})
+
+            with self.assertRaises(wiki_tagger.TaggingError) as ctx:
+                wiki_tagger.tag_file(
+                    page,
+                    root=root,
+                    apply=True,
+                    chat_func=lambda *_a, **_k: json.dumps(payload, ensure_ascii=False),
+                )
+
+            self.assertIn("本体码 002415", str(ctx.exception))
+            self.assertEqual(page.read_text(encoding="utf-8"), before)
+
+    def test_completed_card_skips_read_check_but_scan_catches_it(self) -> None:
+        # 契约：已完成卡 tagger 静默跳过（backfill 不吵），错码由 scan 暴露。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = self.make_entity(
+                root, "010736", "  - 010736\n", tagging="completed"
+            )  # 裸码 → 解析 4574
+
+            result = wiki_tagger.tag_file(
+                page, root=root, apply=True, chat_func=fake_chat
+            )
+            self.assertEqual(result["status"], "unchanged")
+
+            with redirect_stdout(io.StringIO()) as captured:
+                exit_code = wiki_tagger.main(
+                    ["--root", str(root), "scan", str(root / "wiki" / "entities")]
+                )
+            self.assertEqual(exit_code, 1)
+            self.assertIn("MISMATCH", captured.getvalue())
+            self.assertIn("010736", captured.getvalue())
+
+    def test_scan_exit_zero_when_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_entity(root, "002415", "  - '002415.SZ'\n")
+            with redirect_stdout(io.StringIO()) as captured:
+                exit_code = wiki_tagger.main(
+                    ["--root", str(root), "scan", str(root / "wiki" / "entities")]
+                )
+            self.assertEqual(exit_code, 0)
+            self.assertIn("0 个问题", captured.getvalue())
+
+    def test_known_good_ticker_shapes_pass(self) -> None:
+        # 全库实卡抽查：A+H 双腿、裸 A 码、跨市场符号码、基金同族份额、H 指数。
+        cases = {
+            "00883": ["00883.HK", "600938.SH"],
+            "002594": ["002594", "1211.HK"],
+            "968176": ["968176", "968075"],
+            "002545": ["002545"],
+            "9988": ["9988.HK", "BABA"],
+            "HSTECH": ["HSTECH.HI"],
+            "NVDA": ["NVDA"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, tickers in cases.items():
+                page = self.make_entity(root, name, "")
+                metadata = {"ticker": tickers}
+                self.assertEqual(
+                    wiki_tagger.ticker_filename_violations(
+                        page, metadata, require_identity=True
+                    ),
+                    [],
+                    msg=f"{name} 不应误报",
+                )
+
+    def test_wrong_foreign_codes_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = self.make_entity(root, "002415", "")
+            self.assertTrue(
+                wiki_tagger.ticker_filename_violations(page, {"ticker": ["1293"]})
+            )  # 八进制污染实值
+            self.assertTrue(
+                wiki_tagger.ticker_filename_violations(page, {"ticker": ["4574"]})
+            )  # 无关码
+            self.assertFalse(
+                wiki_tagger.ticker_filename_violations(page, {"ticker": []})
+            )  # 读侧不拦空值（待填）
+            self.assertTrue(
+                wiki_tagger.ticker_filename_violations(page, {"ticker": []}, require_identity=True)
+            )  # scan/写侧要求本体码在场
+
+    def test_non_entity_pages_are_exempt(self) -> None:
+        # sources/concepts/explorations 卡可合法多 ticker，文件名不构成身份约束。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = root / "wiki" / "sources" / "sample.md"
+            page.parent.mkdir(parents=True)
+            metadata = {"ticker": ["NVDA", "AMD"]}
+            self.assertEqual(
+                wiki_tagger.ticker_filename_violations(page, metadata, require_identity=True),
+                [],
+            )
+
+
 class PodcastTaggingTests(unittest.TestCase):
     def test_podcast_summary_requests_tags_in_the_same_json_call(self) -> None:
         response = {
