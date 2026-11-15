@@ -202,6 +202,25 @@ def ticker_format_violations(metadata: dict[str, Any]) -> list[str]:
     return violations
 
 
+RETIRED_FIELDS = ("exchange",)  # Q-20261115-07：ticker 后缀确定函数，2026-11-15 全库移除
+
+
+def retired_field_violations(metadata: dict[str, Any]) -> list[str]:
+    """已退役字段校验（scan 侧硬失败）。
+
+    exchange 是 ticker 后缀的确定函数（.SH→SSE/.SZ→SZSE/.HK→HKEX），
+    2026-11-15 随 ticker 后缀统一全库移除（16 张 entity 卡，值域从未
+    入 _schema.md、无脚本消费者）。字段重新出现即打回，防新建卡模仿
+    再固化。若未来出现 ticker 后缀无法表达的交易所信息（如 .US 需区分
+    NYSE/NASDAQ），再按需复活的字段不在此列。
+    """
+    return [
+        f"字段「{field}」已退役（ticker 后缀已含交易所信息：002003.SZ/00700.HK）"
+        for field in RETIRED_FIELDS
+        if field in metadata
+    ]
+
+
 def ticker_filename_violations(
     path: Path, metadata: dict[str, Any], *, require_identity: bool = False
 ) -> list[str]:
@@ -588,9 +607,13 @@ def run_ticker_scan(target: Path, root: Path) -> int:
             print(f"- [UNREADABLE] {path.name}: {exc}")
             problems += 1
             continue
-        violations = ticker_filename_violations(
-            path, document.metadata, require_identity=True
-        ) + ticker_format_violations(document.metadata)
+        violations = (
+            ticker_filename_violations(
+                path, document.metadata, require_identity=True
+            )
+            + ticker_format_violations(document.metadata)
+            + retired_field_violations(document.metadata)
+        )
         if violations:
             display = (
                 path.relative_to(root).as_posix()

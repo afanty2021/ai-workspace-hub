@@ -416,6 +416,20 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
         self.assertIn("NVDA", joined)
         self.assertNotIn("XAUUSD", joined)
 
+    def test_retired_field_violations_flags_exchange(self) -> None:
+        # Q-20261115-07：exchange 是 ticker 后缀确定函数，全库移除后防复发
+        # ——字段重新出现即 scan 硬失败；其他字段不受影响。
+        self.assertEqual(wiki_tagger.retired_field_violations({}), [])
+        self.assertEqual(
+            wiki_tagger.retired_field_violations({"ticker": ["002003.SZ"]}), []
+        )
+        violations = wiki_tagger.retired_field_violations(
+            {"ticker": ["002003.SZ"], "exchange": ["SZSE"]}
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("exchange", violations[0])
+        self.assertIn("已退役", violations[0])
+
 
 class PodcastTaggingTests(unittest.TestCase):
     def test_podcast_summary_requests_tags_in_the_same_json_call(self) -> None:
