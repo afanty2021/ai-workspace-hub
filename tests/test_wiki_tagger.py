@@ -25,10 +25,10 @@ import fetch_podcasts  # noqa: E402
 
 MODEL_OUTPUT = {
     "domain": ["tech"],
-    "ticker": ["NVDA"],
+    "ticker": ["NVDA.US"],
     "concepts": ["AI算力", "推理硬件"],
     "related": ["NVDA", "AI算力"],
-    "entity_salience": {"NVDA": "core"},
+    "entity_salience": {"NVDA.US": "core"},
     "tags": ["供给约束", "资本开支周期"],
 }
 
@@ -46,10 +46,10 @@ class WikiTaggerValidationTests(unittest.TestCase):
     def test_model_output_is_normalized_to_public_schema(self) -> None:
         payload = {
             "domain": ["investing", "invalid-domain"],
-            "tickers": ["nvda", "not a ticker", "9988.hk"],
+            "tickers": ["nvda.us", "not a ticker", "9988.hk"],
             "concepts": ["AI算力", "AI算力"],
             "related": ["[[NVDA]]", "Anthropic"],
-            "entity_salience": {"NVDA": "CORE", "9988.HK": "wrong"},
+            "entity_salience": {"NVDA.US": "CORE", "9988.HK": "wrong"},
             "tags": ["#供给约束", "供给约束", "资本开支周期"],
             "unexpected": "must disappear",
         }
@@ -57,9 +57,9 @@ class WikiTaggerValidationTests(unittest.TestCase):
         result = wiki_tagger.validate_payload(payload)
 
         self.assertEqual(result["domain"], ["investing"])
-        self.assertEqual(result["ticker"], ["NVDA", "9988.HK"])
+        self.assertEqual(result["ticker"], ["NVDA.US", "9988.HK"])
         self.assertEqual(result["concepts"], ["AI算力"])
-        self.assertEqual(result["entity_salience"], {"NVDA": "core", "9988.HK": "mention"})
+        self.assertEqual(result["entity_salience"], {"NVDA.US": "core", "9988.HK": "mention"})
         self.assertEqual(result["tags"], ["供给约束", "资本开支周期"])
         self.assertNotIn("unexpected", result)
         self.assertIn("[[Anthropic]]", result["related"])
@@ -109,9 +109,9 @@ class WikiTaggerWriteTests(unittest.TestCase):
             self.assertEqual(result["status"], "updated")
             self.assertEqual(metadata["domain"], ["investing"])
             self.assertEqual(metadata["tags"], ["人工标签"])
-            self.assertEqual(metadata["ticker"], ["NVDA"])
+            self.assertEqual(metadata["ticker"], ["NVDA.US"])
             self.assertEqual(metadata["concepts"], ["AI算力", "推理硬件"])
-            self.assertEqual(metadata["entity_salience"], {"NVDA": "core"})
+            self.assertEqual(metadata["entity_salience"], {"NVDA.US": "core"})
             self.assertEqual(metadata["tagging"], {"status": "completed", "schema_version": 1})
 
             def fail_if_called(*_args, **_kwargs) -> str:
@@ -183,7 +183,7 @@ class WikiTaggerWriteTests(unittest.TestCase):
             self.assertEqual(apply_code, 0)
             self.assertEqual(calls, 1)
             self.assertTrue(applied["results"][0]["cache_hit"])
-            self.assertEqual(read_frontmatter(page)["ticker"], ["NVDA"])
+            self.assertEqual(read_frontmatter(page)["ticker"], ["NVDA.US"])
             self.assertTrue((root / "workspace/cache/wiki_tagger.json").is_file())
 
     def test_external_wiki_root_reuses_its_own_vocabulary(self) -> None:
@@ -324,11 +324,12 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
             "002594": ["002594.SZ", "01211.HK"],
             "968176": ["968176.OF", "968075.OF"],
             "002545": ["002545.SZ"],
-            "9988": ["09988.HK", "BABA"],
+            "9988": ["09988.HK", "BABA.US"],
             "2319": ["02319.HK"],  # 4 位文件名 ↔ 官方 5 位码：前导零归一
             "0700": ["00700.HK"],
+            "TSM": ["TSM.US", "2330.TW"],  # ADR 腿与台湾本土腿市场分明
             "HSTECH": ["HSTECH.HI"],
-            "NVDA": ["NVDA"],
+            "NVDA": ["NVDA.US"],
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -368,17 +369,20 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
             root = Path(tmp)
             page = root / "wiki" / "sources" / "sample.md"
             page.parent.mkdir(parents=True)
-            metadata = {"ticker": ["NVDA", "AMD"]}
+            metadata = {"ticker": ["NVDA.US", "AMD.US"]}
             self.assertEqual(
                 wiki_tagger.ticker_filename_violations(page, metadata, require_identity=True),
                 [],
             )
 
     def test_bare_numeric_tickers_dropped_by_gate(self) -> None:
-        # 2026-11-15 后缀统一闸门：裸数字码读取即丢弃（防八进制污染扩散、
-        # 防 LLM 裸码建议固化）；字母码与带后缀/前缀形态不受影响。
-        kept = wiki_tagger._ticker_list(["002594", "1211.HK", "nvda", "HK.0700", "002594.SZ"])
-        self.assertEqual(kept, ["1211.HK", "NVDA", "HK.0700", "002594.SZ"])
+        # 2026-11-15 后缀统一闸门：裸数字码与裸字母美股码读取即丢弃
+        # （防八进制污染扩散、防 LLM 裸码建议固化）；非交易所符号白名单
+        # （XAUUSD）、带后缀/前缀形态不受影响。
+        kept = wiki_tagger._ticker_list(
+            ["002594", "1211.HK", "XAUUSD", "nvda.us", "HK.0700", "002594.SZ", "nvda"]
+        )
+        self.assertEqual(kept, ["1211.HK", "XAUUSD", "NVDA.US", "HK.0700", "002594.SZ"])
 
     def test_zero_padded_identity_matches_five_digit_hk(self) -> None:
         # HK 官方 5 位码 ↔ 4 位文件名（2319.md/0700.md）：前导零归一放行。
@@ -400,14 +404,17 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
             )
 
     def test_ticker_format_violations_flags_bare_and_int_pollution(self) -> None:
-        # scan 硬失败的点名层：裸数字码与已被 YAML 解析成 int 的污染值都暴露。
+        # scan 硬失败的点名层：裸数字码、裸字母美股码（非白名单）与已被
+        # YAML 解析成 int 的污染值都暴露；非交易所符号（XAUUSD）裸写合法。
         violations = wiki_tagger.ticker_format_violations(
-            {"ticker": ["002003.SZ", "002003", 219, "NVDA"]}
+            {"ticker": ["002003.SZ", "002003", 219, "NVDA", "XAUUSD", "NVDA.US"]}
         )
-        self.assertEqual(len(violations), 2)
+        self.assertEqual(len(violations), 3)
         joined = "；".join(violations)
         self.assertIn("002003", joined)
         self.assertIn("219", joined)
+        self.assertIn("NVDA", joined)
+        self.assertNotIn("XAUUSD", joined)
 
 
 class PodcastTaggingTests(unittest.TestCase):
@@ -416,9 +423,9 @@ class PodcastTaggingTests(unittest.TestCase):
             "summary": "Summary",
             "core_views": [],
             "key_data": [],
-            "related_tickers": ["NVDA"],
+            "related_tickers": ["NVDA.US"],
             "related_concepts": ["AI算力"],
-            "entity_salience": {"NVDA": "core"},
+            "entity_salience": {"NVDA.US": "core"},
             "tags": ["供给约束"],
             "predictions": [],
             "h_links": [],
@@ -461,9 +468,9 @@ class PodcastTaggingTests(unittest.TestCase):
         }
         structured = {
             "summary": "Summary",
-            "related_tickers": ["nvda", "not a ticker"],
+            "related_tickers": ["nvda.us", "not a ticker"],
             "related_concepts": ["AI算力"],
-            "entity_salience": {"NVDA": "core"},
+            "entity_salience": {"NVDA.US": "core"},
             "tags": ["供给约束"],
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -479,9 +486,9 @@ class PodcastTaggingTests(unittest.TestCase):
             metadata = read_frontmatter(page)
 
         self.assertEqual(metadata["domain"], ["investing"])
-        self.assertEqual(metadata["ticker"], ["NVDA"])
+        self.assertEqual(metadata["ticker"], ["NVDA.US"])
         self.assertEqual(metadata["concepts"], ["AI算力"])
-        self.assertEqual(metadata["entity_salience"], {"NVDA": "core"})
+        self.assertEqual(metadata["entity_salience"], {"NVDA.US": "core"})
         self.assertEqual(metadata["tags"], ["供给约束"])
         self.assertEqual(metadata["tagging"]["status"], "completed")
 

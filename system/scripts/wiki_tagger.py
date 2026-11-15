@@ -37,6 +37,15 @@ SKIP_PARTS = {"raw", "translations", "_archive", "archive", ".git"}
 TICKER_RE = re.compile(
     r"^(?:[A-Z]{1,8}(?:[.-][A-Z0-9]{1,8})*|[0-9]{4,6}(?:\.[A-Z]{1,4})?|(?:HK|US)\.[A-Z0-9.]{1,12})$"
 )
+# 非交易所符号白名单（2026-11-15 字母码市场后缀统一）：无交易所可挂的
+# 现货/备案码可裸写；其余字母码必须带市场后缀（NVDA.US/TSM.US）。
+NON_EXCHANGE_SYMBOLS = frozenset({
+    "XAUUSD",   # 伦敦金现（FX 现货）
+    "SXN916",   # 勤辰森裕鑫享 1 号私募备案码
+    "SXF480",   # 私募备案码
+    "SBMQ66",   # 私募备案码
+    "P1073280", # 私募管理人登记号
+})
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
 MAX_BODY_CHARS = 12_000
 CACHE_SCHEMA_VERSION = 1
@@ -114,9 +123,10 @@ def _ticker_list(value: Any) -> list[str]:
     """ticker 读取/写入共用形态闸门（2026-11-15 后缀统一立项修根）。
 
     数字裸码（'002003'）在此被丢弃：读侧阻断 YAML 八进制污染扩散，
-    写侧让 LLM 建议的裸码直接落空、不再固化。字母符号码（NVDA/TSM）
-    与 HK./US. 前缀形态不受影响。丢弃不静默——scan 侧由
-    ticker_format_violations 对原始值逐个点名。
+    写侧让 LLM 建议的裸码直接落空、不再固化。字母符号码必须带市场
+    后缀（NVDA.US/TSM.US/BABA.US），仅非交易所符号（FX 现货/私募
+    备案码）白名单内可裸写。HK./US. 前缀形态不受影响。丢弃不静默
+    ——scan 侧由 ticker_format_violations 对原始值逐个点名。
     """
     candidates = _string_list(value, limit=12, max_length=24)
     result: list[str] = []
@@ -126,6 +136,8 @@ def _ticker_list(value: Any) -> list[str]:
             continue
         if ticker[0].isdigit() and "." not in ticker:
             continue  # 数字裸码=非法形态（统一形态=带交易所后缀）
+        if ticker[0].isalpha() and "." not in ticker and ticker not in NON_EXCHANGE_SYMBOLS:
+            continue  # 交易所字母码必须带市场后缀；白名单=无市场的现货/备案码
         if ticker not in result:
             result.append(ticker)
     return result
@@ -181,6 +193,11 @@ def ticker_format_violations(metadata: dict[str, Any]) -> list[str]:
             violations.append(
                 f"ticker「{item}」为无后缀数字裸码"
                 "（统一形态=带交易所后缀：002003.SZ/00700.HK/010736.OF）"
+            )
+        elif token[0].isalpha() and "." not in token and token not in NON_EXCHANGE_SYMBOLS:
+            violations.append(
+                f"ticker「{item}」为无市场后缀字母码"
+                "（统一形态=带市场后缀：NVDA.US/TSM.US；FX 现货/私募备案码白名单外不得裸写）"
             )
     return violations
 

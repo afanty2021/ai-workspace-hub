@@ -36,6 +36,12 @@ HK_RE = re.compile(r"^(\d{1,5})\.HK$")
 DIGITS_RE = re.compile(r"^\d+$")
 # 八进制污染还原表（2026-11-13 修根案残留：010736 被解析成 4574 固化在卡里）
 POLLUTION_FIX = {"4574": ("010736.OF", "八进制污染还原（010736→4574 案残留）")}
+# 美股字母码 → .US（2026-11-15 第二批：市场后缀扩展到字母码）。
+# 非交易所符号（FX 现货/私募备案码）不在此表、保持裸写。
+US_SYMBOLS = {
+    "NVDA", "MSFT", "GOOGL", "AMZN", "META", "ORCL",
+    "AVGO", "MU", "SPCX", "BABA", "CAT", "TSM",
+}
 SALIENCE_LINE_RE = re.compile(r"^(\s*)(.+?):(\s*)([^#\n]*?)\s*$")
 
 
@@ -80,7 +86,9 @@ def normalize_ticker(item: str, hints: str) -> tuple[str, str | None]:
     if "." in token:
         return token, None  # 已带后缀（非 HK 形态）保持
     if not DIGITS_RE.match(token):
-        return token, None  # 字母符号码 / HK. / US. 前缀：不动
+        if token in US_SYMBOLS:
+            return f"{token}.US", "美股码补市场后缀"
+        return token, None  # 非交易所符号（FX/私募备案码）/ HK. / US. 前缀：不动
     if len(token) == 6:
         if token[:2] in ("01", "02", "03"):
             return f"{token}.OF", None  # 场外基金专用段

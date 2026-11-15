@@ -23,8 +23,8 @@ domain:
 - 假设机制
 - 风险监控
 ticker:
-- TSM
-- 2330.TW
+- 'TSM.US'
+- '2330.TW'
 concepts:
 - 股与货背离
 - 公司侧读数
@@ -52,7 +52,7 @@ related:
 - '[[TSM]]'
 - '[[2330.TW]]'
 entity_salience:
-  TSM: core
+  'TSM.US': core
   2330.TW: core
 tagging:
   status: completed
