@@ -261,9 +261,14 @@ def check_profile_trigger_ledger(root: Path) -> dict[str, Any]:
         if not keys and not report_ids:
             continue
         for key in keys:
-            for path in research_dir.rglob(f"*{key}*.md"):
-                if path in trigger_by_path:
-                    report_ids |= trigger_by_path[path]
+            # 通道②边界匹配（2026-11-15 评审 I-2）：子串 glob 会让 4 位 HK
+            # 头注码（0700）吞进文件名含 5 位官方码（00700）的报告触发器
+            # 表，产出「行缺 T3…T9」假异常（数字相邻即碰撞：968↔968176 同
+            # 理）；直接迭代已加载的 trigger_by_path，等价于 rglob 后过滤。
+            key_re = re.compile(rf"(?<![0-9]){re.escape(key)}(?![0-9])")
+            for path, ids in trigger_by_path.items():
+                if key_re.search(path.name):
+                    report_ids |= ids
         if not report_ids:
             continue
         reconciled += 1

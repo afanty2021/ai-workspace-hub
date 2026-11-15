@@ -192,6 +192,27 @@ def test_trigger_m1_sparse_compression_flagged(tmp_path: Path) -> None:
     assert any("行缺 T1" in i for i in result["issues"])
 
 
+def test_trigger_filename_key_digit_boundary_no_collision(tmp_path: Path) -> None:
+    # 2026-11-15 评审 I-2：4 位 HK 头注码（0700）不得吞文件名含 5 位
+    # 官方码（00700）的报告触发器表——子串 glob 会把两票对上账，产出
+    # 「行缺 T2、3」假异常（968↔968176 数字相邻碰撞同理）。行与报告
+    # 序号互不连接（63≠62）、报告无 preflight 自指纹，只剩通道②。
+    root = _make_ws(
+        tmp_path,
+        {
+            "2026-11-15-x-00700.md": (
+                "四模块第 62 次应用。\n## 观察哨事件表\n"
+                "- T1 回踩\n- T2 年报\n- T3 毛利率\n"
+            ),
+        },
+        "- 2026-11-15（R20261115-01 X 0700）：四模块第 63 次——样本。触发器 T1 回踩。\n",
+    )
+    result = check_profile_trigger_ledger(root)
+    assert result["ok"] is True
+    assert result["issues"] == []
+    assert result["reconciled"] == 0  # 未对上任何报告=零异常（旧子串 glob 时为 1+假异常）
+
+
 def test_trigger_detached_ids_without_keyword_flagged(tmp_path: Path) -> None:
     root = _make_ws(
         tmp_path,
