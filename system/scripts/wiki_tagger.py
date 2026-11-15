@@ -111,11 +111,22 @@ def _string_list(value: Any, *, limit: int, max_length: int = 60) -> list[str]:
 
 
 def _ticker_list(value: Any) -> list[str]:
+    """ticker 读取/写入共用形态闸门（2026-11-15 后缀统一立项修根）。
+
+    数字裸码（'002003'）在此被丢弃：读侧阻断 YAML 八进制污染扩散，
+    写侧让 LLM 建议的裸码直接落空、不再固化。字母符号码（NVDA/TSM）
+    与 HK./US. 前缀形态不受影响。丢弃不静默——scan 侧由
+    ticker_format_violations 对原始值逐个点名。
+    """
     candidates = _string_list(value, limit=12, max_length=24)
     result: list[str] = []
     for candidate in candidates:
         ticker = candidate.upper()
-        if TICKER_RE.fullmatch(ticker) and ticker not in result:
+        if not TICKER_RE.fullmatch(ticker):
+            continue
+        if ticker[0].isdigit() and "." not in ticker:
+            continue  # 数字裸码=非法形态（统一形态=带交易所后缀）
+        if ticker not in result:
             result.append(ticker)
     return result
 
@@ -139,6 +150,41 @@ def _entity_identity(path: Path) -> str | None:
     return None
 
 
+def _same_security_code(identity: str, bares: list[str]) -> bool:
+    """前导零归一比对（2026-11-15 HK 官方 5 位统一）：2319.md ↔ 02319.HK。
+
+    港交所官方码 5 位带前导零，历史文件名/互链用 4 位——文件名与
+    [[互链]] 不动，身份比对按去前导零等价（仅两侧均为纯数字时归一）。
+    """
+    if not identity.isdigit():
+        return False
+    return any(
+        bare.isdigit() and bare.lstrip("0") == identity.lstrip("0") for bare in bares
+    )
+
+
+def ticker_format_violations(metadata: dict[str, Any]) -> list[str]:
+    """frontmatter 原始 ticker 值的形态校验（数字码必须带交易所后缀）。
+
+    与 _ticker_list 的闸门丢弃互补：闸门防裸码扩散，本校验在 scan 里
+    把被丢弃的裸码逐个点名（含已被 YAML 八进制污染成 int 的值），
+    保证「静默丢弃」不发生。scan 侧硬失败（exit 1）。
+    """
+    raw = metadata.get("ticker")
+    items = raw if isinstance(raw, list) else ([] if raw in (None, "") else [raw])
+    violations: list[str] = []
+    for item in items:
+        token = str(item).strip().upper()
+        if not token:
+            continue
+        if token[0].isdigit() and "." not in token:
+            violations.append(
+                f"ticker「{item}」为无后缀数字裸码"
+                "（统一形态=带交易所后缀：002003.SZ/00700.HK/010736.OF）"
+            )
+    return violations
+
+
 def ticker_filename_violations(
     path: Path, metadata: dict[str, Any], *, require_identity: bool = False
 ) -> list[str]:
@@ -147,7 +193,9 @@ def ticker_filename_violations(
     病理链：裸 A 股/基金码被 YAML 1.1 按八进制解析（010736→4574、
     002415→1293、000333→219，仅前导 0 且数字 0-7 的码触发），tagger
     重写后错值固化落盘。本校验以 str 化后的码比对文件名，八进制污染
-    与真实错码一并拦截。
+    与真实错码一并拦截。2026-11-15 起叠加：数字码必须带交易所后缀
+    （_ticker_list 闸门 + ticker_format_violations 点名），身份比对
+    前导零归一（HK 官方 5 位 ↔ 4 位文件名）。
     """
     identity = _entity_identity(path)
     if identity is None:
@@ -156,12 +204,12 @@ def ticker_filename_violations(
     if not tickers:
         if require_identity:
             return [
-                f"未解析出有效 ticker（疑似八进制污染裸码），entity 卡应含本体码 {identity}"
+                f"未解析出有效 ticker（疑似八进制污染或无后缀裸码），entity 卡应含本体码 {identity}"
             ]
         return []
     violations: list[str] = []
     bares = [_bare_code(ticker) for ticker in tickers]
-    if identity not in bares:
+    if identity not in bares and not _same_security_code(identity, bares):
         violations.append(f"ticker {tickers} 缺本体码 {identity}（文件名即身份）")
     if identity.isdigit():
         for ticker, bare in zip(tickers, bares):
@@ -410,7 +458,11 @@ def tag_file(
         }
     # 读侧防线 ②（tagger 错码案修根）：entity 卡存量 ticker 与文件名不一致
     # （含八进制污染裸码）时拒绝打标，先修文件再标；已完成卡由 scan 子命令负责。
-    existing_ticker_violations = ticker_filename_violations(path, document.metadata)
+    # 2026-11-15 叠加：无后缀数字裸码同在读侧拒绝（闸门丢弃后若不再拦截，
+    # 裸码卡会静默放行进 LLM——防线退化为仅 scan 可见，违背响亮失败）。
+    existing_ticker_violations = ticker_filename_violations(
+        path, document.metadata
+    ) + ticker_format_violations(document.metadata)
     if existing_ticker_violations:
         raise TaggingError(
             "entity 卡存量 ticker 与文件名不一致，须先修复再打标："
@@ -521,7 +573,7 @@ def run_ticker_scan(target: Path, root: Path) -> int:
             continue
         violations = ticker_filename_violations(
             path, document.metadata, require_identity=True
-        )
+        ) + ticker_format_violations(document.metadata)
         if violations:
             display = (
                 path.relative_to(root).as_posix()

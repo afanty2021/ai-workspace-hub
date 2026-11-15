@@ -22,8 +22,8 @@ domain:
 - 宏观
 - 大宗商品
 ticker:
-- 518880
-- XAUUSD
+- '518880.SH'
+- 'XAUUSD'
 concepts:
 - 黄金定价四驱动
 - 配置盘托底不托价

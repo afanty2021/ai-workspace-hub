@@ -58,8 +58,8 @@ related:
 - '[[HSTECH.HI]]'
 entity_salience:
   HSTECH.HI: core
-  9988.HK: reference
-  0700.HK: reference
+  '09988.HK': reference
+  '00700.HK': reference
 tagging:
   status: completed
   schema_version: 1

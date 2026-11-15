@@ -14,7 +14,8 @@ promoted_to:
 supersedes:
 superseded_by:
 domain: [投资方法论, 事件核验]
-ticker: [300049]
+ticker:
+- '300049.SZ'
 concepts: [权益传导, 参股非控股, De Novo, 叙事换算]
 tags: [传闻核验, 事件驱动, 结构分析]
 recall_signals: ["遇到「参股/控股公司海外获批、大订单、突破」类新闻要评估对 A 股主体的实际影响时", "卖方报告给出的持股比例与公司公告口径冲突时", "判断事件驱动型利好该给多少估值增量时"]

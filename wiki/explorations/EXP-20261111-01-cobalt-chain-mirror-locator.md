@@ -75,7 +75,7 @@ entity_salience:
   600096.SH: reference
   301358.SZ: reference
   000807.SZ: core
-  01378.HK: core
+  '01378.HK': core
 tagging:
   status: completed
   schema_version: 1

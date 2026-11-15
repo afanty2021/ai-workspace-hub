@@ -19,12 +19,12 @@ domain:
 - 传媒
 - AI应用
 ticker:
-- 300364
-- 603533
-- 300418
-- 300133
-- "1024.HK"
-- "0772.HK"
+- '300364.SZ'
+- '603533.SH'
+- '300418.SZ'
+- '300133.SZ'
+- '01024.HK'
+- '00772.HK'
 concepts:
 - 价值链利润分层
 - 成本倒挂
@@ -51,12 +51,12 @@ related:
 - '[[EXP-20261110-03]]'
 - '[[EXP-20261109-01]]'
 entity_salience:
-  300364: core
-  300418: core
-  603533: core
-  1024.HK: core
-  0772.HK: reference
-  300133: mention
+  '300364.SZ': core
+  '300418.SZ': core
+  '603533.SH': core
+  '01024.HK': core
+  '00772.HK': reference
+  '300133.SZ': mention
 tagging:
   status: completed
   schema_version: 1

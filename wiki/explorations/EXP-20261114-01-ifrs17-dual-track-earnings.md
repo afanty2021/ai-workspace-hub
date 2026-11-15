@@ -23,8 +23,8 @@ domain:
 - 财报口径
 - 估值
 ticker:
-- 601318.SH
-- 2318.HK
+- '601318.SH'
+- '02318.HK'
 concepts:
 - IFRS17双轨利润
 - 营运利润OPAT
@@ -46,7 +46,7 @@ decision_scenarios:
 - 保险股估值读数选择（PEV vs PE/PB 分位）
 entity_salience:
   601318.SH: core
-  2318.HK: core
+  '02318.HK': core
 tagging:
   status: completed
   schema_version: 1

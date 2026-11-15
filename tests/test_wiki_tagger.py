@@ -259,7 +259,10 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
             with self.assertRaises(wiki_tagger.TaggingError) as ctx:
                 wiki_tagger.tag_file(page, root=root, apply=True, chat_func=fail_if_called)
 
-            self.assertIn("002415", str(ctx.exception))
+            # 2026-11-15 起读侧改由 format violation 拦截：消息点名污染实值 1293
+            # （002415.md 上的八进制裸码），LLM 调用前拒绝、文件不被改写。
+            self.assertIn("1293", str(ctx.exception))
+            self.assertIn("无后缀数字裸码", str(ctx.exception))
             self.assertEqual(page.read_text(encoding="utf-8"), before)
 
     def test_write_rejects_generated_ticker_missing_identity(self) -> None:
@@ -314,13 +317,16 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
             self.assertIn("0 个问题", captured.getvalue())
 
     def test_known_good_ticker_shapes_pass(self) -> None:
-        # 全库实卡抽查：A+H 双腿、裸 A 码、跨市场符号码、基金同族份额、H 指数。
+        # 全库实卡抽查（2026-11-15 后缀统一迁移后形态）：A+H 双腿、互认基金、
+        # 跨市场符号码、H 指数、HK 官方 5 位 vs 4 位文件名零归一。
         cases = {
             "00883": ["00883.HK", "600938.SH"],
-            "002594": ["002594", "1211.HK"],
-            "968176": ["968176", "968075"],
-            "002545": ["002545"],
-            "9988": ["9988.HK", "BABA"],
+            "002594": ["002594.SZ", "01211.HK"],
+            "968176": ["968176.OF", "968075.OF"],
+            "002545": ["002545.SZ"],
+            "9988": ["09988.HK", "BABA"],
+            "2319": ["02319.HK"],  # 4 位文件名 ↔ 官方 5 位码：前导零归一
+            "0700": ["00700.HK"],
             "HSTECH": ["HSTECH.HI"],
             "NVDA": ["NVDA"],
         }
@@ -342,11 +348,13 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
             root = Path(tmp)
             page = self.make_entity(root, "002415", "")
             self.assertTrue(
-                wiki_tagger.ticker_filename_violations(page, {"ticker": ["1293"]})
-            )  # 八进制污染实值
+                wiki_tagger.ticker_filename_violations(page, {"ticker": ["600887.SH"]})
+            )  # 带后缀但缺本体码
+            # 裸数字码（含八进制污染实值 1293/4574）自 2026-11-15 起由
+            # ticker_format_violations 点名（_ticker_list 闸门直接丢弃）。
             self.assertTrue(
-                wiki_tagger.ticker_filename_violations(page, {"ticker": ["4574"]})
-            )  # 无关码
+                wiki_tagger.ticker_format_violations({"ticker": ["1293", "4574"]})
+            )
             self.assertFalse(
                 wiki_tagger.ticker_filename_violations(page, {"ticker": []})
             )  # 读侧不拦空值（待填）
@@ -365,6 +373,41 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
                 wiki_tagger.ticker_filename_violations(page, metadata, require_identity=True),
                 [],
             )
+
+    def test_bare_numeric_tickers_dropped_by_gate(self) -> None:
+        # 2026-11-15 后缀统一闸门：裸数字码读取即丢弃（防八进制污染扩散、
+        # 防 LLM 裸码建议固化）；字母码与带后缀/前缀形态不受影响。
+        kept = wiki_tagger._ticker_list(["002594", "1211.HK", "nvda", "HK.0700", "002594.SZ"])
+        self.assertEqual(kept, ["1211.HK", "NVDA", "HK.0700", "002594.SZ"])
+
+    def test_zero_padded_identity_matches_five_digit_hk(self) -> None:
+        # HK 官方 5 位码 ↔ 4 位文件名（2319.md/0700.md）：前导零归一放行。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = self.make_entity(root, "2319", "")
+            self.assertEqual(
+                wiki_tagger.ticker_filename_violations(
+                    page, {"ticker": ["02319.HK"]}, require_identity=True
+                ),
+                [],
+            )
+            page = self.make_entity(root, "0700", "")
+            self.assertEqual(
+                wiki_tagger.ticker_filename_violations(
+                    page, {"ticker": ["00700.HK"]}, require_identity=True
+                ),
+                [],
+            )
+
+    def test_ticker_format_violations_flags_bare_and_int_pollution(self) -> None:
+        # scan 硬失败的点名层：裸数字码与已被 YAML 解析成 int 的污染值都暴露。
+        violations = wiki_tagger.ticker_format_violations(
+            {"ticker": ["002003.SZ", "002003", 219, "NVDA"]}
+        )
+        self.assertEqual(len(violations), 2)
+        joined = "；".join(violations)
+        self.assertIn("002003", joined)
+        self.assertIn("219", joined)
 
 
 class PodcastTaggingTests(unittest.TestCase):

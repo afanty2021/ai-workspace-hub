@@ -20,10 +20,10 @@ domain:
 - 营销识别
 - 行为金融
 ticker:
-- "027205"
-- "027206"
-- "021277"
-- "023402"
+- '027205.OF'
+- '027206.OF'
+- '021277.OF'
+- '023402.OF'
 concepts:
 - 战绩嫁接营销
 - 品类归属错误
@@ -46,7 +46,7 @@ related:
 - '[[027205]]'
 - '[[EXP-20261108-03]]'
 entity_salience:
-  "027205": core
+  '027205.OF': core
 tagging:
   status: completed
   schema_version: 1
