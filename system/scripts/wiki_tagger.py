@@ -251,6 +251,9 @@ def ticker_filename_violations(
         for ticker, bare in zip(tickers, bares):
             # 豁免：本体自身 / 带交易所后缀的跨市场腿（00883+600938.SH、1211.HK）/
             # 符号码（9988 卡上的 BABA）/ 同族前缀码（基金份额 968176/968075）。
+            # 注（2026-11-15 评审 M-2）：_ticker_list 闸门丢弃数字裸码后，本
+            # continue 对闸门后的输入恒真（'.' in ticker 与 not bare.isdigit()
+            # 必居其一）——防御性保留，防未来调用方绕过闸门直传裸码列表。
             if bare == identity or "." in ticker or not bare.isdigit():
                 continue
             if bare[:3] != identity[:3]:
@@ -346,12 +349,15 @@ def build_messages(
     existing_tags: list[str],
     existing_concepts: list[str],
 ) -> list[dict[str, str]]:
+    # 示例形态必须与 _ticker_list 闸门一致（2026-11-15 评审 I-1）：教 LLM
+    # 输出裸码（NVDA）会被闸门丢弃——entity 路径 require_identity 报出
+    # 误导性错误、sources 路径静默丢 ticker。related 例外：名称非代码。
     schema = {
         "domain": ["investing"],
-        "ticker": ["NVDA"],
+        "ticker": ["NVDA.US"],
         "concepts": ["AI算力"],
         "related": ["NVDA", "AI算力"],
-        "entity_salience": {"NVDA": "core"},
+        "entity_salience": {"NVDA.US": "core"},
         "tags": ["供给约束", "资本开支周期"],
     }
     instructions = f"""为 wiki 页面生成检索用结构化元数据。
@@ -359,7 +365,7 @@ def build_messages(
 规则：
 1. 只输出一个 JSON object，不要解释。字段形状严格参考：{json.dumps(schema, ensure_ascii=False)}
 2. domain 只能从 {list(ALLOWED_DOMAINS)} 选择 1-2 个。
-3. ticker 只写材料直接相关的上市标的代码；没有则为空数组。
+3. ticker 只写材料直接相关的上市标的代码；没有则为空数组。代码必须带交易所/市场后缀（002003.SZ/00700.HK/NVDA.US 形态），无后缀裸码会被丢弃；entity_salience 的键同此规则。
 4. concepts 写 1-6 个可复用主题或框架，优先复用已有概念的原名。
 5. related 写直接相关的公司、人物、产品和概念名称，不要加 [[ ]]。
 6. entity_salience 只给 ticker 打 core/reference/mention。core=材料主角或影响判断，reference=重要对照，mention=顺带出现。
@@ -496,13 +502,17 @@ def tag_file(
     # （含八进制污染裸码）时拒绝打标，先修文件再标；已完成卡由 scan 子命令负责。
     # 2026-11-15 叠加：无后缀数字裸码同在读侧拒绝（闸门丢弃后若不再拦截，
     # 裸码卡会静默放行进 LLM——防线退化为仅 scan 可见，违背响亮失败）。
-    existing_ticker_violations = ticker_filename_violations(
-        path, document.metadata
-    ) + ticker_format_violations(document.metadata)
-    if existing_ticker_violations:
+    # 2026-11-15 评审 M-1：retired_field_violations（exchange 等退役字段）
+    # 同标准接入——否则 tag_file 重写落盘可成为退役字段的延续源。
+    existing_violations = (
+        ticker_filename_violations(path, document.metadata)
+        + ticker_format_violations(document.metadata)
+        + retired_field_violations(document.metadata)
+    )
+    if existing_violations:
         raise TaggingError(
-            "entity 卡存量 ticker 与文件名不一致，须先修复再打标："
-            + "；".join(existing_ticker_violations)
+            "entity 卡存量元数据不合规（ticker 形态/文件名一致性/退役字段），须先修复再打标："
+            + "；".join(existing_violations)
         )
     vocabulary = vocabulary or collect_vocabulary(
         root, infer_wiki_root(path, root)

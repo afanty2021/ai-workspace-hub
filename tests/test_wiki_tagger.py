@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -429,6 +430,42 @@ class WikiTaggerTickerIdentityTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("exchange", violations[0])
         self.assertIn("已退役", violations[0])
+
+    def test_exchange_residue_rejected_before_llm_call(self) -> None:
+        # 2026-11-15 评审 M-1：退役字段（exchange）与 ticker 违规同在
+        # tag_file 读侧拦截——否则打标重写落盘会延续退役字段。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = self.make_entity(root, "002003", "  - 002003.SZ\n")
+            text = page.read_text(encoding="utf-8")
+            page.write_text(
+                text.replace("concepts: []", "exchange: SZSE\nconcepts: []"),
+                encoding="utf-8",
+            )
+            before = page.read_text(encoding="utf-8")
+
+            def fail_if_called(*_args, **_kwargs) -> str:
+                raise AssertionError("退役字段卡必须在 LLM 调用前被拒绝")
+
+            with self.assertRaises(wiki_tagger.TaggingError) as ctx:
+                wiki_tagger.tag_file(page, root=root, apply=True, chat_func=fail_if_called)
+
+            self.assertIn("已退役", str(ctx.exception))
+            self.assertEqual(page.read_text(encoding="utf-8"), before)
+
+    def test_build_messages_schema_examples_pass_ticker_gate(self) -> None:
+        # 2026-11-15 评审 I-1：schema 示例必须能通过 _ticker_list 闸门——
+        # 示例教 LLM 输出裸码（NVDA）会被闸门丢弃：entity 路径报出
+        # 「未解析出有效 ticker」误导性错误、sources 路径静默丢 ticker。
+        # related 例外（名称非代码，闸门不适用）。
+        document = wiki_tagger.Document(metadata={}, body="sample body")
+        messages = wiki_tagger.build_messages(Path("x.md"), document, [], [])
+        m = re.search(r"字段形状严格参考：(\{.*\})", messages[1]["content"])
+        assert m is not None
+        schema = json.loads(m.group(1))
+        self.assertEqual(wiki_tagger._ticker_list(schema["ticker"]), schema["ticker"])
+        for key in schema["entity_salience"]:
+            self.assertEqual(wiki_tagger._ticker_list([key]), [key])
 
 
 class PodcastTaggingTests(unittest.TestCase):
