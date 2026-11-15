@@ -59,6 +59,22 @@ class RepositoryContractTests(unittest.TestCase):
                 f"{template} and {public} diverged",
             )
 
+    def test_research_profile_template_observation_rows_are_placeholder_only(self) -> None:
+        # Q-20261115-06②：research-profile 模板经 install_workspace.py 播种新工作区
+        # 实例，「本轮观察」段灌入真实行会把新工作区的四模块序号账本污染成从
+        # 第 62 次起跳。0fa6922（2026-11-14）曾以整文件 cp 同步灌入 53 条——
+        # 此断言让 cp 复发直接红：marker 之后只允许 YYYY-MM-DD 占位行。
+        template = REPO_ROOT / "system/templates" / "research-profile.md"
+        text = template.read_text(encoding="utf-8")
+        marker = "> 记录用户在真实研究中的追问、删改和反驳。观察不等于偏好"
+        self.assertIn(marker, text)
+        after_marker = text.split(marker, 1)[1]
+        real_rows = [
+            line for line in after_marker.splitlines()
+            if re.match(r"^- 20\d{2}-\d{2}-\d{2}", line)
+        ]
+        self.assertEqual(real_rows, [])
+
     def test_all_relative_markdown_links_resolve(self) -> None:
         pattern = re.compile(r"\[[^]]*\]\(([^)]+)\)")
         broken: list[str] = []
