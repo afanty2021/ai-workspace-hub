@@ -10,6 +10,7 @@
 - 事实、推测、待验证必须分开。
 - 优先使用本地文件。
 - 删除、覆盖、发布、推送前必须确认。
+- conda 环境跑 Python 一律先把脚本落到文件（如 `/tmp/x.py`）再 `conda run ... python /tmp/x.py`，禁止 heredoc / 管道直喂（`python -`、`python /dev/stdin`）——conda run 缺省不透传 stdin，脚本一个字节没执行也退出 0，验证会假绿。
 
 ## 核心路由
 
