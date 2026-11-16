@@ -162,6 +162,26 @@ def test_trigger_ok_reference_style_covers_report(tmp_path: Path) -> None:
     assert result["issues"] == []
 
 
+def test_trigger_theme_group_reference_not_absorbed(tmp_path: Path) -> None:
+    # Tongling 案修根（机场航站楼 T2/T3 同族第 2 次）：触发器节内的正文段落
+    # 引用主题暴露矩阵主题组编号「（T14 组）」——旧逻辑节内吸收把 T14 当触发器
+    # 集合，产出「行缺 T14」假异常；「T\\d+ 组」主题组引用不进触发器集合。
+    root = _make_ws(
+        tmp_path,
+        {
+            "2026-11-16-y-000630.md": (
+                "## 观察哨事件表\n- T1 减产\n- T2 TC 修复\n- T3 硫酸企稳\n\n"
+                "## 触发器（时间变量）\n| # | 触发器 |\n| T9 | 站上 MA250 |\n\n"
+                "**组合层敞口披露**：副产腿与黄金股 ETF（T14 组）间接重叠。\n"
+            ),
+        },
+        "- 2026-11-16（R20261116-01 Y 000630）：四模块第 67 次——触发器 T1-T9（全表见报告）。\n",
+    )
+    result = check_profile_trigger_ledger(root)
+    assert result["ok"] is True, f"主题组引用 T14 被误当触发器：{result['issues']}"
+    assert result["issues"] == []
+
+
 def test_trigger_missing_section_flagged(tmp_path: Path) -> None:
     root = _make_ws(
         tmp_path,

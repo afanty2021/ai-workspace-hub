@@ -126,16 +126,29 @@ _ROW_HEADER_RE = re.compile(r"^- [0-9]{4}-[0-9]{2}-[0-9]{2}（([^）]*)）")
 _ROW_RID_RE = re.compile(r"\bR([0-9]{8}-[0-9]{2,3})\b")
 _ROW_CODE_RE = re.compile(r"(?<![0-9])([0-9]{4,6})(?![0-9])")
 _MAX_TRIGGER_ID = 30  # 触发器编号史最大 T13；T80/T05/T22 类行文噪音滤除
+# 「T\d+ 组」= 主题暴露矩阵的主题组编号引用（黄金组 T14/现金流组 T16 等），
+# 与触发器编号撞号域（Tongling 案：触发器节内的组合层披露段「（T14 组）」
+# 被吃进触发器集合→「行缺 T14」假异常）——组引用 token 不进触发器集合。
+_TRIGGER_GROUP_REF_RE = re.compile(r"\bT[0-9]{1,2}\s*组")
 
 
 def _trigger_ids(text: str) -> set[int]:
-    """提取 T 编号集合：单点（T3）与区间（T1-T7/T9-T11）都展开。"""
+    """提取 T 编号集合：单点（T3）与区间（T1-T7/T9-T11）都展开；「T\\d+ 组」主题组引用排除。"""
+    group_spans = [m.span() for m in _TRIGGER_GROUP_REF_RE.finditer(text)]
+
+    def _in_group_ref(pos: int) -> bool:
+        return any(s <= pos < e for s, e in group_spans)
+
     ids: set[int] = set()
     for m in _TRIGGER_RANGE_RE.finditer(text):
+        if _in_group_ref(m.start()):
+            continue
         lo, hi = int(m.group(1)), int(m.group(2))
         if lo <= hi <= _MAX_TRIGGER_ID:
             ids.update(range(lo, hi + 1))
     for m in _TRIGGER_TOK_RE.finditer(text):
+        if _in_group_ref(m.start()):
+            continue
         n = int(m.group(1))
         if n <= _MAX_TRIGGER_ID:
             ids.add(n)
