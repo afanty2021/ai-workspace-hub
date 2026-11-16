@@ -201,7 +201,7 @@ focus_areas:
 | Tier | 监控热度 | `HOT`（重点）/ `WARM`（跟踪）/ `COLD`（基准） |
 | Hypothesis | 关联假设 | 对应 `hypothesis/` 下的假设 ID，如 `H1`、`H2` |
 
-**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。`.TDX` 走 mootdx 板块指数日线（880/881 段通达信自编口径，如 `881075.TDX` 贵金属；volume 为板块成分合计）。`.OF` 是场外开放式基金（如 `021179.OF`）：不进证券行情链，走 tushare fund_nav（官方净值主源）→ 腾讯 jj 前缀（轻量备份）专用短链，返回 **T-1 净值**（当日净值约 20:00 后更新，日报 16:30 显示前一交易日属口径属性非缺数）。后缀必须大写。
+**Ticker 后缀规则**：脚本用后缀判断数据源。`.SH`/`.SZ` 走 mootdx（A 股主源，未命中时 tushare → 东财 → 腾讯 → 新浪），`.HK` 走 tushare（港股），无后缀默认走 FMP/Nasdaq（美股）。`.TDX` 走 mootdx 板块指数日线（880/881 段通达信自编口径，如 `881075.TDX` 贵金属；volume 为板块成分合计）。`.OF` 是场外开放式基金（如 `021179.OF`）：不进证券行情链，走 tushare fund_nav（官方净值主源）→ 腾讯 jj 前缀（轻量备份）专用短链，返回 **T-1 净值**（当日净值约 20:00 后更新，日报 18:10 显示前一交易日属口径属性非缺数）。后缀必须大写。
 
 ## 输出示例
 
@@ -412,7 +412,7 @@ python3 tools/daily-watch/scripts/check_setup.py
 
 ### CLI 示例
 
-    # 盘后批量（定时任务每日 16:30 自动跑全部四条，2026-11-09 起两条新命令已并入 cron prompt）
+    # 盘后批量（定时任务每日 18:10 自动跑全部四条，2026-11-16 由 16:30 改；2026-11-09 起两条新命令已并入 cron prompt）
     python tools/daily-watch/scripts/update_market_series.py --scope all
     python tools/daily-watch/scripts/update_finance_snapshots.py
     # 跨资产历史回补（^SOX 走 Nasdaq 官方 historical、XAUUSD=X 走新浪全球日线，其余东财 push2his，节流内置；

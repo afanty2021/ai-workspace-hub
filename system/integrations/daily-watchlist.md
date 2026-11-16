@@ -12,7 +12,7 @@ config/daily-watchlist.yaml（配置）
   → output/daily-watch/YYYY/MM/YYYY-MM-DD.md（日报）
   → evidence/YYYY/MM/E-*.md（证据账本）
   → hypothesis/H*.md（只追加证据引用）
-  → data/（市场数据持久化层：日报钩子快照级追加；每日 16:30 批量权威写，详见 tools/daily-watch/README.md「本地持久化」）
+  → data/（市场数据持久化层：日报钩子快照级追加；每日 18:10 批量权威写（2026-11-16 由 16:30 改），详见 tools/daily-watch/README.md「本地持久化」）
 ```
 
 ## 文件契约

@@ -22,6 +22,7 @@
 
 ### 改进
 
+- 盘后批量 cron 16:30→18:10（2026-11-16 用户拍板，automation-1e7fca91；18:10 版新闻面以已发布收评为准并注记晚间公告缺口）；8:00 盘前日报增上一交易日收盘轮完整性自检（Q-20261116-04：查 run-log batch-* open 行+series 尾行判交易日查收盘日报文件，缺失只红色警告不自动补跑，收盘轮整轮丢失盲窗 24h→~14h）。同步 `system/integrations`、skill 与工具 README 共七处现行时间表述。
 - 仓库不再跟踪 `workspace/meta/active-context.md` 与 `friction-log.md` 实例文件（已加入 .gitignore）：本仓库原地使用 Hub 产生的个人条目不再进入公开仓库历史，模板仍由 `system/templates/` 提供，新工作区由安装器重建。
 - 评审修复：腾讯 / 新浪行情端点从明文 HTTP 改为 HTTPS；`build_quote_record` 把 `YYYYMMDD` 形式的 tradeDate 统一归一为 ISO 格式（tushare / 腾讯原始口径混排曾并存）；东财请求去掉未使用的 f58 字段；新浪涨跌额按 Nasdaq 源惯例 round 到 6 位；AGENTS.md / CLAUDE.md 数据源表补东财 / 腾讯 / 新浪行。
 - `check_setup.py --init` 初始化股票池改用空模板，与安装器统一：新工作区不再被种入美股演示股票（AAPL/MSFT/NVDA 等），避免用户直接追加时把演示股混进日报；新增回归测试守住该边界。
