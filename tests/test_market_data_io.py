@@ -154,28 +154,29 @@ class HistoryGuardTests(unittest.TestCase):
 
     def test_history_overwrite_rejected_by_default(self) -> None:
         # 2009-01-05 距尾部 36 个交易日 > repair_window=3 → close 覆盖被拒
-        mio.upsert_series_rows(self.path, [self._row("2009-01-05", 999.0)],
+        # （6.0 与邻行比值正常——本测 history guard 语义，勿用触发单位守卫的值）
+        mio.upsert_series_rows(self.path, [self._row("2009-01-05", 6.0)],
                                "batch", repair_window=3)
         self.assertEqual(self._close("2009-01-05"), 5.0)  # 旧值保留
 
     def test_tail_window_overwrite_allowed(self) -> None:
         # 尾部 3 个交易日（01-38/39/40）内覆盖允许——近期修订/源错误修复
-        n = mio.upsert_series_rows(self.path, [self._row("2009-01-38", 999.0)],
+        n = mio.upsert_series_rows(self.path, [self._row("2009-01-38", 44.5)],
                                    "batch", repair_window=3)
         self.assertEqual(n, 1)
-        self.assertEqual(self._close("2009-01-38"), 999.0)
+        self.assertEqual(self._close("2009-01-38"), 44.5)
 
     def test_default_window_boundary(self) -> None:
         # 默认 repair_window=30：existing[-30:] 含倒数第 30 行（01-11），
         # 倒数第 31 行（01-10）窗外被拒——边界逐行验证
-        mio.upsert_series_rows(self.path, [self._row("2009-01-11", 111.0),
-                                           self._row("2009-01-10", 110.0)], "batch")
-        self.assertEqual(self._close("2009-01-11"), 111.0)  # 窗内允许
+        mio.upsert_series_rows(self.path, [self._row("2009-01-11", 11.5),
+                                           self._row("2009-01-10", 10.5)], "batch")
+        self.assertEqual(self._close("2009-01-11"), 11.5)  # 窗内允许
         self.assertEqual(self._close("2009-01-10"), 10.0)   # 窗外拒绝
 
     def test_null_fill_always_allowed(self) -> None:
         # 历史行补 null 空位=填洞不是改写事实——窗外也允许（close 覆盖仍被拒）
-        row = self._row("2009-01-05", 999.0, amount=55.0)
+        row = self._row("2009-01-05", 6.0, amount=55.0)
         mio.upsert_series_rows(self.path, [row], "batch", repair_window=3)
         got = {r["date"]: r for r in mio.read_series_rows(self.path)}["2009-01-05"]
         self.assertEqual(got["amount"], 55.0)   # null 补上
@@ -196,7 +197,8 @@ class HistoryGuardTests(unittest.TestCase):
 
     def test_snapshot_writer_unaffected(self) -> None:
         # snapshot 档本就只补 null——历史行 close 改动既不被允许也无告警语义变化
-        row = self._row("2009-01-05", 999.0, amount=55.0)
+        # （6.5 与邻行比值正常——本测 snapshot writer 语义，勿用触发单位守卫的值）
+        row = self._row("2009-01-05", 6.5, amount=55.0)
         n = mio.upsert_series_rows(self.path, [row], "snapshot", repair_window=3)
         self.assertEqual(n, 1)  # amount 补洞计 1 行
         got = {r["date"]: r for r in mio.read_series_rows(self.path)}["2009-01-05"]
@@ -208,6 +210,73 @@ class HistoryGuardTests(unittest.TestCase):
         mio.upsert_series_rows(self.path, [row], "batch", repair_window=3)
         got = {r["date"]: r for r in mio.read_series_rows(self.path)}["2009-01-05"]
         self.assertEqual(got["source"], "yfinance")
+
+
+class UnitBreakGuardTests(unittest.TestCase):
+    """2026-11-18 HG00Y 单位断裂修根（max 评审 I-3）：incoming 断层行拒写、
+    存量断点不阻塞增量更新。夹具模拟迁移后状态（全序列美分/磅）。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.path = self.root / "HG00Y.jsonl"
+        self.path.write_text(
+            '{"date": "2026-11-18", "open": 609.4, "high": 613.1, "low": 581.9,'
+            ' "close": 582.835, "volume": null, "amount": null, "source": "sina"}\n',
+            encoding="utf-8",
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _row(d: str, close: float, source: str = "eastmoney-kline") -> dict:
+        return {"date": d, "open": None, "high": None, "low": None, "close": close,
+                "volume": None, "amount": 0.0, "source": source}
+
+    def test_unit_break_incoming_rejected(self) -> None:
+        # 未 scale 的东财 kline 行（美元/磅 5.97）vs 库内美分尾行=97.6x 断层 → 拒写
+        n = mio.upsert_series_rows(self.path, [self._row("2026-11-19", 5.97)], "batch")
+        self.assertEqual(n, 0)
+        rows = mio.read_series_rows(self.path)
+        self.assertEqual([r["date"] for r in rows], ["2026-11-18"])  # 文件不变
+
+    def test_scaled_incoming_accepted(self) -> None:
+        # scale 后的行（597.0 美分）与尾行 1.02x → 正常写入
+        n = mio.upsert_series_rows(self.path, [self._row("2026-11-19", 597.0)], "batch")
+        self.assertEqual(n, 1)
+        self.assertEqual(mio.read_series_rows(self.path)[-1]["close"], 597.0)
+
+    def test_legacy_break_not_blocking(self) -> None:
+        # 存量断点（两侧均旧行，51 段 ETF 长假 ×10 往返+跳回形态已在库）不阻塞
+        # 尾部日常增量——守卫只对「最近既存锚」判新行
+        self.path.write_text(
+            '{"date": "2023-09-28", "close": 45.67, "source": "mootdx"}\n'
+            '{"date": "2023-10-09", "close": 486.34, "source": "mootdx"}\n'
+            '{"date": "2023-10-10", "close": 45.52, "source": "mootdx"}\n',
+            encoding="utf-8",
+        )
+        n = mio.upsert_series_rows(self.path, [self._row("2023-10-11", 45.6)], "batch")
+        self.assertEqual(n, 1)
+        self.assertEqual(len(mio.read_series_rows(self.path)), 4)
+
+    def test_chain_stable_after_drop(self) -> None:
+        # incoming 内一行正常一行断层：断层行剔除后剩行与尾行正常 → 稳定保留
+        incoming = [self._row("2026-11-19", 610.0), self._row("2026-11-20", 61000.0)]
+        n = mio.upsert_series_rows(self.path, incoming, "batch")
+        self.assertEqual(n, 1)
+        got = mio.read_series_rows(self.path)
+        self.assertEqual([r["date"] for r in got], ["2026-11-18", "2026-11-19"])
+        self.assertEqual(got[-1]["close"], 610.0)
+
+    def test_boundary_exactly_10x_passes(self) -> None:
+        # 恰 10.0x 边界不拦（严格不等式——真实 1 拆 10 除权保护；×10 坑实为
+        # 10.0x+ 如 10.006x 仍会被拦）
+        self.path.write_text('{"date": "2026-11-18", "close": 100.0, "source": "sina"}\n',
+                             encoding="utf-8")
+        n = mio.upsert_series_rows(self.path, [self._row("2026-11-19", 1000.0)], "batch")
+        self.assertEqual(n, 1)
+        self.assertEqual(mio.read_series_rows(self.path)[-1]["close"], 1000.0)
 
 
 class AtomicAndLockTests(unittest.TestCase):

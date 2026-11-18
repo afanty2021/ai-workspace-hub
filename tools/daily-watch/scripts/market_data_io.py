@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
@@ -174,6 +175,56 @@ def read_series_rows(path: Path) -> list[dict]:
     return rows
 
 
+# 跨口径断点阈值：相邻交易日 close 比值 >10 或 <0.1 视为单位断裂（2026-11-18
+# HG00Y 案=东财 kline 美元/磅 × 快照美分/磅 ×100；另见 TDX 51/56 段 ×10 坑族）。
+# 真实行情/除权远低于此：A 股涨跌停 ±10%、美股 1 拆 10 恰为 0.1 边界不入严格
+# 不等式。阈值只拦「混源单位错」，不碰真实价格行为。
+UNIT_BREAK_RATIO = 10.0
+
+
+def filter_unit_break_rows(name: str, existing: list[dict],
+                           incoming: list[dict]) -> list[dict]:
+    """跨口径单位守卫：incoming 行与其「最近的既存行」close 比值断层即整行拒写
+    （2026-11-18 HG00Y 单位断裂修根，max 评审 I-3）。
+
+    只对既存锚点判连续性、incoming 行之间互不比对——否则一条坏行会污染相邻
+    好行的邻居判定（首轮实现的连带误伤，见 test_chain_stable_after_drop）。
+    两侧均为旧行的存量断点不在此拦（51 段 ETF 长假 ×10 往返历史行已在库，拦了
+    会阻塞这些票的日常增量；存量治理走显式迁移+repair）。同日覆盖行取前后邻为
+    锚、自己旧值不作锚（修正幅度归 history guard 的 repair 语义管）。显式
+    repair=True 的调用路径跳过本守卫（确认性修复通道，在 upsert 调用处分流）。
+    无既存行（首建 series）无从判单位，放行。
+    """
+    if not existing:
+        return list(incoming)
+    existing_close = {r["date"]: r.get("close") for r in existing}
+    dates = sorted(existing_close)
+    kept: list[dict] = []
+    for r in incoming:
+        d = r["date"]
+        c = r.get("close") or 0.0
+        anchor = None
+        if c > 0:
+            i = bisect.bisect_left(dates, d)
+            # 同日覆盖：锚=前后邻（跳过自己）；新日期：锚=前一行与后一行
+            neighbors = ((i - 1, i) if (i >= len(dates) or dates[i] != d)
+                         else (i - 1, i + 1))
+            for j in neighbors:
+                if 0 <= j < len(dates):
+                    nc = existing_close.get(dates[j]) or 0.0
+                    if nc > 0 and (c / nc > UNIT_BREAK_RATIO
+                                   or nc / c > UNIT_BREAK_RATIO):
+                        anchor = dates[j]
+                        break
+        if anchor is None:
+            kept.append(r)
+        else:
+            log(f"Warning: {name} 拒绝写入 {d}（与最近既存行 {anchor} close 比值超 "
+                f"{UNIT_BREAK_RATIO:g}x，疑似跨口径单位断裂——确认口径请显式迁移存量后 "
+                "repair，勿静默混写）")
+    return kept
+
+
 def upsert_series_rows(path: Path, incoming: list[dict], writer: str, *,
                        repair: bool = False, repair_window: int = 30) -> int:
     """三档合并（spec §5.2）。返回变更行数；调用方负责持锁。
@@ -188,6 +239,10 @@ def upsert_series_rows(path: Path, incoming: list[dict], writer: str, *,
     if not incoming:
         return 0
     existing = read_series_rows(path)
+    if not repair:  # 显式 repair=确认性修复通道，跳过单位守卫
+        incoming = filter_unit_break_rows(path.name, existing, incoming)
+        if not incoming:
+            return 0
     by_date = {row["date"]: dict(row) for row in existing}
     tail_dates: set[str] = set()
     if existing and not repair:

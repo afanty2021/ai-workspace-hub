@@ -35,6 +35,40 @@ def _nasdaq_response(rows: list[dict]) -> MagicMock:
     return mock
 
 
+class KlinePriceScaleTests(unittest.TestCase):
+    """2026-11-18 HG00Y 修根：push2his kline（美元/磅）入库前 ×100 归一到
+    快照口径（美分/磅）；只动 eastmoney-kline 指纹行的价格字段。"""
+
+    @staticmethod
+    def _kline_row(**over: float) -> dict:
+        base = {"date": "2026-11-17", "open": 5.984, "close": 5.97,
+                "high": 6.0185, "low": 5.953, "volume": 16886.0,
+                "amount": 0.0, "source": "eastmoney-kline"}
+        base.update(over)
+        return base
+
+    def test_hg00y_kline_prices_x100(self) -> None:
+        row = self._kline_row()
+        ucah.apply_kline_price_scale("HG00Y", [row])
+        self.assertAlmostEqual(row["close"], 597.0, places=6)
+        self.assertAlmostEqual(row["open"], 598.4, places=6)
+        self.assertAlmostEqual(row["high"], 601.85, places=6)
+        self.assertAlmostEqual(row["low"], 595.3, places=6)
+        self.assertEqual(row["volume"], 16886.0)  # 量纲不同不 scale
+        self.assertEqual(row["amount"], 0.0)
+        self.assertEqual(row["source"], "eastmoney-kline")
+
+    def test_other_ticker_untouched(self) -> None:
+        row = self._kline_row()
+        ucah.apply_kline_price_scale("^GSPC", [row])
+        self.assertEqual(row["close"], 5.97)
+
+    def test_non_kline_source_row_untouched(self) -> None:
+        row = self._kline_row(source="nasdaq-historical", volume=None, amount=None)
+        ucah.apply_kline_price_scale("HG00Y", [row])
+        self.assertEqual(row["close"], 5.97)
+
+
 class ParseKlinesTests(unittest.TestCase):
     def test_seven_column_row_with_amount_fingerprint(self) -> None:
         rows = ucah.parse_klines(["2026-11-05,9806.31,9011.14,9838.13,8997.39,0,0"])

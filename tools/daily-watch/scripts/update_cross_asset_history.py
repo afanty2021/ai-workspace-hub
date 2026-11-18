@@ -80,6 +80,29 @@ NASDAQ_HEADERS = {
 # GlobalFuturesService（stock2.finance.sina.cn），日期切口径实测一致。
 SINA_HISTORY_SYMBOLS: dict[str, str] = {"XAUUSD=X": "XAU"}
 
+# 东财 push2his kline 与 push2 快照同票不同单位（2026-11-18 HG00Y 序列断裂案
+# 修根，friction 同日条）：101.HG00Y 的 kline 返回美元/磅（5.97），push2 快照/
+# 新浪 hf_HG 为美分/磅（629¢ 对拍 COMEX 一致）——序列口径统一美分/磅，东财
+# kline 行入库前价格字段 ×100。其余票 kline 与快照同单位（11-12 接线对拍族），
+# 无 scale；写入侧另有 market_data_io.filter_unit_break_rows 兜底断点守卫。
+EASTMONEY_KLINE_PRICE_SCALE: dict[str, float] = {"HG00Y": 100.0}
+
+
+def apply_kline_price_scale(ticker: str, rows: list[dict[str, Any]]) -> None:
+    """东财 kline 行价格字段就地 scale（见 EASTMONEY_KLINE_PRICE_SCALE 注记）。
+
+    只动 source="eastmoney-kline" 行（写者指纹过滤，nasdaq/sina 主源行不误伤）；
+    volume/amount 量纲不同不 scale。"""
+    scale = EASTMONEY_KLINE_PRICE_SCALE.get(ticker)
+    if not scale:
+        return
+    for r in rows:
+        if r.get("source") != "eastmoney-kline":
+            continue
+        for key in ("open", "high", "low", "close"):
+            if r.get(key) is not None:
+                r[key] = r[key] * scale
+
 SINA_GLOBAL_HISTORY_URL = ("https://stock2.finance.sina.com.cn/futures/api/jsonp.php"
                            "/var%20t=/GlobalFuturesService.getGlobalFuturesDailyKLine")
 SINA_HEADERS = {
@@ -285,6 +308,7 @@ def update_ticker(data_root: Path, ticker: str, secid: str, *,
         fetched = fetch_kline_rows(secid, beg)
     if not fetched:
         return "empty"
+    apply_kline_price_scale(ticker, fetched)
     with series_lock(data_root, path.name) as acquired:
         if not acquired:
             log(f"Warning: {ticker} 锁被其它进程持有，本次未更新")
