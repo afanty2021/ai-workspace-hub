@@ -187,8 +187,18 @@ def chat(
     *,
     json_mode: bool = False,
     max_attempts: int = 3,
+    max_total_seconds: int = 300,
 ) -> str:
-    """Call an OpenAI-compatible endpoint and return the assistant text."""
+    """Call an OpenAI-compatible endpoint and return the assistant text.
+
+    ``timeout`` is the per-request connect/read timeout; requests' read timeout
+    only bounds the gap between bytes, so a trickling or stalled response can
+    outlive it indefinitely. ``max_total_seconds`` is a hard wall-clock deadline
+    across all attempts (including backoff sleeps) — the loop stops retrying
+    once it is exhausted (2026-11-20 修根：tagger 8 分钟挂死案，deadline 封顶
+    重试放大)。已知限制：单次响应慢但在 deadline 内完成的仍会占用至多
+    ``max_total_seconds``。
+    """
     resolved = resolve_provider(provider, model)
     base = resolved["base_url"].rstrip("/")
     payload: dict[str, Any] = {
@@ -200,8 +210,17 @@ def chat(
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
+    started = time.monotonic()
+    deadline = started + max_total_seconds
     last_error: LLMError | None = None
     for attempt in range(max(1, max_attempts)):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LLMError(
+                f"LLM request failed: total deadline {max_total_seconds}s exceeded "
+                f"after {attempt} attempt(s), {time.monotonic() - started:.1f}s elapsed "
+                f"(last error: {last_error})"
+            )
         session = requests.Session()
         session.trust_env = False
         try:
@@ -212,7 +231,7 @@ def chat(
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=timeout,
+                timeout=min(timeout, remaining),
             )
             if response.status_code >= 400:
                 raise LLMError(
@@ -231,7 +250,7 @@ def chat(
             last_error = exc if isinstance(exc, LLMError) else LLMError(str(exc))
 
         if last_error and _is_transient(str(last_error)) and attempt < max_attempts - 1:
-            time.sleep(2**attempt)
+            time.sleep(min(2**attempt, max(0.0, deadline - time.monotonic())))
             continue
         break
     raise last_error or LLMError("LLM request failed without an error message")
