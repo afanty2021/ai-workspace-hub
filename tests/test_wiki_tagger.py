@@ -563,13 +563,23 @@ class SharedLLMClientTests(unittest.TestCase):
 
     def test_json_mode_and_transient_retry(self) -> None:
         class FakeResponse:
+            """stream 协议适配：chat() 以 with + iter_content 读体（11-20 r3）。"""
+
             def __init__(self, status_code: int, payload: dict | None = None):
                 self.status_code = status_code
-                self.text = "temporary 503" if status_code >= 400 else ""
                 self._payload = payload or {}
 
-            def json(self) -> dict:
-                return self._payload
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_exc: object) -> bool:
+                return False
+
+            def iter_content(self, **_kwargs):
+                if self.status_code >= 400:
+                    yield b"temporary 503"
+                else:
+                    yield json.dumps(self._payload).encode("utf-8")
 
         responses = [
             FakeResponse(503),

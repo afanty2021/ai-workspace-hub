@@ -177,6 +177,25 @@ def _is_transient(message: str) -> bool:
     return any(marker in lowered for marker in TRANSIENT_MARKERS)
 
 
+def _drain(response: requests.Response, deadline: float) -> bytes:
+    """读完整响应体，过墙钟 deadline 即中断。
+
+    requests 的 read timeout 只约束相邻字节间隔——滴流（trickle）响应
+    每滴一个字节就重置计时，单请求可在 attempt 边界检查够不着的读循环
+    里无限存活。iter_content 只在字节到达时 yield，所以在每个字节边界
+    检查 deadline 才能封顶这一形态（2026-11-20 r3 复查修根第二刀）。
+    """
+    chunks: list[bytes] = []
+    for chunk in response.iter_content(chunk_size=8192):
+        if time.monotonic() > deadline:
+            raise LLMError(
+                "LLM request failed: response body still trickling past "
+                f"total deadline ({time.monotonic() - deadline:.1f}s over)"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def chat(
     messages: list[dict[str, str]],
     provider: str | None = None,
@@ -195,9 +214,12 @@ def chat(
     only bounds the gap between bytes, so a trickling or stalled response can
     outlive it indefinitely. ``max_total_seconds`` is a hard wall-clock deadline
     across all attempts (including backoff sleeps) — the loop stops retrying
-    once it is exhausted (2026-11-20 修根：tagger 8 分钟挂死案，deadline 封顶
-    重试放大)。已知限制：单次响应慢但在 deadline 内完成的仍会占用至多
-    ``max_total_seconds``。
+    once it is exhausted, and the body read loop aborts mid-response once it
+    passes (2026-11-20 修根：tagger 8 分钟挂死案，deadline 封顶重试放大；
+    同日 r3 复查补第二刀——deadline 检查从 attempt 边界下沉到读循环，
+    滴流响应不再能拖过 deadline)。已知限制：deadline 检查在字节边界
+    执行，deadline 刚过后在途的一个 chunk 至多再等一次 read timeout
+    才中断；deadline 内完成的慢响应仍占用至多 ``max_total_seconds``。
     """
     resolved = resolve_provider(provider, model)
     base = resolved["base_url"].rstrip("/")
@@ -224,7 +246,7 @@ def chat(
         session = requests.Session()
         session.trust_env = False
         try:
-            response = session.post(
+            with session.post(
                 f"{base}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {resolved['api_key']}",
@@ -232,12 +254,15 @@ def chat(
                 },
                 json=payload,
                 timeout=min(timeout, remaining),
-            )
+                stream=True,
+            ) as response:
+                body = _drain(response, deadline)
             if response.status_code >= 400:
                 raise LLMError(
-                    f"LLM request failed: HTTP {response.status_code} {response.text[:500]}"
+                    f"LLM request failed: HTTP {response.status_code} "
+                    f"{body[:500].decode('utf-8', 'replace')}"
                 )
-            data: dict[str, Any] = response.json()
+            data: dict[str, Any] = json.loads(body)
             try:
                 return data["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError) as exc:

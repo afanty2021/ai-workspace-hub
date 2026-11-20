@@ -451,13 +451,17 @@ def request_tags(
                 json_mode=True,
                 max_attempts=3,
             )
-            return validate_payload(extract_json(text))
         except LLMError:
             # 网络/服务层错误内层 chat() 已按 deadline 重试过，外层再试只会
             # 把挂死窗口再放大一倍（11-20 修根：8 分钟挂死=外层 2×内层
             # 3×120s 放大器），直接上抛走 CLI 的 [ERROR] 打印路径。
             raise
-        except (json.JSONDecodeError, TaggingError) as exc:
+        try:
+            # 模型输出校验失败（JSON 解析/对象形状/payload 校验）保留外层
+            # 重试原语义：再采样一次可能得到合法输出，与网络层失败不同族
+            # （11-20 r3 复查：形状校验 LLMError 原被网络层上抛连带吞掉）。
+            return validate_payload(extract_json(text))
+        except (json.JSONDecodeError, LLMError, TaggingError) as exc:
             last_error = exc
     raise TaggingError(f"model output failed validation after retry: {last_error}")
 
