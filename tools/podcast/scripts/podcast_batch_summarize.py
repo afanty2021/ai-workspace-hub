@@ -124,6 +124,11 @@ Transcript file: {path.name}
         [{"role": "system", "content": "You produce factual JSON summaries. Never invent data."}, {"role": "user", "content": prompt}],
         provider=provider,
         model=model,
+        # 事实抽取/摘要 JSON 任务：glm-5.x 默认 thinking 会先烧 max_tokens
+        # 预算（转写摘要 4096 下推理即可耗尽、content 被截空）且大转写
+        # 服务端推理可超单请求 timeout（2026-11-20 tagger thinking 案的
+        # 换位形态，覆盖面扫描补堵）。
+        thinking=False,
     )
     data = extract_json(response)
     data["input_path"] = str(path)
