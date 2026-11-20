@@ -154,6 +154,49 @@ class DeadlineTests(unittest.TestCase):
         self.assertLess(elapsed, 2.0, "滴流不得拖到第二个 read timeout")
 
 
+class ThinkingParamTests(unittest.TestCase):
+    """thinking 参数仅 glm 通路注入 payload，机械分类任务显式关闭。"""
+
+    def _capture(self, provider_env: dict[str, str]) -> dict:
+        env = {**ENV, **provider_env}
+        captured: dict = {}
+
+        def capture(*_args, **kwargs):
+            captured.update(kwargs)
+            return _ok_response()
+
+        with patch.dict("os.environ", env, clear=True), patch.object(
+            llm_client.requests, "Session"
+        ) as session_cls:
+            session_cls.return_value.post.side_effect = capture
+            chat([{"role": "user", "content": "hi"}], thinking=False)
+        body = session_cls.return_value.post.call_args.kwargs["json"]
+        return captured, body
+
+    def test_thinking_disabled_injected_for_glm(self) -> None:
+        _, body = self._capture({"LLM_PROVIDER": "glm"})
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+
+    def test_thinking_omitted_for_non_glm(self) -> None:
+        _, body = self._capture({"LLM_PROVIDER": "deepseek"})
+        self.assertNotIn("thinking", body)
+
+    def test_request_tags_passes_thinking_false(self) -> None:
+        kwargs_seen: dict = {}
+
+        def ok_chat(*_args, **kwargs):
+            kwargs_seen.update(kwargs)
+            return '{"domain": ["investing"]}'
+
+        wiki_tagger.request_tags(
+            [{"role": "user", "content": "hi"}],
+            provider=None,
+            model=None,
+            chat_func=ok_chat,
+        )
+        self.assertFalse(kwargs_seen["thinking"])
+
+
 class OuterRetryTests(unittest.TestCase):
     """request_tags 外层重试只服务校验失败，LLMError 直接上抛。"""
 

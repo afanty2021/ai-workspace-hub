@@ -450,6 +450,7 @@ def request_tags(
                 temperature=0.1,
                 json_mode=True,
                 max_attempts=3,
+                thinking=False,
             )
         except LLMError:
             # 网络/服务层错误内层 chat() 已按 deadline 重试过，外层再试只会

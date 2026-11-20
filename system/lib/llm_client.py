@@ -207,6 +207,7 @@ def chat(
     json_mode: bool = False,
     max_attempts: int = 3,
     max_total_seconds: int = 300,
+    thinking: bool | None = None,
 ) -> str:
     """Call an OpenAI-compatible endpoint and return the assistant text.
 
@@ -220,6 +221,11 @@ def chat(
     滴流响应不再能拖过 deadline)。已知限制：deadline 检查在字节边界
     执行，deadline 刚过后在途的一个 chunk 至多再等一次 read timeout
     才中断；deadline 内完成的慢响应仍占用至多 ``max_total_seconds``。
+
+    ``thinking`` 仅 glm 通路生效（glm-5.x 推理模型默认 thinking，复杂
+    prompt 服务端推理可超分钟级且非流式无首字节）：False 显式关闭（机械
+    分类任务如 tagging 应关闭），True 显式开启，None 不发该字段走模型
+    默认；其他 provider 静默忽略。
     """
     resolved = resolve_provider(provider, model)
     base = resolved["base_url"].rstrip("/")
@@ -231,6 +237,13 @@ def chat(
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
+    # GLM 推理模型（glm-5.x）默认 thinking，复杂 prompt 服务端推理可超
+    # 120s 且非流式缓冲无首字节（2026-11-20 tagger 挂死真根因：同端点
+    # 同 key 小探针 4.9s、真实 tagging prompt 120s×3 全超时；显式关闭后
+    # 3.3s）。thinking=None 不发该字段；仅 glm 通路注入，其他 provider
+    # 忽略该参数保持 payload 干净。
+    if thinking is not None and resolved["provider"] == "glm":
+        payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
 
     started = time.monotonic()
     deadline = started + max_total_seconds
