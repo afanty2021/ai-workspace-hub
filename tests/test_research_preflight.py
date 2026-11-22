@@ -332,5 +332,27 @@ review_due: 2020-01-01
         self.assertIn("preflight-load-mismatch", codes)
 
 
+class FedSourceHintTests(unittest.TestCase):
+    """Fed 一手源提示（2026-11-22 接线）：命中词条件渲染，未命中零噪音。"""
+
+    def test_hint_flag_and_receipt_section_on_fed_context(self) -> None:
+        self.assertTrue(PREFLIGHT.fed_source_hint("美联储加息路径对铜价的影响"))
+        self.assertTrue(PREFLIGHT.fed_source_hint("ON RRP 用量与流动性缓冲垫"))
+
+    def test_no_hint_on_pure_a_share_context(self) -> None:
+        self.assertFalse(PREFLIGHT.fed_source_hint("贵州茅台批价与经销商打款"))
+
+    def test_receipt_renders_section_conditionally(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace-root"
+            (root / "workspace").mkdir(parents=True)
+            hit = PREFLIGHT.build_preflight(root, context="FOMC 12 月加息预期")
+            self.assertTrue(hit["fed_sources"])
+            self.assertIn("Fed 一手源", PREFLIGHT.render_receipt(hit))
+            miss = PREFLIGHT.build_preflight(root, context="圆通速递单票扣非")
+            self.assertFalse(miss["fed_sources"])
+            self.assertNotIn("Fed 一手源", PREFLIGHT.render_receipt(miss))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@
 
 ### 新增
 
+- Fed 一手源三项接线（2026-11-22，Q-20261122-01「做缺的一半」）：① 美元 ON RRP 每日用量序列——新建 `update_us_liquidity.py`（主源 NY Fed markets API 桌面操作一手数据，**日期参数须带连字符、紧凑格式 HTTP 400**；备份 FRED RRPONTSYD，双源 2026-11-20 对拍逐位一致；幂等 + batch-us-liquidity 账本两行制，run_archive kind 白名单扩为十一值）+ 每日 18:25 独立档 cron（不并 18:10 批量档）+ 盘前自检 open 组四组扩五组；② 两房 P&I 付息窗口（每月 15-25 日，机制 FOMC20150723memo02 p5，日历界为运维近似）日报跨资产段自动标注；③ research_preflight context 命中 Fed/美元流动性词时输出「Fed 一手源」入口段（机制层作真锚、观点层与卖方同级）。同批 max 评审（0C/2I/6M）补漏：object-model kind 十一值同步、run_archive 两处「十值」文案、工具 README 数据源行与 CLI 示例、账本记源改「实际写入才记源」（全 skip/FRED 降级不虚记）。
 - 持久化层追加交易所核心指数（2026-11-03 用户拍板，spec v0.3c）：`update_market_series.py --scope indices`（并入 all，固定清单 8 个：上证指数/上证50/沪深300/中证500/中证1000/科创50/深证成指/创业板指），落 `data/index/series/{裸6位}.jsonl`（source=mootdx-index，`last_indices_round` per-scope 完成标记，与 stocks/sectors 闸门隔离）；query_market 加 `index_series` 视图、裸 000/399 段路由指数、88 段仍走板块；北证50 899050 不收（mootdx 按 89 前缀路由 SZ 而 BSE 是 market=2，同样到不了，维持排除 BSE）。同批：`--force` 绕过闸门与逐票 skip 强制重拉（历史回补/盘中数据修正场景，friction 第 2 次触发修根；**盘中执行会把动态 bar 当收盘写并推进完成标记，收盘后须再跑一次 --force 修正**），17 只 watchlist 票 30 行缺口已用其回补至 800 行。
 
 ### 修复

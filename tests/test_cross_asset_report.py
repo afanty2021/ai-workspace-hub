@@ -14,8 +14,11 @@ import unittest
 from pathlib import Path
 
 import _test_paths  # noqa: F401
+from datetime import date
+
 from generate_daily_report import (
     CROSS_ASSET_NOTE,
+    liquidity_window_note,
     load_rolling_stats,
     render_cross_asset_table,
     render_key_movers,
@@ -232,3 +235,23 @@ class DerivedRowTests(unittest.TestCase):
         text = render_cross_asset_table(quotes)
         self.assertNotIn("COMEX-LME | 铜价差", text)
         self.assertNotIn("金铜比", text)
+
+
+class LiquidityWindowNoteTests(unittest.TestCase):
+    """两房 P&I 付息窗口标注（2026-11-22 接线，机制 FOMC20150723memo02 p5）。"""
+
+    def test_inside_window_includes_remaining_days(self) -> None:
+        note = liquidity_window_note(date(2026, 11, 20))
+        self.assertIn("两房 P&I 付息窗口", note)
+        self.assertIn("剩 5 天", note)  # 25 - 20
+        self.assertIn("us-rrp-daily", note)
+
+    def test_boundary_days_included(self) -> None:
+        self.assertTrue(liquidity_window_note(date(2026, 11, 15)))
+        # 末日窗口文案显式断言（11-22 评审 M-4：原来只断 truthy）
+        self.assertIn("剩 0 天", liquidity_window_note(date(2026, 11, 25)))
+
+    def test_outside_window_empty(self) -> None:
+        self.assertEqual(liquidity_window_note(date(2026, 11, 14)), "")
+        self.assertEqual(liquidity_window_note(date(2026, 11, 26)), "")
+        self.assertEqual(liquidity_window_note(date(2026, 11, 5)), "")

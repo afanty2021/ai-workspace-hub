@@ -327,6 +327,26 @@ CROSS_ASSET_NOTE = (
 )
 
 
+# 两房 P&I 付息窗口（2026-11-22 Fed 一手源接线·机制=FOMC20150723memo02 p5）：
+# 每月 15-25 日（含）GSE 月中支付集中期——付息日前一天囤准备金、次日一早付款，
+# 货币市场资金需求上升，RRP/短端利率扰动属日历性非趋势。只标注不作信号。
+# 15-25 具体日历界为运维化近似——memo p5 只证 P&I 周期机制、未给数字（11-22 评审 M-4）。
+GSE_PNI_WINDOW = (15, 25)
+
+
+def liquidity_window_note(day: date) -> str:
+    """窗口内返回标注行（拼在 CROSS_ASSET_NOTE 后），窗口外返回空串。"""
+    start, end = GSE_PNI_WINDOW
+    if start <= day.day <= end:
+        return (
+            f"\n> **两房 P&I 付息窗口**（{day.month} 月 {start}-{end} 日，今日 {day.day} 日，"
+            f"剩 {end - day.day} 天）：GSE 月中支付集中，货币市场准备金需求上升，"
+            "RRP/短端利率扰动先看日历再看趋势（机制 FOMC20150723memo02 p5；"
+            "RRP 读数 `data/custom/us-rrp-daily.jsonl`）。"
+        )
+    return ""
+
+
 def _rolling_cell(closes: list[float], window: int) -> str:
     base = closes[-1 - window] if len(closes) > window else None
     if base is None or base == 0:
@@ -1227,7 +1247,7 @@ def build_report(
         ),
         MARKET_OVERVIEW_TABLE=market_table,
         CROSS_ASSET_TABLE=render_cross_asset_table(quotes, rolling),
-        CROSS_ASSET_NOTE=CROSS_ASSET_NOTE,
+        CROSS_ASSET_NOTE=CROSS_ASSET_NOTE + liquidity_window_note(today),
         MARKET_SUMMARY=market_summary,
         KEY_MOVERS_TABLE=(render_key_movers(movers, rolling) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
         OTHER_MOVERS_TABLE=render_other_movers(quotes, movers, rolling),

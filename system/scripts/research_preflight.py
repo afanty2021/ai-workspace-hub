@@ -403,12 +403,39 @@ def build_preflight(
         "knowledge": knowledge,
         "wiki_matches": wiki_matches,
         "review_flags": flags,
+        "fed_sources": fed_source_hint(enriched_context),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
     }
 
 
 def yaml_list(values: list[str]) -> str:
     return "[" + ", ".join(json.dumps(value, ensure_ascii=False) for value in values) + "]"
+
+
+# Fed 一手源提示（2026-11-22 乌萨奇方法论接线）：context 命中美联储/美元流动性相关
+# 词时输出一手材料入口——机制层（日历/用量/结算）是真锚，观点层与市场无异。
+FED_SOURCE_HINT_TERMS = (
+    "fed", "fomc", "美联储", "联储", "褐皮书", "加息", "降息", "流动性", "回购",
+    "逆回购", "rrp", "美股", "纳指", "纳斯达克", "标普", "美债", "美元", "宏观",
+    "powell", "鲍威尔", "沃什", "warsh", "纽约联储", "财政部", "国债拍卖", "缩表", "qt",
+)
+
+FED_SOURCE_HINT_SECTION = """## Fed 一手源（按需打开）
+
+- FOMC 日历 / 会议材料 / 纪要 / 已解密 transcripts：https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm（会议材料 5 年解密；ON RRP 机制样本 FOMC20150723memo02 已在 `inbox/fed-2015-07-memo/`）
+- 褐皮书（8 次/年，各地联储实况评估）：https://www.federalreserve.gov/monetarypolicy/beige-book-default.htm
+- NY Fed 桌面操作与 ON RRP 每日用量：https://www.newyorkfed.org/markets/desk-operations/reverse-repo（本地序列 `data/custom/us-rrp-daily.jsonl`，每日 18:25 独立档自动更新）
+- 财政部融资与拍卖日历：https://home.treasury.gov/policy-issues/financing-the-government
+- 用法：机制层（拍卖/结算/付息日历、RRP 用量）作真锚引用；观点层（预测措辞）与卖方观点同级，不作证据。
+"""
+
+
+def fed_source_hint(context: str) -> bool:
+    """子串命中即真——"fed" 会误中 FedEx/feed 等英文子串，已知且接受：
+    advisory-only（命中只多渲染一段一手源链接，不影响任何裁决/召回逻辑），
+    误命中代价≈0，故不加词边界（11-22 评审 M-5 记录的取舍）。"""
+    text = (context or "").lower()
+    return any(term in text for term in FED_SOURCE_HINT_TERMS)
 
 
 def render_receipt(result: dict[str, Any]) -> str:
@@ -461,6 +488,8 @@ def render_receipt(result: dict[str, Any]) -> str:
             lines.append(f"- {item['path']}：{'；'.join(item['flags'])}")
     else:
         lines.append("- 未发现显式过期、弱化或反方章节提示。")
+    if result.get("fed_sources"):
+        lines.extend(["", FED_SOURCE_HINT_SECTION.rstrip()])
     lines.extend(
         [
             "",

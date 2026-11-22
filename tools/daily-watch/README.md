@@ -278,7 +278,8 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | 腾讯 | A 股 + ETF（.SH/.SZ）；港股个股（hk 前缀）；港股指数（`hkHSTECH`，HSTECH 在东财 124 断连后的 keyless 备份，2026-11-09）；美股个股（us 前缀，nasdaq 后的 keyless 备份）；场外基金净值（jj 前缀，`.OF` 在 tushare-fund 之后） | 无 Key | 自动 fallback（东财之后） | 无 |
 | 新浪 | A 股 + ETF（.SH/.SZ）；港股指数（`rt_hkHSTECH`，HSTECH 第三备份；注意 rt_hk 布局 open/昨收字段序与 A 股系列相反，2026-11-09 实测） | 无 Key | 自动 fallback（腾讯之后） | 无 |
 | Nasdaq 指数 API | 全球指数：纳指（^IXIC）、费半（^SOX） | 无 Key | 自动 fallback（映射制，官方交易所口径） | 无 |
-| FRED | 美十债收益率（^TNX → DGS10） | 无 Key | 降级备用（主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |
+| FRED | 美十债收益率（^TNX → DGS10）；ON RRP 备份（RRPONTSYD，NY Fed 断连时降级位，2026-11-22 双源对拍逐位一致） | 无 Key | 降级备用（^TNX 主源是东财 171.US10Y 实时快照）；官方 H.15 序列，T+1 | 无 |
+| NY Fed markets API | 美元 ON RRP 每日用量（us-rrp-daily，桌面操作一手数据；**日期参数须带连字符——紧凑格式 HTTP 400**） | 无 Key | `update_us_liquidity.py`（每日 18:25 独立档 cron，batch-us-liquidity 两行账本；写 `data/custom/`，断连自动降级 FRED） | 无 |
 | 东财环球 | 韩股（000660.KS → 177.000660）、LME 伦铜（HG=F → 109.LCPT）、纳指/费半备源（100.NDX / 251.SOX）、恒生科技（HSTECH → 124.HSTECH，2026-11-09 接线） | 无 Key | 自动 fallback（映射制；反爬间歇断连时落到新浪环球 / yfinance） | 无 |
 | 东财 push2his | 跨资产历史日线回补（默认 800 天主源 6 票：^IXIC/^TNX/NQ00Y/DX-Y.NYB→100.UDI/HG=F/HSTECH；^SOX 与 XAUUSD=X 票级主源覆盖见下两行，^SOX 失败时仍降级本源） | 无 Key | `update_cross_asset_history.py`（batch 档权威覆盖快照行；票间 3s 节流+重试——与 push2 共享 IP 级限流，2026-11-09 实测 14 连发触发小时级封禁） | 无 |
 | Nasdaq 官方 historical | ^SOX 历史日线主源（exchange 官方，2024-09 起 548 行全窗；东财 251.SOX 仅 2026-07 起 89 行深度受限） | 无 Key | 同上脚本票级分发（`NASDAQ_HISTORY_SYMBOLS`）；失败自动降级东财；腾讯 ifzq usSOX 日线 K 线为空数组不接入 | 无 |
@@ -412,13 +413,15 @@ python3 tools/daily-watch/scripts/check_setup.py
 
 ### CLI 示例
 
-    # 盘后批量（定时任务每日 18:10 自动跑全部四条，2026-11-16 由 16:30 改；2026-11-09 起两条新命令已并入 cron prompt）
+    # 盘后批量（定时任务每日 18:10 自动跑四条，2026-11-16 由 16:30 改；2026-11-09 起两条新命令已并入 cron prompt）
     python tools/daily-watch/scripts/update_market_series.py --scope all
     python tools/daily-watch/scripts/update_finance_snapshots.py
     # 跨资产历史回补（^SOX 走 Nasdaq 官方 historical、XAUUSD=X 走新浪全球日线，其余东财 push2his，节流内置；
     # 社融/Shibor 国内流动性见 update_cn_liquidity）
     python tools/daily-watch/scripts/update_cross_asset_history.py
     python tools/daily-watch/scripts/update_cn_liquidity.py
+    # 美元流动性（ON RRP 每日用量，18:25 独立档 cron——2026-11-22 接线，不并入 18:10 批量）
+    python tools/daily-watch/scripts/update_us_liquidity.py
     # 首次部署：全量初始化（3 年回补的唯一路径）
     python tools/daily-watch/scripts/update_market_series.py --scope all --backfill 800
     # 盘中误跑过的修正（动态 bar 被当收盘写并推进了完成标记时）：收盘后 15:00 再跑
