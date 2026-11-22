@@ -74,7 +74,9 @@ class FredParseTests(unittest.TestCase):
             rows = uul.fetch_rrp_rows_fred("2026-11-19", "2026-11-22")
         self.assertEqual([r["date"] for r in rows], ["2026-11-19", "2026-11-20"])
         self.assertEqual(rows[-1]["value"], 0.401)
-        self.assertIn("RRPONTSYD", mock_get.call_args.args[0])
+        # r3 I-2：series id 与 cosd 走 params——服务器端限窗，不拉全量历史
+        self.assertEqual(mock_get.call_args.kwargs["params"],
+                         {"id": "RRPONTSYD", "cosd": "2026-11-19"})
 
     def test_empty_result_is_valid(self) -> None:
         csv_text = "observation_date,RRPONTSYD\n2026-11-20,0.401\n"

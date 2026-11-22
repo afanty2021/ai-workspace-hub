@@ -5,15 +5,20 @@ feat/fix 仍零条目——判例只活在评审报告里、没有机械检查�
 2026-11-22「CHANGELOG 记账系统性滞后」）。本测试把纪律变契约：
 
   CHANGELOG.md 最后一次提交之后，不允许再出现改动 tools/ 或 system/ 下
-  非 markdown 文件的 feat(...)/fix(...) 提交。
+  非 markdown 文件的 feat/fix 前缀提交（feat(...)/fix(...) 与 feat:/fix:
+  两种写法同判，r3 I-1）。
 
 范围取舍：只盯 infra 代码（tools/、system/ 非 md）——docs/wiki 纯文档小修
-不设卡（用 docs( 前缀即免检）；tests/ 不在范围。已知限制（复查 r2 补记）：
+不设卡（用 docs( 前缀即免检）；tests/ 不在范围。已知限制（复查 r2 补记、
+r3 补③）：
 ① CHANGELOG 处于未提交修改态时检查放行（合规条目随下一笔提交落地时的
 进行中信号；长期脏 CHANGELOG 可绕过检查，由评审流程兜底）；② 边界以
 「CHANGELOG 末次任何提交」计——一笔只改 CHANGELOG 旧条目错字、不补
 Unreleased 的 docs 提交落在漏记账 feat/fix 之后会重置边界、把后者静默豁免
-（boundary reset 变体，窗口窄，评审流程兜底）。非 git 环境自动 skip。
+（boundary reset 变体，窗口窄，评审流程兜底）；③ 机械兜底只盯 feat/fix
+前缀——refactor(/chore(/perf( 等改代码的主题不在检查范围（skill ⑤ 要求
+任何非纯文档改动补条目，此前缀族由评审流程 A 侧兜底）。非 git 环境自动
+skip。
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-_SUBJECT = re.compile(r"^(feat|fix)\(")
+# 括号与冒号两种写法同判：本库历史 feat:/fix: 冒号形态各 25/24 笔（r3 I-1
+# 首版只匹配括号形态，无关键词形态逃逸）。
+_SUBJECT = re.compile(r"^(feat|fix)[:(]")
 
 
 def _touches_code(files: list[str]) -> bool:
@@ -83,6 +90,18 @@ class LaggedPureTests(unittest.TestCase):
     def test_fix_touching_code_flagged(self) -> None:
         commits = [self._c("a", "fix(p): q", "system/lib/x.py", "tests/t.py")]
         self.assertEqual(_lagged(commits, None), [("a", "fix(p): q")])
+
+    def test_colon_form_flagged(self) -> None:
+        # r3 I-1：feat:/fix: 冒号形态与括号形态同判
+        commits = [self._c("a", "fix: q", "tools/a.py"),
+                   self._c("b", "feat: y", "system/lib/z.py")]
+        self.assertEqual(_lagged(commits, None),
+                         [("a", "fix: q"), ("b", "feat: y")])
+
+    def test_non_feat_fix_prefix_not_flagged(self) -> None:
+        # 已知限制③：refactor(/chore( 等前缀不在机械兜底范围，评审 A 侧兜底
+        commits = [self._c("a", "refactor(x): y", "tools/a.py")]
+        self.assertEqual(_lagged(commits, None), [])
 
     def test_docs_only_commit_not_flagged(self) -> None:
         commits = [self._c("a", "fix(p): q", "docs/n.md", "wiki/x.md")]

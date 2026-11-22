@@ -35,7 +35,7 @@ from save_custom_data import append_record
 
 NYFED_RRP_URL = ("https://markets.newyorkfed.org/api/rp/reverserepo/"
                  "propositions/search.json")
-FRED_RRP_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=RRPONTSYD"
+FRED_RRP_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
 SERIES = "us-rrp-daily"
 SERIES_NAME = "美联储隔夜逆回购（ON RRP）用量"
@@ -69,7 +69,13 @@ def fetch_rrp_rows_nyfed(start: str, end: str) -> list[dict[str, Any]]:
 
 def fetch_rrp_rows_fred(start: str, end: str) -> list[dict[str, Any]]:
     """FRED fredgraph.csv → [{date, value}]（值即十亿美元，正序；窗口外/缺失剔除）。"""
-    resp = requests.get(FRED_RRP_CSV_URL, timeout=DEFAULT_TIMEOUT)
+    resp = requests.get(
+        FRED_RRP_CSV_URL,
+        timeout=DEFAULT_TIMEOUT,
+        # cosd 限定起始日=窗口起点，不拉全量历史（RRPONTSYD 2003 年起 5800+ 行；
+        # sibling fetch_market_data 2026-10-31 判例同款，r3 I-2 补齐同族换位形态）。
+        params={"id": "RRPONTSYD", "cosd": start},
+    )
     resp.raise_for_status()
     rows: list[dict[str, Any]] = []
     reader = csv.DictReader(io.StringIO(resp.text))
