@@ -913,6 +913,11 @@ Source text:
         max_tokens=max(8000, int(llm_cfg.get("max_tokens") or 8000)),
         json_mode=True,
         max_attempts=3,
+        # 整篇转写进 prompt：glm-5.x 默认 thinking 会先烧 max_tokens 预算、
+        # 服务端推理可超单请求 timeout（2026-11-20 tagger 案换位形态；
+        # ea7b970 覆盖面扫描漏记 fetch_podcasts 三处同族调用点，
+        # 2026-11-22 max 评审 I-1 补堵）。
+        thinking=False,
     )
     data = extract_json(content)
     data["verification_warnings"] = detect_reversal_flags(
@@ -980,6 +985,7 @@ Chunk {index}/{len(chunks)}:
                 max_tokens=int(llm_cfg.get("translation_max_tokens") or llm_cfg.get("max_tokens") or 4096),
                 temperature=0.1,
                 timeout=180,
+                thinking=False,  # 同 I-1：大转写翻译块，关 thinking（2026-11-22 评审）
             )
         )
     return "\n\n".join(translated)
@@ -1224,6 +1230,7 @@ JSON:
         max_tokens=int(llm_cfg.get("report_max_tokens") or 6000),
         temperature=0.2,
         timeout=180,
+        thinking=False,  # 同 I-1：多日汇总 JSON 任务，关 thinking（2026-11-22 评审）
     )
 
 
