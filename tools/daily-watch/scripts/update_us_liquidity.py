@@ -13,6 +13,14 @@
 - 读法注记（FOMC20150723memo02 机制）：RRP 余额=美元体系流动性缓冲垫读数——
   峰值回落后趋零=QT 已开始直接抽银行准备金（2019-09 型回购压力的机制前件）；
   两房 P&I 月中窗口（每月 15-25 日）内读数波动放大属日历性，非趋势。
+
+HY OAS 第二系列（Q-20261123-04 接线，2026-11-23）：FRED ``BAMLH0A0HYM2``
+（ICE BofA US High Yield Index Option-Adjusted Spread，零 key，T+1），series=
+us-hy-oas，FRED 原值 % ×100 存 bp（11-22 衰退判定读数 352bp 同口径）——
+科技回补三灯清单灯1c 信用否决腿数据源（清单
+workspace/monitoring/tech-reentry-three-lights.md，否决线 380bp×2 日）。
+单源 FRED 无降级链；失败=告警+missing 不阻塞 RRP（降级语义同社融，
+`update_cn_liquidity` 主系列失败才非零）。
 """
 
 from __future__ import annotations
@@ -39,6 +47,10 @@ FRED_RRP_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
 SERIES = "us-rrp-daily"
 SERIES_NAME = "美联储隔夜逆回购（ON RRP）用量"
+
+FRED_HYOAS_ID = "BAMLH0A0HYM2"
+HY_SERIES = "us-hy-oas"
+HY_SERIES_NAME = "美国高收益债期权调整利差（HY OAS）"
 
 
 def fetch_rrp_rows_nyfed(start: str, end: str) -> list[dict[str, Any]]:
@@ -92,6 +104,62 @@ def fetch_rrp_rows_fred(start: str, end: str) -> list[dict[str, Any]]:
             rows.append({"date": day, "value": round(value, 3)})
     rows.sort(key=lambda r: r["date"])
     return rows
+
+
+def fetch_hy_oas_rows_fred(start: str, end: str) -> list[dict[str, Any]]:
+    """FRED BAMLH0A0HYM2 → [{date, value}]（value=bp，FRED % ×100，正序；窗口外剔除）。
+
+    cosd 限定起始日（同 fetch_rrp_rows_fred，不拉 1996 年起全量）；
+    「.」=FRED 缺失标记剔除。"""
+    resp = requests.get(
+        FRED_RRP_CSV_URL,
+        timeout=DEFAULT_TIMEOUT,
+        params={"id": FRED_HYOAS_ID, "cosd": start},
+    )
+    resp.raise_for_status()
+    rows: list[dict[str, Any]] = []
+    reader = csv.DictReader(io.StringIO(resp.text))
+    for row in reader:
+        day = str(row.get("observation_date") or "")[:10]
+        raw = row.get(FRED_HYOAS_ID)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) or raw in (None, "", "."):
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if start <= day <= end:
+            rows.append({"date": day, "value": round(value * 100, 1)})
+    rows.sort(key=lambda r: r["date"])
+    return rows
+
+
+def update_hy_oas(data_root: Path, *, days: int = 500,
+                  sink: list[tuple[Path, str]] | None = None) -> dict[str, int]:
+    """HY OAS 滚动窗拉取幂等落盘（单源 FRED；降级语义由 main 承担）。"""
+    today = date.today()
+    start = (today - timedelta(days=days)).isoformat()
+    end = today.isoformat()
+    rows = fetch_hy_oas_rows_fred(start, end)
+    if not rows:
+        raise RuntimeError("FRED BAMLH0A0HYM2 返回 0 条有效行")
+    stats = {"imported": 0, "skipped": 0}
+    for item in rows:
+        try:
+            path = append_record(data_root, series=HY_SERIES, name=HY_SERIES_NAME,
+                                 date=item["date"], value=item["value"],
+                                 unit="bp", source="fred-bamlh0a0hym2")
+            stats["imported"] += 1
+            if sink is not None:
+                sink.append((path, item["date"]))
+        except ValueError as exc:
+            if "已有" in str(exc):
+                stats["skipped"] += 1
+            else:
+                raise
+    stats["source"] = "fred-bamlh0a0hym2"
+    log(f"{HY_SERIES}[fred]: {stats}")
+    return stats
 
 
 def update_rrp(data_root: Path, *, days: int = 500, source: str = "auto",
@@ -153,10 +221,12 @@ def update_rrp(data_root: Path, *, days: int = 500, source: str = "auto",
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="美元流动性时序更新（ON RRP 每日用量）")
+    parser = argparse.ArgumentParser(
+        description="美元流动性时序更新（ON RRP 每日用量 + HY OAS，Q-20261123-04 双系列）")
     parser.add_argument("--days", type=int, default=500,
                         help="滚动窗天数（默认 500，约两年）")
-    parser.add_argument("--source", choices=["auto", "nyfed", "fred"], default="auto")
+    parser.add_argument("--source", choices=["auto", "nyfed", "fred"], default="auto",
+                        help="RRP 降级链选择（HY OAS 恒走 FRED，不受此参数影响）")
     args = parser.parse_args(argv)
     from market_data_io import resolve_data_root
 
@@ -167,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     written: list[tuple[Path, str]] = []
     missing: list[dict] = []
     used: set[str] = set()
+    fail = False
     try:
         stats = update_rrp(data_root, days=args.days, source=args.source, sink=written)
         # 实际写入才记源（sibling update_market_series 口径）：全 skip 幂等重跑
@@ -174,12 +245,20 @@ def main(argv: list[str] | None = None) -> int:
         if stats["imported"] > 0:
             used.add(stats["source"])
     except Exception as exc:  # noqa: BLE001 — 主系列失败=非零（同 Shibor 语义）
+        fail = True
         missing.append({"item": SERIES, "reason": str(exc)})
         log(f"Warning: ON RRP 更新失败: {exc}")
-        close_batch(run_id, written, data_root, sources=sorted(used), missing=missing)
-        return 1
+    # HY OAS（Q-20261123-04）：降级语义同社融——失败告警+missing，不置非零，
+    # 不阻塞 RRP（三灯 1c 数据源晚一天到不致命，18:25 档次日自愈）。
+    try:
+        hy_stats = update_hy_oas(data_root, days=args.days, sink=written)
+        if hy_stats["imported"] > 0:
+            used.add(hy_stats["source"])
+    except Exception as exc:  # noqa: BLE001
+        missing.append({"item": HY_SERIES, "reason": str(exc)})
+        log(f"Warning: HY OAS 更新失败: {exc}")
     close_batch(run_id, written, data_root, sources=sorted(used), missing=missing)
-    return 0
+    return 1 if fail else 0
 
 
 if __name__ == "__main__":

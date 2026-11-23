@@ -173,5 +173,67 @@ class UpdateRrpTests(unittest.TestCase):
         self.assertEqual(closes[1]["data_targets"], [])
 
 
+class HyOasParseTests(unittest.TestCase):
+    """HY OAS FRED 通路（Q-20261123-04）：% → bp ×100 换算 / 缺失剔除 / cosd 限窗。"""
+
+    def test_parse_csv_bp_conversion(self) -> None:
+        csv_text = (
+            "observation_date,BAMLH0A0HYM2\n"
+            "2026-11-18,3.47\n"
+            "2026-11-19,3.52\n"        # 11-22 判定读数 352bp 的 FRED 原值
+            "2026-11-20,.\n"           # FRED 缺失标记剔除
+            "2026-11-21,abc\n"         # 非数值剔除
+            "2026-11-22,3.60\n"        # 窗口外剔除（end=2026-11-21）
+        )
+        with patch("update_us_liquidity.requests.get",
+                   return_value=_fred_response(csv_text)) as mock_get:
+            rows = uul.fetch_hy_oas_rows_fred("2026-11-18", "2026-11-21")
+        self.assertEqual([r["date"] for r in rows], ["2026-11-18", "2026-11-19"])
+        self.assertEqual(rows[-1]["value"], 352.0)  # 3.52% ×100 = 352bp
+        # cosd 限窗进 params（sibling RRPONTSYD 同族，1996 年起全量不拉）
+        self.assertEqual(mock_get.call_args.kwargs["params"],
+                         {"id": "BAMLH0A0HYM2", "cosd": "2026-11-18"})
+
+    def test_update_idempotent_and_unit_tag(self) -> None:
+        csv_text = "observation_date,BAMLH0A0HYM2\n2026-11-19,3.52\n"
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch("update_us_liquidity.requests.get",
+                      return_value=_fred_response(csv_text)):
+            root = Path(tmp)
+            first = uul.update_hy_oas(root, days=30)
+            second = uul.update_hy_oas(root, days=30)
+            rows = [line for line in
+                    (root / "custom" / "us-hy-oas.jsonl").read_text().splitlines()
+                    if line.strip()]
+        self.assertEqual(first["imported"], 1)
+        self.assertEqual(second["imported"], 0)   # 同 (series,date) 幂等 skip
+        self.assertEqual(second["skipped"], 1)
+        self.assertEqual(first["source"], "fred-bamlh0a0hym2")
+        self.assertIn('"unit": "bp"', rows[0])
+
+    def test_main_hy_failure_does_not_block_rrp(self) -> None:
+        """降级语义（同社融）：HY OAS 失败只告警+missing，RRP 成功则退出码 0。"""
+        today = date.today()
+        day = (today - timedelta(days=1)).isoformat()
+        ops = [{"operationDate": day, "totalAmtAccepted": 401000000}]
+
+        def _get(url, **kwargs):
+            if "fred" in url:
+                raise _rq.ConnectionError("fred drop")  # HY OAS 恒走 FRED → 失败
+            return _nyfed_response(ops)                 # RRP 主源成功
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch("update_us_liquidity.requests.get", side_effect=_get), \
+                patch("update_us_liquidity.time.sleep"), \
+                patch("market_data_io.resolve_data_root", return_value=Path(tmp)):
+            code = uul.main(["--days", "30"])
+            self.assertEqual(code, 0)
+            rows = [json.loads(line) for line in
+                    (Path(tmp) / ".state" / "run-log.jsonl").read_text().splitlines()
+                    if line.strip()]
+        close = [row for row in rows if row.get("type") == "data-close"][-1]
+        self.assertEqual([m["item"] for m in close["missing"]], ["us-hy-oas"])
+
+
 if __name__ == "__main__":
     unittest.main()
