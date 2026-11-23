@@ -3,8 +3,11 @@
 与 update_market_series.py（A 股 mootdx 批量）的三个刻意差异：
 
 1. **无交易日闸门**：跨资产多时区（美股 ET、港股 HK、美元/商品近 24h）没有统一的
-   「服务器最新交易日」可做 canary；幂等改由每票自身 series 尾行决定增量起点
-   （beg=尾行日，重拉当天让 batch 档用收盘价权威覆盖快照钩子的盘中值）。
+   「服务器最新交易日」可做 canary；幂等改由每票自身 series 决定增量起点
+   （beg=尾行日，重拉当天让 batch 档用收盘价权威覆盖快照钩子的盘中值；且尾部
+   回看窗内残留快照源行时 beg 回撤到最早一处——Q-20261123-08 修根，见
+   incremental_beg：push2his 限流夜整批失败后尾行被次日快照行顶替，旧快照行
+   的日期将永不重拉、盘中值永久占据收盘位）。
 2. **batch 档权威覆盖**：快照钩子行 amount=None、本脚本行 amount 恒非 None（写者
    指纹，同 spec §9）；同日冲突时收盘口径胜出——快照的抓取时点值（北京 16:30 抓
    美股=ET 盘中/前日）由此被修正为官方收盘。
@@ -86,6 +89,35 @@ SINA_HISTORY_SYMBOLS: dict[str, str] = {"XAUUSD=X": "XAU"}
 # kline 行入库前价格字段 ×100。其余票 kline 与快照同单位（11-12 接线对拍族），
 # 无 scale；写入侧另有 market_data_io.filter_unit_break_rows 兜底断点守卫。
 EASTMONEY_KLINE_PRICE_SCALE: dict[str, float] = {"HG00Y": 100.0}
+
+# 收盘口径写者指纹（本脚本三族：东财 kline / Nasdaq historical / 新浪全球期货日线）。
+# 尾部出现任何其他 source（sina/eastmoney/tencent 快照行、source 缺失——补集语义，
+# 未来新实时源自动纳入）= 快照钩子的盘中值还占着收盘位待愈合。
+KLINE_CLOSE_SOURCES = frozenset({"eastmoney-kline", "nasdaq-historical", "sina-global"})
+# 回看行数上限必须 ≤ upsert_series_rows 的 repair_window（30）：越窗即历史行，
+# batch 档默认拒绝覆盖，回拉也白拉（更早的存量走显式 --force 迁移）。
+HEAL_LOOKBACK_ROWS = 15
+
+
+def incremental_beg(rows: list[dict[str, Any]], window_start: str) -> str:
+    """增量起点（Q-20261123-08 修根）：beg=尾行日，尾部回看窗内有快照源行则回撤。
+
+    病灶形态（2026-11-23 账本回放坐实，近 10 晚 7 晚 push2his 限流整批失败）：
+    某晚 kline 拉取失败 → 该晚日报钩子照写 sina{d} 快照行 → 次晚尾行已是更新的
+    快照行，beg 越过 d → d 的盘中值永久占据收盘位（DX 11-12/13/18 孤儿行）。
+    回撤后 kline 到货的日期被 batch 档覆盖愈合；kline 尚无该日（美股未收）则
+    本次照旧空手，下一晚继续回撤重试——自愈与限流解耦。
+    """
+    if not rows:
+        return window_start
+    beg = rows[-1]["date"].replace("-", "")
+    if rows[0]["date"].replace("-", "") > window_start:
+        beg = window_start  # 浅 series（快照钩子攒几天）：全窗口，原逻辑不变
+    stale = [r["date"].replace("-", "") for r in rows[-HEAL_LOOKBACK_ROWS:]
+             if r.get("source") not in KLINE_CLOSE_SOURCES]
+    if stale:
+        beg = min(beg, min(stale))
+    return beg
 
 
 def apply_kline_price_scale(ticker: str, rows: list[dict[str, Any]]) -> None:
@@ -268,12 +300,11 @@ def update_ticker(data_root: Path, ticker: str, secid: str, *,
         rows = []
     window_start = (date.today() - timedelta(days=backfill_days)).strftime("%Y%m%d")
     if rows and not force:
-        head = rows[0]["date"].replace("-", "")
-        tail = rows[-1]["date"].replace("-", "")
         # 增量条件=series 首行早于等于窗口起点（历史已完整覆盖回补窗）——快照钩子
         # 攒出的浅 series（首行新、只有几天）必须全窗口拉，否则首次回补只拿增量
-        # 1-2 行（2026-11-09 首跑实测踩过：尾行判定区分不了 5 行新票与完整历史）
-        beg = tail if head <= window_start else window_start
+        # 1-2 行（2026-11-09 首跑实测踩过：尾行判定区分不了 5 行新票与完整历史）。
+        # incremental_beg 再叠加 Q-20261123-08 回撤：尾部残留快照源行一并重拉愈合。
+        beg = incremental_beg(rows, window_start)
     else:
         beg = window_start  # 全量 / force：整个回补窗口
     fetched: list[dict[str, Any]] = []

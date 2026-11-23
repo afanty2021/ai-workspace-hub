@@ -88,6 +88,64 @@ class ParseKlinesTests(unittest.TestCase):
         self.assertEqual(ucah.parse_klines([]), [])
 
 
+class IncrementalBegHealTests(unittest.TestCase):
+    """Q-20261123-08：beg 回撤到尾部回看窗内最早的快照源行（补集语义）。
+
+    病灶=限流夜 kline 整批失败后，尾行被次日快照行顶替，beg 越过孤儿日期永不
+    重拉（DX 11-12/13/18 孤儿行，账本回放坐实近 10 晚 7 晚失败）。
+    """
+
+    @staticmethod
+    def _row(d: str, source: str) -> dict:
+        return {"date": d, "close": 100.0, "source": source}
+
+    def test_recedes_to_earliest_stale_row(self) -> None:
+        rows = [self._row("2024-01-02", "eastmoney-kline"),
+                self._row("2026-11-16", "eastmoney-kline"),
+                self._row("2026-11-17", "eastmoney-kline"),
+                self._row("2026-11-18", "sina"),        # 字面形态（DX 孤儿）
+                self._row("2026-11-19", "eastmoney-kline"),
+                self._row("2026-11-20", "eastmoney-kline"),
+                self._row("2026-11-23", "eastmoney")]   # 无关键词形态（^TNX 快照）
+        self.assertEqual(ucah.incremental_beg(rows, "20240601"), "20261118")
+
+    def test_eastmoney_snapshot_row_alone_recedes(self) -> None:
+        # 唯一脏行非 sina 且不在尾行——锁「补集语义」本身，防退化成字面白名单/黑名单，
+        # 也与尾行锚定区分（脏行后还有收盘行，beg 仍须回撤）
+        rows = [self._row("2024-01-02", "eastmoney-kline"),
+                self._row("2026-11-22", "eastmoney"),
+                self._row("2026-11-24", "eastmoney-kline")]
+        self.assertEqual(ucah.incremental_beg(rows, "20240601"), "20261122")
+
+    def test_missing_source_field_counts_as_stale(self) -> None:
+        rows = [self._row("2024-01-02", "eastmoney-kline"),
+                {"date": "2026-11-19", "close": 100.0},  # source 缺失=快照族
+                self._row("2026-11-20", "eastmoney-kline")]
+        self.assertEqual(ucah.incremental_beg(rows, "20240601"), "20261119")
+
+    def test_stays_tail_when_all_close_sources(self) -> None:
+        # 三族收盘写者指纹换位混排都不触发回撤——kline 到货日不需要重拉
+        rows = [self._row("2024-01-02", "eastmoney-kline"),
+                self._row("2026-11-19", "nasdaq-historical"),
+                self._row("2026-11-20", "sina-global"),
+                self._row("2026-11-23", "eastmoney-kline")]
+        self.assertEqual(ucah.incremental_beg(rows, "20240601"), "20261123")
+
+    def test_stale_beyond_lookback_ignored(self) -> None:
+        # 越窗存量不回拉（batch 档对历史行默认拒改，回拉也白拉）——走显式 --force
+        rows = [self._row("2024-01-02", "eastmoney-kline")]
+        rows += [self._row(f"2026-11-{d:02d}", "sina") for d in range(1, 9)]
+        rows += [self._row(f"2026-11-{d:02d}", "eastmoney-kline") for d in range(10, 26)]
+        self.assertEqual(ucah.incremental_beg(rows, "20240601"), "20261125")
+
+    def test_empty_rows_full_window(self) -> None:
+        self.assertEqual(ucah.incremental_beg([], "20240101"), "20240101")
+
+    def test_shallow_series_keeps_full_window(self) -> None:
+        rows = [self._row("2026-11-22", "sina"), self._row("2026-11-23", "sina")]
+        self.assertEqual(ucah.incremental_beg(rows, "20240101"), "20240101")
+
+
 class UpdateTickerTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -136,6 +194,37 @@ class UpdateTickerTests(unittest.TestCase):
         ucah.update_ticker(self.root, "DX-Y.NYB", "100.UDI", backfill_days=800)
         beg = mock_get.call_args.kwargs["params"]["beg"]
         self.assertEqual(beg, "20261106")
+
+    @patch("update_cross_asset_history.requests.get", return_value=_kline_response([
+        "2026-11-18,103.5,103.76,103.9,103.4,0,0",
+        "2026-11-19,103.76,103.94,103.98,103.59,0,0",
+        "2026-11-20,103.94,103.84,103.96,103.7,0,0",
+    ]))
+    def test_batch_heals_orphan_snapshot_row(self, mock_get) -> None:
+        # Q-20261123-08 端到端：限流夜孤儿行（sina 11-18）被回撤重拉的官方收盘愈合；
+        # 当日快照行（sina 11-23，kline 尚无该日）原样保留——自愈与「美股未收」解耦
+        self._write_series("DX-Y.NYB", [
+            '{"date": "2024-01-02", "close": 101.0, "amount": 0.0, "source": "eastmoney-kline"}\n',
+            '{"date": "2026-11-16", "close": 103.58, "amount": 0.0, "source": "eastmoney-kline"}\n',
+            '{"date": "2026-11-17", "close": 103.58, "amount": 0.0, "source": "eastmoney-kline"}\n',
+            '{"date": "2026-11-18", "open": 103.5625, "high": 103.8589, "low": 103.537, '
+            '"close": 103.7557, "volume": null, "amount": null, "source": "sina"}\n',
+            '{"date": "2026-11-19", "close": 103.94, "amount": 0.0, "source": "eastmoney-kline"}\n',
+            '{"date": "2026-11-20", "close": 103.84, "amount": 0.0, "source": "eastmoney-kline"}\n',
+            '{"date": "2026-11-23", "close": 103.8573, "volume": null, "amount": null, "source": "sina"}\n',
+        ])
+        self.assertEqual(ucah.update_ticker(self.root, "DX-Y.NYB", "100.UDI"), "written")
+        self.assertEqual(mock_get.call_args.kwargs["params"]["beg"], "20261118")  # 回撤到孤儿行
+        import json
+        rows = [json.loads(x) for x in (self.root / "market" / "series" / "DX-Y.NYB.jsonl")
+                .read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 7)
+        healed = next(r for r in rows if r["date"] == "2026-11-18")
+        self.assertEqual(healed["source"], "eastmoney-kline")  # 官方收盘口径胜出
+        self.assertEqual(healed["close"], 103.76)
+        self.assertIsNotNone(healed["amount"])                 # batch 写者指纹
+        tail = rows[-1]
+        self.assertEqual((tail["date"], tail["source"]), ("2026-11-23", "sina"))  # 未到货不动
 
     @patch("update_cross_asset_history.requests.get", return_value=_kline_response([
         "2026-11-09,102.25,102.21,102.29,102.20,0,0",
