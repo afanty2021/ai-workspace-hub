@@ -25,10 +25,11 @@
 Agent 首次使用时检查上述条件，缺什么补什么。
 免费与低成本数据源的选择、安装命令和授权边界统一读取 `DATA-SOURCES.md`，不要凭旧印象承诺额度。
 
-> **文档同步硬规则**：改动 `tools/daily-watch/` 的代码、数据源顺序或依赖时，必须同步五处，一次不落——
+> **文档同步硬规则**：改动 `tools/daily-watch/` 的代码、数据源顺序或依赖时，必须同步六处，一次不落——
 > ① `tools/daily-watch/README.md`（工具自带说明：数据源表、Fallback 顺序、零 Key 矩阵、环境变量）；
 > ② `DATA-SOURCES.md`；③ 本 skill 的「数据源优先级」；④ `AGENTS.md` + `CLAUDE.md` 数据源表（含 `system/templates/` 同名模板）；
-> ⑤ `CHANGELOG.md` Unreleased 增量条目（2026-11-22 Q-20261122-02① 修根新增——11-16 判例后仍七笔零条目；契约测试 `tests/test_changelog_freshness.py` 机械兜底，纯文档改动用 docs( 前缀免检）。
+> ⑤ `CHANGELOG.md` Unreleased 增量条目（2026-11-22 Q-20261122-02① 修根新增——11-16 判例后仍七笔零条目；契约测试 `tests/test_changelog_freshness.py` 机械兜底，纯文档改动用 docs( 前缀免检）；
+> ⑥ `system/integrations/object-model.md` 的 `kind` 白名单与 `system/scripts/run_archive.py` `KINDS` 同步 + cron prompt 一致性（新增 batch kind / 新脚本命令 / 新序列时，核 18:25 档 prompt 命令清单与 8:00 盘前自检的 batch-* 组数；2026-11-23 评审 I-1/I-2/M-4 修根新增——object-model 停十一值、README 零同步、自检五组未扩六组系 11-22 I-2 同族第 2 次；契约测试 `tests/test_registration_contract.py` 机械兜底 kind 枚举全等+新序列三文档登记）。
 > 已两次因只改入口文档漏掉其余处返工（2026-10-31 模板、2026-11-02 工具 README），此处即 checklist。
 
 ## 核心流程（dw-today）
