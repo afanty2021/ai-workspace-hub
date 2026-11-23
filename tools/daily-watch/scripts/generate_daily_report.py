@@ -465,8 +465,9 @@ def render_three_lights_section(data_root: Path | None = None) -> str:
 
     try:
         root = data_root or resolve_data_root()
-        state = assess_three_lights(root)
-        return format_three_lights(state, date.today().isoformat())
+        today = date.today()
+        state = assess_three_lights(root, today=today)  # today 注入：剔除当日盘中快照行
+        return format_three_lights(state, today.isoformat())
     except Exception as exc:  # noqa: BLE001 — 显示段失败降级不炸日报
         return (f"> 三灯读数本轮计算失败（{exc}）；清单与阈值见 "
                 "`workspace/monitoring/tech-reentry-three-lights.md`。")

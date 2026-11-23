@@ -219,6 +219,21 @@ class StateFormatTests(unittest.TestCase):
             text = ude.format_erp_section(ude.erp_state(root, today=date(2026, 11, 23)))
         self.assertNotIn("个月中仅", text)  # n<24 不谈分位
 
+    def test_today_injection_pinned_over_real_clock(self) -> None:
+        """时间炸弹纪律钉死（评审 M-2）：注入 today 必须压过真实时钟——
+        最新行距真实今天仅 10 天（新鲜）时，注入远期 today 仍须判陈旧；
+        此前既有用例的注入日期恰与真实今天接近，恒用 date.today() 也绿。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            from datetime import timedelta
+            from save_custom_data import append_record
+            fresh_day = date.today() - timedelta(days=10)  # 对真实今天永远新鲜
+            append_record(root, series=ude.ERP_SERIES, name=ude.ERP_SERIES_NAME,
+                          date=fresh_day.isoformat(), value=4.2, unit="%", source="test")
+            state = ude.erp_state(root, today=date(2099, 1, 1))
+        self.assertTrue(state["ok"])
+        self.assertGreater(state["stale_days"], ude.STALE_DAYS)  # 注入生效=巨量陈旧
+
 
 class ReportIntegrationTests(unittest.TestCase):
     def test_render_section_degrades_on_error(self) -> None:

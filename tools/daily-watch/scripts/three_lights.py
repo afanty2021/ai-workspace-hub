@@ -32,12 +32,13 @@ HYOAS_VETO_BP = 380.0         # 1c：基线 352 走阔 ≥8%（≈380）连续 2
 RV_WINDOW = 20                # 1d：20 日实现波动率
 RV_THRESHOLD = 30.0           # 1d：<30 连续 5 日（年化 %，VIX 可比口径）
 RV_ANNUALIZE = 252
-GOLD_WEEKLY_LEVEL = 3534.64   # 灯2：11-20 崩盘收盘=体温计位，周收盘收复
+GOLD_WEEKLY_LEVEL = 3534.64   # 灯2：11-20 崩盘收盘=体温计位，周收盘严格收复（>；等值=未收复）
 EMA_FAST = 8                  # 3c：金叉快线
 EMA_SLOW = 21                 # 3a/3b：主灯均线
 FLAT_PCT = 0.005              # 3a：21EMA 五日累计 |Δ|<0.5%
 FLAT_WINDOW = 5               # 3a：连续 5 日
 HOLD_DAYS = 3                 # 3b：收盘 >21EMA 连续 3 日
+CROSS_REVERT_DAYS = 2         # 3c：金叉后连续 2 日收盘失守 21EMA 才回退（盘中破不算）
 
 SERIES_DIR = "market/series"
 CUSTOM_DIR = "custom"
@@ -135,6 +136,8 @@ def trend_state(closes: list[float]) -> dict[str, Any]:
     - flat_streak：尾部连续 |EMA21[t]/EMA21[t-FLAT_WINDOW]-1| < FLAT_PCT 天数
     - hold_streak：尾部连续 收盘>EMA21 天数
     - cross：'golden'/'dead' + 最近交叉距今天数（EMA8/21 相对位置翻转点）
+    - cross_reverted：金叉后允许回踩——连续 CROSS_REVERT_DAYS 日收盘失守 21EMA
+      才回退（清单 3c；盘中破不算，只认收盘），回退后状态显示为已回退非金叉
     - 对齐：ema_fast[t+F] 与 ema_slow[t] 收在同一根收盘（F=EMA_SLOW-EMA_FAST），
       两序列种子起点不同（span-1 个 SMA 丢弃），直接同下标比较差 13 根 bar
       （2026-11-23 冒烟实证：崩盘死叉被误报成金叉 23 日前）。"""
@@ -156,6 +159,7 @@ def trend_state(closes: list[float]) -> dict[str, Any]:
         hold_streak += 1
     cross = "dead"
     cross_days_ago: int | None = None
+    cross_idx: int = 0  # 最近交叉发生在 ema_slow 下标空间的位置
     fast_step = EMA_SLOW - EMA_FAST
     for t in range(len(ema_slow) - 1, 0, -1):
         f_prev, s_prev = ema_fast[t - 1 + fast_step], ema_slow[t - 1]
@@ -164,12 +168,25 @@ def trend_state(closes: list[float]) -> dict[str, Any]:
                 f_prev == s_prev and f_now != s_now):
             cross_days_ago = (len(closes) - 1) - (offset + t)
             cross = "golden" if f_now > s_now else "dead"
+            cross_idx = t
             break
     else:
         cross = "golden" if ema_fast[-1] > ema_slow[-1] else "dead"
         cross_days_ago = None
+        cross_idx = 0  # 全样本无交叉：golden 意味着自样本起点就在上方
+    cross_reverted = False
+    if cross == "golden":
+        # 3c 回退：自（最近）金叉起扫描收盘 vs EMA21（EMA8 尚在 EMA21 上方期间，
+        # 价格连续 2 日收在 EMA21 下方=回踩越界，金叉状态回退）
+        below_run = 0
+        for t in range(cross_idx, len(ema_slow)):
+            below_run = below_run + 1 if closes[offset + t] < ema_slow[t] else 0
+            if below_run >= CROSS_REVERT_DAYS:
+                cross_reverted = True
+                break
     return {"ok": True, "flat_streak": flat_streak, "hold_streak": hold_streak,
             "cross": cross, "cross_days_ago": cross_days_ago,
+            "cross_reverted": cross_reverted,
             "ema21": ema_slow[-1], "close": closes[-1]}
 
 
@@ -198,6 +215,8 @@ def gold_state(rows: list[dict[str, Any]], level: float = GOLD_WEEKLY_LEVEL,
     「完整周」判定=分组周键 != today 所在 ISO 周，或 today 为周六/日（周五 ET 收盘
     要到北京周六盘前才可得——周一~周五本 ISO 周不判完整周，周六起末组转正）。
     today 注入供测试，勿在模块内取 date.today()——时间炸弹纪律。
+    收复=严格高于 level（等值=未收复——2026-11-23 评审 I-3 边界澄清：11-20 崩盘周
+    收盘恰=体温计位，>= 会令灯2 在崩盘当周即亮，与清单「首读窗 11-27 当周」矛盾）。
     贴线=|周收-level|/level ≤ 0.5%（破位中/收复的人工判断只作标注不作灯）。"""
     if today is None:
         today = _date.today()
@@ -215,7 +234,7 @@ def gold_state(rows: list[dict[str, Any]], level: float = GOLD_WEEKLY_LEVEL,
                 "current_week_end": current["week_end"]}
     last = completed[max(completed)]
     return {"ok": True, "week_end": last["week_end"], "weekly_close": last["close"],
-            "above": last["close"] >= level,
+            "above": last["close"] > level,
             "near_level": abs(last["close"] - level) / level <= 0.005,
             "current_close": current["close"],
             "current_week_end": current["week_end"]}
@@ -243,12 +262,24 @@ def hy_oas_state(rows: list[dict[str, Any]],
             "veto": veto_streak >= 2, "veto_streak": veto_streak}
 
 
-def assess_three_lights(data_root: Path) -> dict[str, Any]:
-    """汇总各灯状态（子项失败彼此隔离，不炸整段）。"""
+def assess_three_lights(data_root: Path, today: _date | None = None) -> dict[str, Any]:
+    """汇总各灯状态（子项失败彼此隔离，不炸整段）。
+
+    today 注入（时间炸弹纪律）。日频腿的收盘输入一律剔除 date>=today 的行：
+    快照 persist 会在当日写入盘中行（source=sina/eastmoney 等，2026-11-23 评审 I-4
+    实证 DX/^TNX 当日行改变 1a/1b 读数），而 US 官方收盘最早要北京次日才可得——
+    当日行必非完成收盘，剔除是保守正确的。黄金腿不剔：周线逻辑本周不计完整周
+    （新浪环球周末快照 tradeDate 回滚到周五，不存在 date>=today 的周末行），
+    「最新」展示位保留当日盘中值并自带日期标注。"""
+    if today is None:
+        today = _date.today()
+    cutoff = today.isoformat()
+
     def _series(ticker: str) -> tuple[list[float], str | None]:
         rows = _read_rows(data_root / SERIES_DIR / f"{ticker}.jsonl")
-        dated = [str(r.get("date", ""))[:10] for r in rows if r.get("date")]
-        return _closes(rows), (dated[-1] if dated else None)
+        settled = [r for r in rows if str(r.get("date", ""))[:10] < cutoff]
+        dated = [str(r.get("date", ""))[:10] for r in settled if r.get("date")]
+        return _closes(settled), (dated[-1] if dated else None)
 
     ixic, ixic_date = _series(IXIC)
     usd, usd_date = _series(USD)
@@ -312,7 +343,7 @@ def format_three_lights(state: dict[str, Any], report_day: str) -> str:
         mark = "✅" if gold["above"] else "⬜"
         near = "｜**贴线**（破位中/收复人工判）" if gold["near_level"] else ""
         gold_cell = (f"{mark} 完整周收 {_fmt(gold['weekly_close'])}（{gold['week_end']}）"
-                     f"{'≥' if gold['above'] else '<'} {GOLD_WEEKLY_LEVEL}{near}"
+                     f"{'>' if gold['above'] else '≤'} {GOLD_WEEKLY_LEVEL}{near}"
                      f"｜最新 {_fmt(gold['current_close'])}（{gold['current_week_end']}）")
     else:
         gold_cell = f"—（{gold.get('reason', '无数据')}"
@@ -324,7 +355,11 @@ def format_three_lights(state: dict[str, Any], report_day: str) -> str:
         if not t.get("ok"):
             return f"—（{t.get('reason', '无数据')}）"
         if t["cross"] == "golden":
-            cross_txt = f"✅ 金叉（{t['cross_days_ago']} 日前）"
+            if t.get("cross_reverted"):
+                cross_txt = (f"⚠️ 金叉（{t['cross_days_ago']} 日前·已回退："
+                             f"连续 {CROSS_REVERT_DAYS} 日收失守 21EMA）")
+            else:
+                cross_txt = f"✅ 金叉（{t['cross_days_ago']} 日前）"
         elif t["cross"] == "dead":
             cross_txt = "⬜ 无金叉"
         else:
@@ -335,8 +370,9 @@ def format_three_lights(state: dict[str, Any], report_day: str) -> str:
                 f"走平 {flat_mark} N={t['flat_streak']}/{FLAT_WINDOW}｜"
                 f"站稳 {hold_mark} N={t['hold_streak']}/{HOLD_DAYS}｜{cross_txt}")
 
-    # 四灯总览（清单预注册组合：灯1=1a∧1b∧1d 且 1c 未否决；灯2=完整周收 ≥ 体温计位；
-    # 灯3=IXIC 3a∧3b ∧ SOX 3a∧3b（科技专项）；灯1.5=人工读数不参与机械总览）
+    # 四灯总览（清单预注册组合：灯1=1a∧1b∧1d 且 1c 未否决；灯2=完整周收 > 体温计位
+    # （严格高于，等值=未收复——评审 I-3）；灯3=IXIC 3a∧3b ∧ SOX 3a∧3b（科技专项）；
+    # 灯1.5=人工读数不参与机械总览）
     usd_ok = usd["streak"] >= STREAK_NEED and usd["closes_n"] >= USD_NEW_HIGH_WINDOW + STREAK_NEED
     rate_ok_streak = (rate["streak"] >= STREAK_NEED
                       and rate["closes_n"] >= RATE_NEW_HIGH_WINDOW + STREAK_NEED)

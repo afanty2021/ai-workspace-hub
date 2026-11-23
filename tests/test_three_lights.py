@@ -2,8 +2,10 @@
 
 覆盖：新高止步连续天数、RV20 年化口径、EMA 金叉 fast/slow 对齐回归
 （2026-11-23 冒烟实证：崩盘死叉曾被误报金叉——种子错位 13 根 bar）、
-周线分组与完整周判定（today 注入）、HY OAS 否决、日报段渲染降级、
-四灯总览组合逻辑。
+3c 金叉回退（连续 2 日收失守 21EMA；同日评审 I-5）、周线分组与完整周判定
+（today 注入；灯2 等值=未收复的严格口径，评审 I-3）、HY OAS 否决与
+灯1 熄灭联动（评审 M-1）、当日盘中快照行剔除（评审 I-4）、
+日报段渲染降级、四灯总览组合逻辑。
 """
 
 from __future__ import annotations
@@ -117,6 +119,32 @@ class TrendStateAlignmentRegressionTests(unittest.TestCase):
         self.assertEqual(state["hold_streak"], 0)   # close==EMA21 属「不高于」→ 不站稳
 
 
+class TrendStateCrossRevertTests(unittest.TestCase):
+    """3c 回退（评审 I-5）：金叉后允许回踩，连续 2 日收盘失守 21EMA 才回退。"""
+
+    def _golden_with_tail(self, tail: list[float]) -> list[float]:
+        closes = _closes_series(80, lambda i: 100 * (0.99 ** i))   # 慢熊 80 日
+        rec = [closes[-1]]
+        for _ in range(12):
+            rec.append(rec[-1] * 1.03)                              # 深反弹确立金叉
+        return closes[:-1] + rec + tail
+
+    def test_two_consecutive_closes_below_ema21_revert(self) -> None:
+        ema21 = tl.trend_state(self._golden_with_tail([]))["ema21"]
+        tail = [ema21 * 0.97, ema21 * 0.96]                         # 连续 2 日收失守
+        state = tl.trend_state(self._golden_with_tail(tail))
+        self.assertEqual(state["cross"], "golden", "EMA8 仍在 EMA21 上方（回踩非死叉）")
+        self.assertTrue(state["cross_reverted"], "连续 2 日收失守 21EMA 必须回退")
+        self.assertEqual(state["hold_streak"], 0)
+
+    def test_single_dip_below_ema21_keeps_golden(self) -> None:
+        base = self._golden_with_tail([])
+        tail = [tl.trend_state(base)["ema21"] * 0.97, base[-1]]     # 单日回踩即收回
+        state = tl.trend_state(self._golden_with_tail(tail))
+        self.assertEqual(state["cross"], "golden")
+        self.assertFalse(state["cross_reverted"], "单日回踩在容差内，不回退")
+
+
 class WeeklyGoldTests(unittest.TestCase):
     def _gold_rows(self) -> list[dict]:
         # 2026-11-16(一)~11-20(五) 一周 + 前两周周五：11-06、11-13
@@ -133,8 +161,17 @@ class WeeklyGoldTests(unittest.TestCase):
         self.assertTrue(state["ok"])
         self.assertEqual(state["week_end"], "2026-11-20")
         self.assertAlmostEqual(state["weekly_close"], 3534.64)
-        self.assertTrue(state["above"])       # 3534.64 >= 3534.64（机械口径）
+        # 严格口径（评审 I-3）：3534.64 == 3534.64 等值=未收复——否则灯2 在崩盘
+        # 当周即亮，与清单「首读窗 11-27 当周」矛盾
+        self.assertFalse(state["above"])
         self.assertTrue(state["near_level"])  # 贴线标注
+
+    def test_strictly_above_level_is_recovered(self) -> None:
+        rows = self._gold_rows()
+        rows[-1]["close"] = 3534.65                                # 严格高一分钱
+        state = tl.gold_state(rows, today=date(2026, 11, 21))
+        self.assertTrue(state["above"])
+        self.assertTrue(state["near_level"])
 
     def test_friday_same_week_still_in_progress(self) -> None:
         state = tl.gold_state(self._gold_rows(), today=date(2026, 11, 19))  # 周四
@@ -186,6 +223,22 @@ class FormatAndAssessTests(unittest.TestCase):
         (custom / "us-hy-oas.jsonl").write_text(
             json.dumps({"date": "2026-11-19", "value": 352.0}) + "\n", encoding="utf-8")
 
+    def _prepare_light1_green(self, root: Path) -> None:
+        """灯1 其余腿全绿的夹具：美元 60 日冲高后回落（连续 5+ 日不创新高）、
+        利率平台后缓降（<5.12）、IXIC/SOX 平稳低波动站稳 EMA21、黄金稳态高位。"""
+        usd = [100 + i * 0.5 if i < 60 else 129.5 - (i - 60) * 0.5 for i in range(80)]
+        rate = [5.0 if i < 60 else 5.0 - (i - 60) * 0.01 for i in range(80)]
+        steady = _closes_series(80, lambda i: 100 + i * 0.05)
+        _write_series(root, "^IXIC", steady)
+        _write_series(root, "^SOX", steady)
+        _write_series(root, "DX-Y.NYB", usd)
+        _write_series(root, "^TNX", rate)
+        _write_series(root, "XAUUSD=X", _closes_series(80, lambda i: 3600.0 + i * 0.5))
+        custom = root / "custom"
+        custom.mkdir(parents=True, exist_ok=True)
+        (custom / "us-hy-oas.jsonl").write_text(
+            json.dumps({"date": "2026-11-19", "value": 352.0}) + "\n", encoding="utf-8")
+
     def test_assess_and_format_renders_overview_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -212,9 +265,45 @@ class FormatAndAssessTests(unittest.TestCase):
             self._prepare(root)
             state = tl.assess_three_lights(root)
             text = tl.format_three_lights(state, "2026-11-23")
-        # 灯1：单边新高序列 → 1a streak=0 → 灯1 ⬜；灯2：稳态高位 ≥ 3534.64 → ✅
+        # 灯1：单边新高序列 → 1a streak=0 → 灯1 ⬜；灯2：稳态高位 > 3534.64 → ✅
         overview = next(line for line in text.splitlines() if "**总览**" in line)
         self.assertIn("⬜ / 人工 / ✅ /", overview)
+
+    def test_hy_veto_extinguishes_light1_overview(self) -> None:
+        """1c 一票否决 → 灯1 熄灭（评审 M-1：此前该熔断腿零测试锁定）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._prepare_light1_green(root)
+            text_clear = tl.format_three_lights(
+                tl.assess_three_lights(root), "2026-11-23")
+            (root / "custom" / "us-hy-oas.jsonl").write_text(
+                json.dumps({"date": "2026-11-18", "value": 381.0}) + "\n" +
+                json.dumps({"date": "2026-11-19", "value": 385.0}) + "\n",
+                encoding="utf-8")
+            text_veto = tl.format_three_lights(
+                tl.assess_three_lights(root), "2026-11-23")
+        overview_clear = next(l for l in text_clear.splitlines() if "**总览**" in l)
+        overview_veto = next(l for l in text_veto.splitlines() if "**总览**" in l)
+        self.assertIn("✅ / 人工 / ✅ / ✅", overview_clear)  # 前置：其余腿全绿灯1 本应亮
+        self.assertIn("⬜ / 人工 / ✅ / ✅", overview_veto)   # 否决令灯1 熄灭（其余不变）
+        self.assertIn("🚫 灯1 熄灭", text_veto)
+        self.assertIn("否决触发", text_veto)
+
+    def test_assess_excludes_today_intraday_snapshot_rows(self) -> None:
+        """当日盘中快照行不得当收盘计入（评审 I-4）：剔除后读数用上一完成收盘。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._prepare_light1_green(root)
+            with open(root / "market" / "series" / "DX-Y.NYB.jsonl", "a",
+                      encoding="utf-8") as fh:  # 「当日」盘中暴涨假新高
+                fh.write(json.dumps({"date": "2026-03-26", "close": 999.0,
+                                     "source": "sina"}) + "\n")
+            state = tl.assess_three_lights(root, today=date(2026, 3, 26))
+            state_no_inject = tl.assess_three_lights(root)  # 真实今天>2026-03-26：行被计入
+        self.assertEqual(state["usd"]["latest_date"], "2026-03-25")
+        self.assertAlmostEqual(state["usd"]["latest"], 120.0)
+        self.assertGreaterEqual(state["usd"]["streak"], 5)      # 假新高未清零连续段
+        self.assertEqual(state_no_inject["usd"]["streak"], 0)   # 对照：不过滤即被污染
 
 
 class ReportIntegrationTests(unittest.TestCase):
