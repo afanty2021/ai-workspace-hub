@@ -472,6 +472,20 @@ def render_three_lights_section(data_root: Path | None = None) -> str:
                 "`workspace/monitoring/tech-reentry-three-lights.md`。")
 
 
+def render_damodaran_erp_section(data_root: Path | None = None) -> str:
+    """达摩达兰隐含 ERP 读数段（Q-20261123-05）：只读本地 us-erp-monthly，
+    零网络。任何失败降级为一行提示，绝不炸日报（同三灯段语义）。"""
+    from market_data_io import resolve_data_root
+    from update_damodaran_erp import erp_state, format_erp_section
+
+    try:
+        root = data_root or resolve_data_root()
+        return format_erp_section(erp_state(root, today=date.today()))
+    except Exception as exc:  # noqa: BLE001 — 显示段失败降级不炸日报
+        return (f"> 达摩达兰隐含 ERP 读数本轮渲染失败（{exc}）；通路见 "
+                "`tools/daily-watch/scripts/update_damodaran_erp.py`。")
+
+
 def render_earnings_sections(
     earnings: list[dict[str, Any]], enabled: bool, status: dict[str, Any] | None = None
 ) -> tuple[str, str]:
@@ -1264,6 +1278,7 @@ def build_report(
         CROSS_ASSET_TABLE=render_cross_asset_table(quotes, rolling),
         CROSS_ASSET_NOTE=CROSS_ASSET_NOTE + liquidity_window_note(today),
         THREE_LIGHTS_SECTION=render_three_lights_section(),
+        ERP_SECTION=render_damodaran_erp_section(),
         MARKET_SUMMARY=market_summary,
         KEY_MOVERS_TABLE=(render_key_movers(movers, rolling) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
         OTHER_MOVERS_TABLE=render_other_movers(quotes, movers, rolling),

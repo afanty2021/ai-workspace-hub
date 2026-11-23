@@ -14,6 +14,8 @@
 
 {THREE_LIGHTS_SECTION}
 
+{ERP_SECTION}
+
 市场情绪：{MARKET_SUMMARY}
 
 ## 个股异动

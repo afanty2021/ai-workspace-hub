@@ -175,6 +175,7 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("{CROSS_ASSET_TABLE}", text)
         self.assertIn("{CROSS_ASSET_NOTE}", text)
         self.assertIn("{THREE_LIGHTS_SECTION}", text)  # Q-20261123-04 三灯读数段
+        self.assertIn("{ERP_SECTION}", text)  # Q-20261123-05 达摩达兰隐含 ERP 段
         self.assertIn("### 跨资产例行扫描", text)
 
     def test_note_mentions_dashboard_and_backfill_depth(self) -> None:
