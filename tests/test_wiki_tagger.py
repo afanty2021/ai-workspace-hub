@@ -619,5 +619,48 @@ class SharedLLMClientTests(unittest.TestCase):
         sleep.assert_called_once_with(1)
 
 
+class MergeRelatedPolicyTests(unittest.TestCase):
+    """exploration 卡 related 停用修根（2026-11-23，Q-20261113 M-3 / 6ff98c9 补完）。
+
+    tag 给 exploration 卡写 related 同族第 2 次（11-14 首案手工移除），修根
+    落在 merge_generated_metadata：按 type 过滤可写字段。变异检查——去掉
+    过滤后第一例必红（第二例存量非空本来就被 fill-empty-only 语义保护，
+    与过滤无关，其价值在钉「未来 merge 语义改成覆盖/追加时存量仍不动」）；
+    过滤误写成全 type 则第三例红。
+    """
+
+    GENERATED = {
+        "domain": ["美股"],
+        "ticker": [],
+        "concepts": ["资金价格双因子"],
+        "related": ["美元", "真实利率"],
+        "entity_salience": {},
+        "tags": ["流动性"],
+    }
+
+    def test_exploration_card_never_writes_related(self) -> None:
+        merged, changed = wiki_tagger.merge_generated_metadata(
+            {"type": "exploration"}, dict(self.GENERATED)
+        )
+        self.assertNotIn("related", merged)
+        self.assertNotIn("related", changed)
+        self.assertEqual(merged["concepts"], ["资金价格双因子"])
+
+    def test_exploration_existing_related_not_touched_nor_filled(self) -> None:
+        # 存量拍板前 related 保留原值，不覆盖也不追加（只补空字段 policy 延伸）。
+        merged, changed = wiki_tagger.merge_generated_metadata(
+            {"type": "exploration", "related": ["[[旧链接]]"]}, dict(self.GENERATED)
+        )
+        self.assertEqual(merged["related"], ["[[旧链接]]"])
+        self.assertNotIn("related", changed)
+
+    def test_source_card_related_still_filled(self) -> None:
+        merged, changed = wiki_tagger.merge_generated_metadata(
+            {"type": "source"}, dict(self.GENERATED)
+        )
+        self.assertEqual(merged["related"], ["美元", "真实利率"])
+        self.assertIn("related", changed)
+
+
 if __name__ == "__main__":
     unittest.main()

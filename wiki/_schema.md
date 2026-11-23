@@ -207,7 +207,7 @@ python3 system/scripts/wiki_tagger.py --root . --env-file config/pod2wiki.env ta
 | `domain` | 一级领域 | 只用 `investing / reading / tech / life / philosophy / meta` |
 | `ticker` | 上市标的代码 | 只写材料直接相关标的 |
 | `concepts` | 可复用主题或框架 | 优先复用 `wiki/concepts/` 已有名称 |
-| `related` | 页面关联 | 使用带引号的 `"[[页面]]"` wikilink |
+| `related` | 页面关联 | 使用带引号的 `"[[页面]]"` wikilink；**exploration 卡不写**（2026-11-13 拍板废弃，见上文章件节注记；`wiki_tagger.py` 写侧已同步过滤） |
 | `entity_salience` | source 对标的的重要度 | 只用 `core / reference / mention` |
 | `tags` | 跨页面检索捷径 | 最多 5 个，复用旧标签，避免 ticker 和 concept 重复 |
 

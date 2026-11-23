@@ -472,7 +472,25 @@ def merge_generated_metadata(
 ) -> tuple[dict[str, Any], list[str]]:
     merged = dict(metadata)
     changed: list[str] = []
-    for field in AUTO_FIELDS:
+    # 2026-11-23 修根（tagger 给 exploration 卡写 related，同族第 2 次：
+    # 11-14 首案手工移除打补丁，11-23 EXP-20261123-01 又写入）：
+    # Q-20261113 M-3 拍板（6ff98c9）「exploration 卡 related 停用」当时只落
+    # 文档未落脚本。按 type 过滤可写字段——exploration 卡恒不写 related，
+    # sources/concepts/entity 卡不受影响；tag/backfill 两入口共用本函数，
+    # 单点覆盖两条写入路径。存量拍板前的 related 不在本修根范围。
+    # 修根覆盖面限制声明（同日 max 评审 I-1 补）：
+    # ①交互会话补空字段走 wiki/_schema.md 契约表（不经本函数），已由该表
+    #   related 行的 exploration 豁免句同步堵住；
+    # ②append_frontmatter.py 通用工具与手工建卡可写任意字段，不在机械防
+    #   线内（当前无 skill 指令向 exploration 卡 list_field=related）；
+    # ③LLM 生成侧（build_messages schema）不分 type 仍会产出 related 再被
+    #   本过滤丢弃——取舍：保留生成侧统一 schema，避免按 type 条件化
+    #   prompt 引入缓存键分裂；代价是 exploration 卡的预览/缓存里出现
+    #   永不落盘的 related 值（仅展示噪音，无正确性影响）。
+    fields = AUTO_FIELDS
+    if merged.get("type") == "exploration":
+        fields = tuple(field for field in AUTO_FIELDS if field != "related")
+    for field in fields:
         if is_empty(merged.get(field)) and not is_empty(generated.get(field)):
             merged[field] = generated[field]
             changed.append(field)
