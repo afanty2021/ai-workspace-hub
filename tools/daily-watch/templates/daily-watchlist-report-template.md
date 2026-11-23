@@ -12,6 +12,8 @@
 
 {CROSS_ASSET_NOTE}
 
+{THREE_LIGHTS_SECTION}
+
 市场情绪：{MARKET_SUMMARY}
 
 ## 个股异动

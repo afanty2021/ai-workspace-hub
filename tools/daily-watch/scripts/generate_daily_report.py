@@ -457,6 +457,21 @@ def render_cross_asset_table(
     return "\n".join(rows)
 
 
+def render_three_lights_section(data_root: Path | None = None) -> str:
+    """科技回补三灯读数段（Q-20261123-04）：three_lights.assess 只读本地序列，
+    零网络。任何失败降级为一行提示，绝不炸日报（同跨资产表未取得的语义）。"""
+    from market_data_io import resolve_data_root
+    from three_lights import assess_three_lights, format_three_lights
+
+    try:
+        root = data_root or resolve_data_root()
+        state = assess_three_lights(root)
+        return format_three_lights(state, date.today().isoformat())
+    except Exception as exc:  # noqa: BLE001 — 显示段失败降级不炸日报
+        return (f"> 三灯读数本轮计算失败（{exc}）；清单与阈值见 "
+                "`workspace/monitoring/tech-reentry-three-lights.md`。")
+
+
 def render_earnings_sections(
     earnings: list[dict[str, Any]], enabled: bool, status: dict[str, Any] | None = None
 ) -> tuple[str, str]:
@@ -1248,6 +1263,7 @@ def build_report(
         MARKET_OVERVIEW_TABLE=market_table,
         CROSS_ASSET_TABLE=render_cross_asset_table(quotes, rolling),
         CROSS_ASSET_NOTE=CROSS_ASSET_NOTE + liquidity_window_note(today),
+        THREE_LIGHTS_SECTION=render_three_lights_section(),
         MARKET_SUMMARY=market_summary,
         KEY_MOVERS_TABLE=(render_key_movers(movers, rolling) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
         OTHER_MOVERS_TABLE=render_other_movers(quotes, movers, rolling),
