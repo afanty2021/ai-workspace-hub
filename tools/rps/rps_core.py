@@ -78,9 +78,18 @@ def interval_ret(close_adj: pd.DataFrame, n: int) -> pd.DataFrame:
     return close_adj / close_adj.shift(n) - 1.0
 
 
-def rps_from_ret(ret: pd.DataFrame, min_bars: int = 250) -> pd.DataFrame:
-    """横截面百分位 ×100；min_bars=上市一年以上近似（≥250 根 bar 才入横截面）。"""
-    eligible = ret.notna() & (close_count(ret) >= min_bars)
+def rps_from_ret(ret: pd.DataFrame, min_bars: int = 250,
+                 bar_count: pd.DataFrame | None = None) -> pd.DataFrame:
+    """横截面百分位 ×100；min_bars=上市一年以上近似（数据集内累计有效 bar ≥250 根才入横截面）。
+
+    bar_count 必须是 close 帧的 close_count（口径基准帧）。Q-20261125-03 修根：原实现把
+    close_count 作用在 ret 帧上（ret 晚 N 根），实际门槛成了 N+250 根——RPS50/120/250
+    分别第 300/370/500 根才入横截面，上市 1-2 年的票被系统性排除，历史 RPS 随资格集漂移。
+    """
+    if bar_count is None:
+        raise TypeError("rps_from_ret 需要显式传 bar_count=close_count(close 帧)——"
+                        "在 ret 帧上计数会把实际预热门槛推高 N 根（Q-20261125-03）")
+    eligible = ret.notna() & (bar_count >= min_bars)
     r = ret.where(eligible).rank(axis=1, pct=True) * 100.0
     return r
 
@@ -95,9 +104,10 @@ def rps_main(periods=(50, 120, 250), cache: Path = None):
     if cache and cache.exists():
         return pd.read_pickle(cache)
     _, close_adj = load_close_matrix()
+    counted = close_count(close_adj)
     out = {}
     for n in periods:
-        out[n] = rps_from_ret(interval_ret(close_adj, n))
+        out[n] = rps_from_ret(interval_ret(close_adj, n), bar_count=counted)
     bundle = {"close_adj": close_adj, **{f"rps{n}": v for n, v in out.items()}}
     if cache:
         cache.parent.mkdir(parents=True, exist_ok=True)

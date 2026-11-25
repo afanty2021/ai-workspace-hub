@@ -120,9 +120,15 @@ def row_ic(x: pd.DataFrame, y: pd.DataFrame) -> pd.Series:
 
 for name, sig in [("RPS50", rps50), ("RPS120", rps120), ("RPS250", rps250)]:
     ic = row_ic(sig.where(sig.notna()), fwd[20].where(sig.notna())).dropna()
-    t = ic.mean() / ic.std() * np.sqrt(len(ic))
+    t_naive = ic.mean() / ic.std() * np.sqrt(len(ic))
+    # Q-20261125-05：fwd20 逐日重叠（相邻日共享 19 天收益），naive t 假设逐日独立，
+    # 零分布约膨胀 √20 倍（真实 bundle 实测 naive/去重叠 ≈ 16.3/4.0 ≈ 4 倍）。
+    # 判定口径 = 按 h=20 步长去重叠（相位 0）；naive t 只作历史对照打印。
+    ic_d = ic.iloc[::20]
+    t = ic_d.mean() / ic_d.std() * np.sqrt(len(ic_d))
     by = ic.groupby(ic.index.year).mean()
-    print(f"\n{name}: 日均 IC {ic.mean()*100:+.2f}%  t={t:.1f}  正率 {(ic>0).mean()*100:.0f}%  月数 {len(ic)}")
+    print(f"\n{name}: 日均 IC {ic.mean()*100:+.2f}%  t(去重叠)={t:.1f}  "
+          f"t(naive重叠,仅对照)={t_naive:.1f}  正率 {(ic>0).mean()*100:.0f}%  日数 {len(ic)}")
     print("  分年 IC%:", " ".join(f"{y}:{v*100:+.1f}" for y, v in by.items()))
 
 print()
