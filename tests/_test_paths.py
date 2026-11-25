@@ -8,3 +8,4 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "daily-watch" / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "podcast" / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "tools" / "sector-rotation"))
+sys.path.insert(0, str(REPO_ROOT / "tools" / "planted-benchmark"))
