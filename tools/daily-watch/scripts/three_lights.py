@@ -137,7 +137,10 @@ def trend_state(closes: list[float]) -> dict[str, Any]:
     - hold_streak：尾部连续 收盘>EMA21 天数
     - cross：'golden'/'dead' + 最近交叉距今天数（EMA8/21 相对位置翻转点）
     - cross_reverted：金叉后允许回踩——连续 CROSS_REVERT_DAYS 日收盘失守 21EMA
-      才回退（清单 3c；盘中破不算，只认收盘），回退后状态显示为已回退非金叉
+      才回退（清单 3c；盘中破不算，只认收盘），回退后状态显示为已回退非金叉。
+      闩锁语义（Q-20261125-06 补定义）：置 True 后本轮金叉内不复位——收复 21EMA
+      不复位，直到出现下一次交叉（cross_idx 移动到新交叉点）重新扫描；故实现上
+      每次评估从最近交叉点重放全历史，闩锁是交叉纪元的属性，不是跨调用状态
     - 对齐：ema_fast[t+F] 与 ema_slow[t] 收在同一根收盘（F=EMA_SLOW-EMA_FAST），
       两序列种子起点不同（span-1 个 SMA 丢弃），直接同下标比较差 13 根 bar
       （2026-11-23 冒烟实证：崩盘死叉被误报成金叉 23 日前）。"""

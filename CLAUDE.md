@@ -60,6 +60,7 @@
 - `config/daily-watchlist-watchlist.md` 是日报执行股票池的唯一来源；`workspace/monitoring/` 只是用户看板。
 - 旧工作区如果已有 `daily-watchlist-reports/`、`monitoring/` 或 `_archive/`，继续读取原位置，不自动搬动用户文件；新工作区分别使用 `output/daily-watch/`、`workspace/monitoring/` 和 `workspace/archive/`。
 - wiki 沉淀、假设状态调整、股票池新增、研究偏好固化等需要确认的动作，先追加到 `workspace/review-queue.md`，不能只留在对话里。
+- **cron 行为变更双登记（Q-20261125-09 硬规则）**：`CronCreate` / `CronUpdate` 改了任务行为（prompt 判据、payload、档位语义、自检口径）→ 同一会话内补 ① CHANGELOG 条目 + ② `workspace/review-queue.md` 登记（新条目或既有条目改状态）。cron prompt 无可解析工件，`tests/test_changelog_freshness.py` 按设计只盯 tools/ 与 system/ 的非 md 改动——cron 与纯文档变更是它声明的盲区，靠本条人工兜底（首案=11-24 盘前自检 d 项改 cron+skill 零 CHANGELOG，r4 补记）。只改日程（cron 表达式/延迟）不改行为的不在此列。
 - 研究开始时必须先运行 `research_preflight.py --context ... --research-id ... --research-file ... --record`，加载命中的 `rule / pattern / exploration` 并扫描相关 `entity / concept / source`；打开命中页面全文后才联网。
 - 研究报告必须记录 `preflight_id / knowledge_used / wiki_pages_loaded` 和 `Wiki check`；扫描失败可以人工降级，但不能静默跳过。
 - 新建、复盘或改变知识状态后运行 `knowledge_lifecycle.py rebuild-index --apply`；三类 `_index.md` 是自动生成的加载路由，不手工堆证据。

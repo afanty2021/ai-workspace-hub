@@ -144,6 +144,21 @@ class TrendStateCrossRevertTests(unittest.TestCase):
         self.assertEqual(state["cross"], "golden")
         self.assertFalse(state["cross_reverted"], "单日回踩在容差内，不回退")
 
+    def test_revert_latches_recovery_does_not_reset(self) -> None:
+        """闩锁语义（Q-20261125-06 补定义）：回退后收复 21EMA 不复位——本轮金叉内
+        已回退就是已回退，直到 EMA8 跌回 21EMA 下方再上穿（新交叉）才重新武装。"""
+        base = self._golden_with_tail([])
+        ema21 = tl.trend_state(base)["ema21"]
+        tail = [ema21 * 0.97, ema21 * 0.96]                          # 连续 2 日失守 → 回退
+        rec = [tail[-1]]
+        for _ in range(8):
+            rec.append(rec[-1] * 1.05)                               # 强收复 8 日
+        state = tl.trend_state(self._golden_with_tail(tail + rec))
+        self.assertEqual(state["cross"], "golden",
+                         "EMA8 未跌回 21EMA 下方=无新交叉，仍在原金叉纪元")
+        self.assertGreaterEqual(state["hold_streak"], 5, "收复已确立（尾部连续收在 21EMA 上）")
+        self.assertTrue(state["cross_reverted"], "闩锁：收复不复位，本轮金叉内保持已回退")
+
 
 class WeeklyGoldTests(unittest.TestCase):
     def _gold_rows(self) -> list[dict]:
@@ -282,8 +297,8 @@ class FormatAndAssessTests(unittest.TestCase):
                 encoding="utf-8")
             text_veto = tl.format_three_lights(
                 tl.assess_three_lights(root), "2026-11-23")
-        overview_clear = next(l for l in text_clear.splitlines() if "**总览**" in l)
-        overview_veto = next(l for l in text_veto.splitlines() if "**总览**" in l)
+        overview_clear = next(ln for ln in text_clear.splitlines() if "**总览**" in ln)
+        overview_veto = next(ln for ln in text_veto.splitlines() if "**总览**" in ln)
         self.assertIn("✅ / 人工 / ✅ / ✅", overview_clear)  # 前置：其余腿全绿灯1 本应亮
         self.assertIn("⬜ / 人工 / ✅ / ✅", overview_veto)   # 否决令灯1 熄灭（其余不变）
         self.assertIn("🚫 灯1 熄灭", text_veto)
