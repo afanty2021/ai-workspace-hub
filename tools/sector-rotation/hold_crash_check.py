@@ -109,7 +109,7 @@ def cell_metrics_199(wf, res) -> dict:
 
 
 def load_tracker_log() -> dict[tuple[int, str], dict]:
-    rows = [json.loads(l) for l in open(TRACKER_LOG) if l.strip()]
+    rows = [json.loads(ln) for ln in open(TRACKER_LOG) if ln.strip()]
     return {(r["n"], r["friday"]): r for r in rows}
 
 
@@ -224,7 +224,8 @@ def main(argv: list[str]) -> int:
     # ---- 状态载体门（§8 修订）：重放终态 vs 前向跟踪器持久化状态 ----
     trk = load_tracker_log()
     state_per_n = load_tracker_state().get("per_n") or {}
-    names = lambda d: "+".join(sorted(wf.members[c].index_code for c in d)) or "（空/现金）"
+    def names(d):
+        return "+".join(sorted(wf.members[c].index_code for c in d)) or "（空/现金）"
     gate_fails = []
     for n in N_GRID:
         h = cells[n]["hist"]

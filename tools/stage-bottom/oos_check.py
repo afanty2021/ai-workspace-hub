@@ -155,7 +155,7 @@ def main(argv=None) -> int:
         s["n_event"] = len(ev[a][key])
         return s
 
-    print(f"\n==== IS(<2020) / OOS(>=2020) 事件研究（h=20 主读数，除权过滤，IS 切点闸门） ====")
+    print("\n==== IS(<2020) / OOS(>=2020) 事件研究（h=20 主读数，除权过滤，IS 切点闸门） ====")
     print(f"{'臂':<10}{'窗':<4}{'N事件':>8}{'a_h5':>9}{'a_h10':>9}{'a_h20':>9}{'t20':>8}{'a>0':>7}")
     for key, lab in (("is", "IS"), ("oos", "OOS")):
         for a in ARMS:

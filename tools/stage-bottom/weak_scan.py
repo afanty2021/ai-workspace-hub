@@ -127,19 +127,19 @@ def scan_one(rows: list[dict], today_iso: str) -> dict | None:
     tail = rows[-TAIL:]
     c = np.array([r["close"] for r in tail], float)
     h = np.array([r["high"] for r in tail], float)
-    l = np.array([r["low"] for r in tail], float)
+    lo = np.array([r["low"] for r in tail], float)
     amt = np.array([r.get("amount") or 0.0 for r in tail], float)
-    di = [int(r["date"].replace("-", "")) for r in tail]
 
-    lc = np.roll(c, 1); lc[0] = np.nan
+    lc = np.roll(c, 1)
+    lc[0] = np.nan
     diff = c - lc
     up = tdx_sma(np.where(diff > 0, diff, 0.0), 5, 1)
     dn = tdx_sma(np.abs(diff), 5, 1)
     with np.errstate(divide="ignore", invalid="ignore"):
         rsi = np.where(dn > 0, up * 100.0 / dn, np.nan)
-    tr = np.maximum(np.maximum(h - l, np.abs(h - lc)), np.abs(l - lc))
+    tr = np.maximum(np.maximum(h - lo, np.abs(h - lc)), np.abs(lo - lc))
     tr1 = roll_sum(tr, 10)
-    hd, ld = h - np.roll(h, 1), np.roll(l, 1) - l
+    hd, ld = h - np.roll(h, 1), np.roll(lo, 1) - lo
     hd[0] = ld[0] = np.nan
     dmp = roll_sum(np.where((hd > 0) & (hd > ld), hd, 0.0), 10)
     dmm = roll_sum(np.where((ld > 0) & (ld > hd), ld, 0.0), 10)
@@ -148,7 +148,7 @@ def scan_one(rows: list[dict], today_iso: str) -> dict | None:
         mdi = np.where(tr1 > 0, dmm * 100.0 / tr1, np.nan)
         dx = np.where((mdi + pdi) > 0, np.abs(mdi - pdi) * 100.0 / (mdi + pdi), np.nan)
     adx = roll_sum(dx, 5) / 5.0                     # roll_sum NaN 窗语义=MA 无效同款
-    hh10, ll10 = roll_max(h, 10), roll_min(l, 10)
+    hh10, ll10 = roll_max(h, 10), roll_min(lo, 10)
     with np.errstate(divide="ignore", invalid="ignore"):
         wr10 = np.where((hh10 - ll10) > 0, (hh10 - c) * 100.0 / (hh10 - ll10), np.nan)
     amt20 = roll_sum(amt, 20) / 20.0

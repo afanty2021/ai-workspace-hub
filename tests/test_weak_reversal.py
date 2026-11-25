@@ -23,8 +23,7 @@ def test_stock_files_stem_filter(tmp_path):
     assert [p.name for p in stock_files(tmp_path)] == ["600276.SH.jsonl"]
 
 
-def _rows_from_closes(closes, today_iso, seed=11):
-    rng = np.random.default_rng(seed)
+def _rows_from_closes(closes, today_iso):
     rows, d = [], date.fromisoformat(today_iso)
     span = len(closes)
     from datetime import timedelta

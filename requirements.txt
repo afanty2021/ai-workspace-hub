@@ -8,6 +8,11 @@ requests[socks]>=2.28.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
 
+# 数值/面板计算（tools/ 回测与研究脚本、tests/ 大面积 import；2026-11-25 Q-20261125-08
+# 补登——CI 在裸 requirements 上跑 pytest，此前 numpy/pandas 未声明=靠本地环境侥幸）
+numpy>=2.0
+pandas>=2.2
+
 # 播客摄入（podcast）
 yt-dlp>=2025.1.0
 youtube-transcript-api>=0.6.2

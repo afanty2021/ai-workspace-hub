@@ -38,12 +38,12 @@ def main() -> int:
             continue
         o = g["open"].to_numpy(float)
         h = g["high"].to_numpy(float)
-        l = g["low"].to_numpy(float)
+        lo = g["low"].to_numpy(float)
         c = g["close"].to_numpy(float)
         ymd = g["trade_date"].to_numpy(int)
         n = len(c)
         # 尾部不足 20 日的日期不能算前瞻收益
-        ind = stage_bottom_indicators(h, l, c)
+        ind = stage_bottom_indicators(h, lo, c)
         sig = cross_up(ind["rsi5"], 20.0)
         sig[:60] = False
         fwd = np.full(n, np.nan)

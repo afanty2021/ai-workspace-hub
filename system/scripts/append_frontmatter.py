@@ -188,7 +188,7 @@ def append_to_file(
             else:
                 start, end = block
                 block_lines = lines[start:end]
-                item_lines = [l for l in block_lines[1:] if re.match(r"^\s*-\s", l)]
+                item_lines = [ln for ln in block_lines[1:] if re.match(r"^\s*-\s", ln)]
                 inline = re.match(r"^[A-Za-z_][\w-]*:\s*\[(.*)\]\s*$", block_lines[0])
                 if inline is not None:
                     # 内联列表转块式（保序）

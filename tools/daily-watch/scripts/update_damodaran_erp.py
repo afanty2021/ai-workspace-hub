@@ -199,7 +199,7 @@ def format_erp_section(state: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="达摩达兰标普500隐含 ERP 月度序列更新（Q-20261123-05）")
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)          # 无旗标可取；调用只为 argparse 校验/帮助（ruff F841）
     from market_data_io import resolve_data_root
 
     data_root = resolve_data_root()

@@ -41,7 +41,6 @@ POOL_SET: set[str] = set()
 def nonoverlap_trades(di, o, sig, h):
     """每票单仓非重叠：信号 i 次日开盘进，h 后开盘出；持有期内新信号忽略。
     返回 (entry_idx 列表, 毛单笔收益列表)；尾部窗口不足的事件丢弃（与事件研究同截尾）。"""
-    n = len(o)
     si, sr = event_returns(di, o, sig, h, GAP_DAYS)
     trades, entries, last_exit = [], [], -1
     for k in range(len(si)):

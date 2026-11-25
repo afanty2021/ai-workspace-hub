@@ -158,26 +158,26 @@ def state_entry(neg: np.ndarray) -> np.ndarray:
 
 def stage_bottom_indicators(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> dict:
     """返回 {rsi5, adx, wr10, sb, k, d}；sb=阶段底部=2*RSI5+ADX-WR10。"""
-    h, l, c = (np.asarray(v, dtype=float) for v in (high, low, close))
+    h, lo, c = (np.asarray(v, dtype=float) for v in (high, low, close))
     lc = shift1(c)
     diff = c - lc  # diff[0]=NaN → RSI 头部 NaN
     up = tdx_sma(np.where(diff > 0, diff, 0.0), 5, 1)
     dn = tdx_sma(np.abs(diff), 5, 1)
     rsi5 = safe_div(up * 100.0, dn)
 
-    tr = np.maximum(np.maximum(h - l, np.abs(h - lc)), np.abs(l - lc))
+    tr = np.maximum(np.maximum(h - lo, np.abs(h - lc)), np.abs(lo - lc))
     tr1 = roll_sum(tr, 10)
-    hd, ld = h - shift1(h), shift1(l) - l
+    hd, ld = h - shift1(h), shift1(lo) - lo
     dmp = roll_sum(np.where((hd > 0) & (hd > ld), hd, 0.0), 10)
     dmm = roll_sum(np.where((ld > 0) & (ld > hd), ld, 0.0), 10)
     pdi, mdi = safe_div(dmp * 100.0, tr1), safe_div(dmm * 100.0, tr1)
     dx = safe_div(np.abs(mdi - pdi) * 100.0, mdi + pdi)
     adx = roll_mean_valid(dx, 5)
 
-    hh10, ll10 = roll_max(h, 10), roll_min(l, 10)
+    hh10, ll10 = roll_max(h, 10), roll_min(lo, 10)
     wr10 = safe_div((hh10 - c) * 100.0, hh10 - ll10)
 
-    lowv, highv = roll_min(l, 9), roll_max(h, 9)
+    lowv, highv = roll_min(lo, 9), roll_max(h, 9)
     rsv = tdx_ema(safe_div((c - lowv) * 100.0, highv - lowv), 3)
     k = tdx_ema(rsv, 3)
     d = roll_mean_valid(k, 3)

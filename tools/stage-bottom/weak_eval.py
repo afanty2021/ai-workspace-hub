@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections import defaultdict
 from datetime import date
@@ -55,7 +54,6 @@ def main(argv: list[str] | None = None) -> int:
     if not events:
         print("台账为空——尚未积累信号。")
         return 0
-    hmax = max(hs)
     dates = sorted({e["date"] for e in events})
     print(f"台账 {len(events)} 事件（{dates[0]}..{dates[-1]}），评估窗 {hs}")
 
