@@ -519,9 +519,11 @@ def test_cli_rejects_nonpositive_perm(tmp_path, capsys):
 def test_cli_event_exit_code_follows_verdict(tmp_path, capsys):
     assert run_check.main(["event", "--cache-root", str(tmp_path / "a")]) == 0
     assert "planted[event] → 量具正常" in capsys.readouterr().out
+    # Q-20261125-04 修根后出厂管道无契约偏差注记（保留率 100%），--strict 通过；
+    # 注记触发路径由 test_event_*_retention 用例守（合成带缺口市场仍能把 --strict 打红）
     assert run_check.main(["event", "--cache-root", str(tmp_path / "a"),
-                           "--strict"]) == 1            # 出厂管道带契约偏差注记：--strict 算失败
-    assert "⚠" in capsys.readouterr().out
+                           "--strict"]) == 0
+    assert "⚠" not in capsys.readouterr().out
 
 
 def test_load_module_cached_no_syspath_growth():

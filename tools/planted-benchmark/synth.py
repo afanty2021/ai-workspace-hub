@@ -213,40 +213,38 @@ def write_cache(cache_root: Path, tickers: dict[str, dict]) -> Path:
     return cache_root
 
 
-def _mom_kwargs(i: int, n_bars: int) -> dict:
-    return dict(seed=SEED_MOM + i, n=n_bars, momentum=MOM_COEF_EVENT)
-
-
-def _plain_kwargs(i: int, n_bars: int) -> dict:
-    """与 _mom_kwargs 同种子、去掉动量项（配对）。"""
-    return dict(seed=SEED_MOM + i, n=n_bars)
-
-
-def event_market_tickers(n_bars: int = N_EVENT_BARS) -> dict[str, dict]:
+def event_market_tickers(n_bars: int = N_EVENT_BARS, *, bounce: float | None = None,
+                         mom_coef: float | None = None, seed_shift: int = 0) -> dict[str, dict]:
     """事件研究族 + rps 共用的 59 只合成市场。
 
     rps 判定用 EDGE_MOM（12 只动量票）vs 全体；事件族判定用 EDGE_BOUNCE（12 只反弹票）
-    vs NOISE（35 只）；两族互不判对方的边。"""
+    vs NOISE（35 只）；两族互不判对方的边。
+    calibrate（多种子校准）用：bounce/mom_coef 扫边强度，seed_shift 平移全部种子造
+    独立市场。None 哨兵而非默认参数绑定——测试 monkeypatch 模块常数必须继续生效；
+    出厂参数下 kwargs 与首版逐字节等价（bounce=BOUNCE 显式写出即默认路径）。"""
+    bounce = BOUNCE if bounce is None else bounce
+    mom_coef = MOM_COEF_EVENT if mom_coef is None else mom_coef
     tickers = {}
     for i, sym in enumerate(EDGE_BOUNCE):
-        tickers[sym] = dict(seed=SEED_BOUNCE + i, n=n_bars, gen="bounce")
+        tickers[sym] = dict(seed=SEED_BOUNCE + i + seed_shift, n=n_bars, gen="bounce", bounce=bounce)
     for i, sym in enumerate(EDGE_MOM):
-        tickers[sym] = _mom_kwargs(i, n_bars)
+        tickers[sym] = dict(seed=SEED_MOM + i + seed_shift, n=n_bars, momentum=mom_coef)
     for i, sym in enumerate(NOISE):
-        tickers[sym] = dict(seed=SEED_NOISE + i, n=n_bars)
+        tickers[sym] = dict(seed=SEED_NOISE + i + seed_shift, n=n_bars)
     return tickers
 
 
-def noise_market_tickers(n_bars: int = N_EVENT_BARS) -> dict[str, dict]:
+def noise_market_tickers(n_bars: int = N_EVENT_BARS, *, seed_shift: int = 0) -> dict[str, dict]:
     """rps 阴性对照市场：与 event_market_tickers 同票码、同 eps 种子，只去掉两个边项
-    （RPS 是横截面排名，必须整市场换掉才得到零优势横截面）。"""
+    （RPS 是横截面排名，必须整市场换掉才得到零优势横截面）。seed_shift 同
+    event_market_tickers（calibrate 用它造独立噪声市场测误报率）。"""
     tickers = {}
     for i, sym in enumerate(EDGE_BOUNCE):
-        tickers[sym] = dict(seed=SEED_BOUNCE + i, n=n_bars)
+        tickers[sym] = dict(seed=SEED_BOUNCE + i + seed_shift, n=n_bars)
     for i, sym in enumerate(EDGE_MOM):
-        tickers[sym] = _plain_kwargs(i, n_bars)
+        tickers[sym] = dict(seed=SEED_MOM + i + seed_shift, n=n_bars)
     for i, sym in enumerate(NOISE):
-        tickers[sym] = dict(seed=SEED_NOISE + i, n=n_bars)
+        tickers[sym] = dict(seed=SEED_NOISE + i + seed_shift, n=n_bars)
     return tickers
 
 
@@ -289,12 +287,16 @@ def _etf_rows_from_index(idx_rows: list[dict], seed: int):
 
 
 def write_sr_market(root: Path, *, n_bars: int = N_SR_WEEKS_BARS,
-                    noise_only: bool = False) -> Path:
+                    noise_only: bool = False, mom_coef: float | None = None,
+                    seed_shift: int = 0) -> Path:
     """写 SR 合成宇宙：sector/series/<指数>.jsonl + market/series/<ETF>.jsonl + bench。
 
     - 默认：12 行业中 SR_EDGE 埋动量边（阳性对照）；
-    - noise_only=True：同种子、不加动量项（阴性对照——与埋边宇宙只差边项）。"""
+    - noise_only=True：同种子、不加动量项（阴性对照——与埋边宇宙只差边项）；
+    - calibrate（多种子校准）用：mom_coef 扫边强度，seed_shift 造独立宇宙。
+      mom_coef 用 None 哨兵读模块常数（测试 monkeypatch synth.SR_MOM_COEF 必须继续生效）。"""
     root = guard_root(root)
+    mom_coef = SR_MOM_COEF if mom_coef is None else mom_coef
     (root / "sector" / "series").mkdir(parents=True, exist_ok=True)
     (root / "market" / "series").mkdir(parents=True, exist_ok=True)
 
@@ -304,11 +306,12 @@ def write_sr_market(root: Path, *, n_bars: int = N_SR_WEEKS_BARS,
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     for i in range(SR_N):
-        kw = dict(seed=SR_SEED + i, momentum=0.0 if noise_only or i not in SR_EDGE else SR_MOM_COEF)
+        kw = dict(seed=SR_SEED + i + seed_shift,
+                  momentum=0.0 if noise_only or i not in SR_EDGE else mom_coef)
         idx_rows = _index_rows(n=n_bars, **kw)
         _dump(root / "sector" / "series" / f"{SR_IDX(i)}.jsonl", idx_rows)
         _dump(root / "market" / "series" / f"{SR_ETF(i)}.jsonl",
-              _etf_rows_from_index(idx_rows, SR_SEED + i))
+              _etf_rows_from_index(idx_rows, SR_SEED + i + seed_shift))
     _dump(root / "market" / "series" / f"{SR_BENCH}.jsonl",
-          _index_rows(SR_BENCH_SEED, n_bars))      # bench = 独立噪声序列，两个宇宙共用
+          _index_rows(SR_BENCH_SEED + seed_shift, n_bars))   # bench = 独立噪声序列，两宇宙共用
     return root
