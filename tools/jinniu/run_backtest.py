@@ -22,7 +22,6 @@ import argparse
 import json
 import re
 import sys
-from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -105,8 +104,9 @@ def event_returns(di, o, sig, h, gap, exdiv=None):
     if not len(idx):
         return idx, np.array([])
     nxt = idx + 1
-    ok = (di[nxt] - di[idx]) <= gap  # i→i+1 间隔（停牌复牌跳空剔除）
-    ok &= (di[idx + 1 + h] - di[nxt]) <= h * 5 + 20  # 前瞻窗跨长期停牌剔除
+    dciv = _days_from_civil(di // 10000, di // 100 % 100, di % 100)  # 历法日：YYYYMMDD 整数差跨月 71>10 会把跨月窗当停牌误删（Q-20261125-04）
+    ok = (dciv[nxt] - dciv[idx]) <= gap  # i→i+1 间隔（停牌复牌跳空剔除）
+    ok &= (dciv[idx + 1 + h] - dciv[nxt]) <= h * 5 + 20  # 前瞻窗跨长期停牌剔除
     idx = idx[ok]
     if exdiv is not None:
         cum = np.cumsum(exdiv)
@@ -212,7 +212,6 @@ def main(argv=None) -> int:
         for a, b in spans:
             if o[a] > 0:
                 trades.append(o[b] / o[a] - 1.0)
-        yrs = max((_ymd_days(int(di[-1])) - _ymd_days(int(di[spans[0][0]]))) / 365.25, 1e-9) if spans else 0
         gross = float(np.prod([1 + t for t in trades])) if trades else 1.0
         net = float(np.prod([(1 + t) * (1 - COST_BUY) * (1 - COST_SELL) for t in trades])) if trades else 1.0
         bh = float(o[-1] / o[spans[0][0]]) if spans else None
@@ -287,19 +286,19 @@ def main(argv=None) -> int:
             for h in hs:
                 s, nsig = agg(freq, tag, h)
                 if "alpha_mean" in s:
-                    l = (f"{freq}_{tag}_{h:<3}{'xd' if False else '':<3}{s['n_eff']:>6}{nsig:>8}"
-                         f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>9.3f}%{s['alpha_t']:>8.1f}{s['pos_ratio']:>11.1%}")
-                    print(l)
-                    lines.append(l)
+                    ln = (f"{freq}_{tag}_{h:<3}{'xd' if False else '':<3}{s['n_eff']:>6}{nsig:>8}"
+                          f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>9.3f}%{s['alpha_t']:>8.1f}{s['pos_ratio']:>11.1%}")
+                    print(ln)
+                    lines.append(ln)
     print("\n---- 除权过滤对照（h=5d/2w） ----")
     for freq, hs, tag in (("d", [5, 10], "buy"), ("w", [2, 4], "buy")):
         for h in hs:
             s, nsig = agg(freq, tag, h, xd=True)
             if "alpha_mean" in s:
-                l = (f"{freq}_buy_{h}_xd        {s['n_eff']:>6}{nsig:>8}"
-                     f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>9.3f}%{s['alpha_t']:>8.1f}{s['pos_ratio']:>11.1%}")
-                print(l)
-                lines.append(l)
+                ln = (f"{freq}_buy_{h}_xd        {s['n_eff']:>6}{nsig:>8}"
+                      f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>9.3f}%{s['alpha_t']:>8.1f}{s['pos_ratio']:>11.1%}")
+                print(ln)
+                lines.append(ln)
 
     def strat_table(freq):
         key_g, key_n, key_b, key_t = f"{freq}_gross", f"{freq}_net", f"{freq}_bh", f"{freq}_trades"

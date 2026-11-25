@@ -58,17 +58,17 @@ def d2i(s: str) -> int:
 
 
 def load_symbol(path: Path):
-    dates, o, h, l, c = [], [], [], [], []
+    dates, o, h, lo, c = [], [], [], [], []
     with open(path) as fh:
         for line in fh:
             b = json.loads(line)
             dates.append(d2i(b["date"]))
             o.append(b["open"])
             h.append(b["high"])
-            l.append(b["low"])
+            lo.append(b["low"])
             c.append(b["close"])
     return (np.array(dates, dtype=np.int64), np.array(o, float), np.array(h, float),
-            np.array(l, float), np.array(c, float))
+            np.array(lo, float), np.array(c, float))
 
 
 def ex_div_mask(c: np.ndarray, thresh=0.12) -> np.ndarray:
@@ -85,8 +85,9 @@ def event_returns(di, o, sig, h, gap, exdiv=None):
     if not len(idx):
         return idx, np.array([])
     nxt = idx + 1
-    ok = (di[nxt] - di[idx]) <= gap
-    ok &= (di[idx + 1 + h] - di[nxt]) <= h * 5 + 20
+    dciv = civil_days(di)  # 历法日：YYYYMMDD 整数差跨月 71>10 会把跨月窗当停牌误删（Q-20261125-04）
+    ok = (dciv[nxt] - dciv[idx]) <= gap
+    ok &= (dciv[idx + 1 + h] - dciv[nxt]) <= h * 5 + 20
     idx = idx[ok]
     if exdiv is not None:
         cum = np.cumsum(exdiv)
@@ -222,27 +223,29 @@ def main(argv=None) -> int:
             s = agg(arm, hh)
             pv = np.array(pooled[arm][hh])
             if "alpha_mean" in s and len(pv):
-                l = (f"{arm:<10}{hh:>3}{s['n_eff']:>6}{s['n_sig']:>8}"
-                     f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>8.3f}%{s['alpha_t']:>8.1f}"
-                     f"{s['pos_ratio']:>9.1%}{pv.mean()*100:>10.3f}%{(pv>0).mean()*100:>10.1f}%")
-                print(l)
-                lines.append(l)
+                ln = (f"{arm:<10}{hh:>3}{s['n_eff']:>6}{s['n_sig']:>8}"
+                      f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>8.3f}%{s['alpha_t']:>8.1f}"
+                      f"{s['pos_ratio']:>9.1%}{pv.mean()*100:>10.3f}%{(pv>0).mean()*100:>10.1f}%")
+                print(ln)
+                lines.append(ln)
     print("\n---- 除权过滤对照（h=5/10） ----")
     for arm in EXDIV_ARMS:
         for hh in (5, 10):
             s = agg(arm, hh, xd=True)
             if "alpha_mean" in s:
-                l = (f"{arm}_{hh}_xd  {s['n_eff']:>6}{s['n_sig']:>8}"
-                     f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>8.3f}%{s['alpha_t']:>8.1f}{s['pos_ratio']:>9.1%}")
-                print(l)
-                lines.append(l)
+                ln = (f"{arm}_{hh}_xd  {s['n_eff']:>6}{s['n_sig']:>8}"
+                      f"{s['alpha_mean']*100:>9.3f}%{s['alpha_median']*100:>8.3f}%{s['alpha_t']:>8.1f}{s['pos_ratio']:>9.1%}")
+                print(ln)
+                lines.append(ln)
 
     def strat_table(rows, label):
         rs = [r for r in rows if r.get("bh") and r.get("trades", 0) >= 5]
         if not rs:
             return
-        g = np.array([r["gross"] for r in rs]); n_ = np.array([r["net"] for r in rs])
-        b = np.array([r["bh"] for r in rs]); hold = np.array([r["hold"] for r in rs])
+        g = np.array([r["gross"] for r in rs])
+        n_ = np.array([r["net"] for r in rs])
+        b = np.array([r["bh"] for r in rs])
+        hold = np.array([r["hold"] for r in rs])
         win = np.array([r["win"] for r in rs if r.get("win") is not None])
         at = np.array([r["avg_trade"] for r in rs if r.get("avg_trade") is not None])
         yrs = np.array([max((civil_days(r["end"]) - civil_days(r["start"])) / 365.25, 0.5) for r in rs])  # 评审 I-1 修根：历法日，原 /10000 年化偏 5-11%

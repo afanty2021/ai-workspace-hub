@@ -45,7 +45,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_backtest import CACHE, ETF_RE, UNIVERSE_RE  # noqa: E402
-from stage_bottom import civil_days, cross_up, roll_sum, stage_bottom_indicators, stage_bottom_signals  # noqa: E402
+from stage_bottom import civil_days, roll_sum, stage_bottom_indicators, stage_bottom_signals  # noqa: E402
 
 WARMUP = 60
 MIN_BARS = 250          # U1
@@ -59,15 +59,18 @@ F = 1.0 / N_SLOTS
 
 
 def load_full(path: Path):
-    dates, o, h, l, c, amt = [], [], [], [], [], []
+    dates, o, h, lo, c, amt = [], [], [], [], [], []
     with open(path) as fh:
         for line in fh:
             b = json.loads(line)
             dates.append(int(b["date"].replace("-", "")))
-            o.append(b["open"]); h.append(b["high"]); l.append(b["low"]); c.append(b["close"])
+            o.append(b["open"])
+            h.append(b["high"])
+            lo.append(b["low"])
+            c.append(b["close"])
             amt.append(b.get("amount") or 0.0)
     return (np.array(dates, dtype=np.int64), np.array(o, float), np.array(h, float),
-            np.array(l, float), np.array(c, float), np.array(amt, float))
+            np.array(lo, float), np.array(c, float), np.array(amt, float))
 
 
 def board_limit(sym: str) -> float:
@@ -107,6 +110,7 @@ def collect(files, gate_cut=70.0):
         base = sigs["rsi_up20"]
         gate = base & (adx > gate_cut)
         amt20 = roll_sum(amt, 20) / 20.0
+        dciv = civil_days(di)  # 历法日：YYYYMMDD 整数差跨月 71>10 会把隔夜当停牌跳空（Q-20261125-04）
 
         # EW 基准：合格日（U1/U2/U3），复权收益
         ret = np.full(len(c), np.nan)
@@ -124,7 +128,7 @@ def collect(files, gate_cut=70.0):
                 if i < MIN_BARS or i + 21 >= len(c) or np.isnan(amt20[i]):
                     continue
                 e = i + 1
-                if di[e] - di[i] > GAP_DAYS:                      # U4
+                if dciv[e] - dciv[i] > GAP_DAYS:                  # U4（历法日，Q-20261125-04）
                     continue
                 if o[e] < MIN_PRICE or amt20[i] < MIN_AMT:        # U2/U3
                     continue
@@ -169,14 +173,14 @@ def simulate(events, n_slots=N_SLOTS, stop=None, f=None, fill="deepest", seed=7)
     held = set()
     trades, wins = [], []
     expo_sum, expo_n = 0.0, 0
-    day_idx = {d: i for i, d in enumerate(all_days)}
     exits_by_day = defaultdict(list)
 
     for d in all_days:
         # 1) 到期/止损出场（开盘执行）
         for p in exits_by_day.pop(d, []):
             if p in pos:
-                pos.remove(p); held.discard(p["e"]["sym"])
+                pos.remove(p)
+                held.discard(p["e"]["sym"])
                 cash += p["units"] * p["o_out"] * (1 - COST_SELL)
                 r = p["o_out"] / p["o_in"] - 1.0
                 trades.append(r)
@@ -201,7 +205,8 @@ def simulate(events, n_slots=N_SLOTS, stop=None, f=None, fill="deepest", seed=7)
             cash -= units * e["o_in"] * (1 + COST_BUY)
             p = {"e": e, "units": units, "o_in": e["o_in"], "pi": 0,
                  "last_c": e["o_in"], "o_out": e["o_out"], "exit_di": e["x_di"]}
-            pos.append(p); held.add(e["sym"])
+            pos.append(p)
+            held.add(e["sym"])
             exits_by_day[e["x_di"]].append(p)
         invested = sum(p["units"] * p["last_c"] for p in pos)
         nav = cash + invested
