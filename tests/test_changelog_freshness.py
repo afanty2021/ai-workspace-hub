@@ -52,8 +52,10 @@ def _lagged(commits: list[tuple[str, str, list[str]]],
 
 
 def _git(*args: str) -> str:
+    # 提交信息/正文含中文：显式 utf-8，Windows 缺省 cp1252 解码会炸
     return subprocess.run(["git", "-C", str(REPO_ROOT), *args],
-                          capture_output=True, text=True, check=True).stdout
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", check=True).stdout
 
 
 def _repo_state() -> tuple[list[tuple[str, str, list[str]]], str | None]:

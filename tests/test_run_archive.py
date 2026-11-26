@@ -26,6 +26,10 @@ def load_module(name: str, path: Path):
 
 RA = load_module("run_archive", REPO_ROOT / "system" / "scripts" / "run_archive.py")
 
+# 无 fcntl 的平台（Windows 等）按单写者假设降级无锁（run_archive._append docstring、
+# object-model.md「运行账本」段）——并发防护行为在该类平台上按设计不存在，不验。
+_NO_FLOCK = getattr(RA, "fcntl", None) is None
+
 # 固定时刻（+08:00），run_id 可预测且不受测试执行时刻影响
 NOW = datetime(2026, 11, 4, 16, 30, tzinfo=timezone(timedelta(hours=8)))
 LATER = NOW + timedelta(hours=1)  # 24h 内：孤儿闸门不触发
@@ -646,6 +650,8 @@ def test_amend_done_missing_rejects_existing_target(data_root: Path, tmp_path: P
     assert len(flagged) == 1  # 保护没有被摘掉
 
 
+@pytest.mark.skipif("_NO_FLOCK",
+                    reason="无 fcntl 平台降级无锁（单写者假设），并发防护按设计不存在")
 def test_concurrent_open_allocates_unique_run_ids(data_root: Path) -> None:
     """复查评审 I#2：run_id 判重分配在 flock 锁内——同分钟并发 open 不撞号。"""
     from concurrent.futures import ThreadPoolExecutor
@@ -764,6 +770,8 @@ def test_amend_done_same_or_later_anchor_unchanged(data_root: Path, tmp_path: Pa
     assert RA.verify_ledger(data_root, now=LATER)["clean"] is True
 
 
+@pytest.mark.skipif("_NO_FLOCK",
+                    reason="无 fcntl 平台降级无锁（单写者假设），并发防护按设计不存在")
 def test_concurrent_appends_keep_chain_intact(data_root: Path) -> None:
     """flock 并发防护：多线程并发追加 N 行后尾链完整（无丢行 / 无断链），verify 通过。"""
     from concurrent.futures import ThreadPoolExecutor

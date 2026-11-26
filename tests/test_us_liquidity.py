@@ -116,7 +116,7 @@ class UpdateRrpTests(unittest.TestCase):
             self.assertEqual(stats["imported"], 1)
             self.assertEqual(stats["source"], "fred-rrpontsyd")  # 实际源=备份位
             rows = [line for line in
-                    (root / "custom" / "us-rrp-daily.jsonl").read_text().splitlines()
+                    (root / "custom" / "us-rrp-daily.jsonl").read_text(encoding="utf-8").splitlines()
                     if line.strip()]
         self.assertIn('"fred-rrpontsyd"', rows[0])  # 实际源标注=备份位
 
@@ -165,7 +165,7 @@ class UpdateRrpTests(unittest.TestCase):
             uul.main(["--days", "30"])  # 首跑：FRED 降级写入 1 行
             uul.main(["--days", "30"])  # 重跑：全 skip
             rows = [json.loads(line) for line in
-                    (Path(tmp) / ".state" / "run-log.jsonl").read_text().splitlines()
+                    (Path(tmp) / ".state" / "run-log.jsonl").read_text(encoding="utf-8").splitlines()
                     if line.strip()]
         closes = [row for row in rows if row.get("type") == "data-close"]
         self.assertEqual(closes[0]["sources_used"], ["fred-rrpontsyd"])
@@ -203,7 +203,7 @@ class HyOasParseTests(unittest.TestCase):
             first = uul.update_hy_oas(root, days=30)
             second = uul.update_hy_oas(root, days=30)
             rows = [line for line in
-                    (root / "custom" / "us-hy-oas.jsonl").read_text().splitlines()
+                    (root / "custom" / "us-hy-oas.jsonl").read_text(encoding="utf-8").splitlines()
                     if line.strip()]
         self.assertEqual(first["imported"], 1)
         self.assertEqual(second["imported"], 0)   # 同 (series,date) 幂等 skip
@@ -229,7 +229,7 @@ class HyOasParseTests(unittest.TestCase):
             code = uul.main(["--days", "30"])
             self.assertEqual(code, 0)
             rows = [json.loads(line) for line in
-                    (Path(tmp) / ".state" / "run-log.jsonl").read_text().splitlines()
+                    (Path(tmp) / ".state" / "run-log.jsonl").read_text(encoding="utf-8").splitlines()
                     if line.strip()]
         close = [row for row in rows if row.get("type") == "data-close"][-1]
         self.assertEqual([m["item"] for m in close["missing"]], ["us-hy-oas"])

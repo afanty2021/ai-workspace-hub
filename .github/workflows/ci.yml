@@ -8,12 +8,18 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      # 一腿红不取消其余腿（首跑 windows 红曾连带取消 ubuntu 3.10，信号少一条）
+      fail-fast: false
       matrix:
         os: [ubuntu-latest]
         python-version: ["3.10", "3.12"]
         include:
           - os: windows-latest
             python-version: "3.12"
+    # Windows runner 缺省 locale cp1252：脚本 print 中文 / 裸 read_text / git 中文提交
+    # 信息都会 Unicode 炸（首跑 19 红的主因）。UTF-8 模式下 stdio 与 open() 缺省全 UTF-8。
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

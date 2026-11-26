@@ -71,9 +71,9 @@ def _repo_rel(data_root: Path, path: Path) -> str:
     data_root 父目录（仓库根）相对；出界（tmp 冒烟等）用绝对路径。"""
     try:
         rel = Path(path).resolve().relative_to(Path(data_root).resolve().parent)
-        return str(Path(*rel.parts))
+        return rel.as_posix()
     except ValueError:
-        return str(Path(path).resolve())
+        return Path(path).resolve().as_posix()
 
 
 def open_batch(kind: str, data_root: Path) -> str | None:

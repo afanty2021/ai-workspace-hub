@@ -227,9 +227,9 @@ def _ledger_repo_rel(data_root: Path, path: Path) -> str:
     """账本路径归一：data_root 父目录（仓库根）相对；出界（tmp 冒烟等）用绝对路径。"""
     try:
         rel = path.resolve().relative_to(Path(data_root).resolve().parent)
-        return str(Path(*rel.parts))
+        return rel.as_posix()
     except ValueError:
-        return str(path.resolve())
+        return path.resolve().as_posix()
 
 
 def run_persist_hook(market_data: dict[str, Any], data_root: Path | None = None,

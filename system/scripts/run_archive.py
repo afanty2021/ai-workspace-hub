@@ -264,7 +264,8 @@ def _normalize_data_targets(data_root, data_targets) -> list[dict]:
                 src["anchor_date"] = anchor
         else:
             src = dict(item)
-        path = str(src["path"])
+        # 账本 path 一律 posix 归一：Windows 原生 `\` 会让跨机 verify 与断言失配
+        path = Path(src["path"]).as_posix()
         anchor = src.get("anchor_date")
         entry: dict = {"path": path}
         if path.endswith(".jsonl"):
@@ -898,7 +899,7 @@ def build_ledger(data_root, from_day, to_day, hypothesis: str | None = None) -> 
             "id": ev_id, "direction": fm.get("direction", "—"),
             "review_status": fm.get("review_status", "—"),
             "recorded_at": fm.get("recorded_at", "—"),
-            "path": str(path.relative_to(_repo_root(data_root)))})
+            "path": path.relative_to(_repo_root(data_root)).as_posix()})
 
     # -- 判定变化：假设正文巡检行，按文法解析，坏行显式降级
     for hyp in _hypothesis_files(data_root, hypothesis):
