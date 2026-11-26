@@ -1,11 +1,14 @@
 """金牛决策系统全量回测：事件研究 + 交替持仓，日线/周线。
 
 用法：
-    python tools/jinniu/run_backtest.py [--limit N] [--out /tmp/jinniu-out]
+    python tools/jinniu/run_backtest.py [--limit N] [--end 20241231] [--out /tmp/jinniu-out]
 
 数据：data/wyckoff/daily/*.jsonl（威科夫深历史缓存，mootdx 不复权）。
 
 口径要点（对齐 [[baseline-comparison-same-window]] 教训）：
+- 数据窗：缺省=缓存全窗；`--end YYYYMMDD` 显式截尾（含当日），**先截数据再算**——信号、
+  基础率、交替回测、年化全部继承同一窗口。交替持仓随数据窗摆动（-0.05@11-10 / +0.57@11-24 /
+  +0.79@11-25），跨日对比/复现指定窗必须同截尾（Q-20261126-16）。
 - 事件研究与基础率同窗同截尾：同一票内，凡存在 i+1 与 i+1+h 的 i 全部计入基础率，
   信号样本是其子集；两口径共用同一可交易日集合。
 - 前瞻收益基准 = 次日开盘进 / h 期后开盘出，全程开盘口径（信号收盘后可执行）。
@@ -170,6 +173,9 @@ def summarize(name, rows):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--end", type=int, default=0,
+                    help="数据截尾 YYYYMMDD（含当日），0=不截尾用缓存全窗——数据窗显式化，"
+                         "同窗对比/复现指定窗（Q-20261126-16：交替持仓随缓存窗摆动 -0.05@11-10/+0.57@11-24/+0.79@11-25）")
     ap.add_argument("--symbols", default="", help="逗号分隔股票代码（用户池子样本），如 600276.SH,000858.SZ")
     ap.add_argument("--out", default="/tmp/jinniu-out")
     args = ap.parse_args(argv)
@@ -190,6 +196,9 @@ def main(argv=None) -> int:
         except Exception as e:
             print(f"skip {path.name}: {e}", file=sys.stderr)
             continue
+        if args.end:  # 显式截尾先截数据再算：信号/基础率/交替回测/年化自然同窗（Q-20261126-16）
+            keep = di <= args.end
+            di, o, c = di[keep], o[keep], c[keep]
         if len(c) < 120:
             continue
         sym = path.stem

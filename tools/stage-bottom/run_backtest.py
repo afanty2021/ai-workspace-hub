@@ -1,7 +1,7 @@
 """「阶段底部出击」全量回测：事件研究（5 信号臂 × 5 前瞻窗）+ 交替持仓（出击进/KD 死叉出）。
 
 用法：
-    python tools/stage-bottom/run_backtest.py [--limit N] [--symbols 600276.SH,...] [--out /tmp/sb-out]
+    python tools/stage-bottom/run_backtest.py [--limit N] [--symbols 600276.SH,...] [--end 20241231] [--out /tmp/sb-out]
 
 数据：data/wyckoff/daily/*.jsonl（威科夫深历史缓存，mootdx 不复权，7482 票 2012-2026）。
 宇宙边界（评审 M-8 声明）：白名单过滤——个股 60/68.SH、00/30.SZ + ETF 51/56/58.SH、15.SZ；
@@ -9,6 +9,9 @@
 主板 12.5% 送转阈值处理）。与 rps_core.ETF_RE（56 段放宽 SH|SZ）口径不同，跨工具复用勿混。
 
 口径（复用 tools/jinniu 的已验证框架，对齐 [[baseline-comparison-same-window]]）：
+- 数据窗：缺省=缓存全窗；`--end YYYYMMDD` 显式截尾（含当日），**先截数据再算**——信号、
+  基础率、交替回测、年化全部继承同一窗口，跨日对比/复现指定窗必须同截尾（Q-20261126-16，
+  与 jinniu 同款：交替持仓随缓存窗摆动）。
 - 事件研究与基础率同窗同截尾：同一票内凡存在 i+1 与 i+1+h 的 i 全部计入基础率，
   信号样本是其子集；停牌跳空（i→i+1 超 10 日历日）与前瞻窗跨长停牌同规则剔除。
 - 前瞻收益 = O[i+1+h]/O[i+1]-1，全程开盘口径（信号收盘后次日开盘可执行）。
@@ -130,6 +133,9 @@ def summarize(rows):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--end", type=int, default=0,
+                    help="数据截尾 YYYYMMDD（含当日），0=不截尾用缓存全窗——数据窗显式化，"
+                         "同窗对比/复现指定窗（Q-20261126-16，与 jinniu 同款）")
     ap.add_argument("--symbols", default="", help="逗号分隔代码（用户池），如 600276.SH,512000.SH")
     ap.add_argument("--out", default="/tmp/sb-out")
     args = ap.parse_args(argv)
@@ -151,6 +157,9 @@ def main(argv=None) -> int:
         except Exception as e:
             print(f"skip {path.name}: {e}", file=sys.stderr)
             continue
+        if args.end:  # 显式截尾先截数据再算：信号/基础率/交替回测/年化自然同窗（Q-20261126-16）
+            keep = di <= args.end
+            di, o, hgh, low, c = di[keep], o[keep], hgh[keep], low[keep], c[keep]
         if len(c) < 120:
             continue
         sym = path.stem
