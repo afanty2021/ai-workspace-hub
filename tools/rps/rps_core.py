@@ -99,6 +99,19 @@ def close_count(df: pd.DataFrame) -> pd.DataFrame:
     return df.notna().cumsum()
 
 
+def deoverlap_t(ic, step: int = 20) -> float:
+    """重叠窗口序列的去重叠 t：按 step 等距抽相位 0 的子序列，再算均值 / 标准误。
+
+    fwd20 逐日 IC 相邻两日共享 19 天收益，naive t（全序列均值 / 标准误）假设逐日独立，
+    零分布约膨胀 √step 倍；判定用本函数，naive 值只作对照打印（Q-20261125-05）。
+    ic：日频序列（可含 NaN，先剔除）。有效点不足两个或方差为零 → NaN。
+    """
+    a = pd.Series(ic).dropna().to_numpy()[::step]
+    if len(a) < 2 or a.std(ddof=1) == 0:
+        return float("nan")
+    return float(a.mean() / a.std(ddof=1) * np.sqrt(len(a)))
+
+
 def rps_main(periods=(50, 120, 250), cache: Path = None):
     """计算全部 RPS 矩阵；cache 给定则优先读缓存。"""
     if cache and cache.exists():

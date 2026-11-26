@@ -9,7 +9,7 @@
 - 事件研究与基础率同窗同截尾：同一票内，凡存在 i+1 与 i+1+h 的 i 全部计入基础率，
   信号样本是其子集；两口径共用同一可交易日集合。
 - 前瞻收益基准 = 次日开盘进 / h 期后开盘出，全程开盘口径（信号收盘后可执行）。
-- 停牌跳空过滤：i+1 距 i 超 10 个日历日（日线）/ 21 天（周线）的样本剔除（信号组与基础率同规则）。
+- 停牌跳空过滤：i+1 距 i 超 10 个日历日（日线）/ 21 周（周线）的样本剔除（信号组与基础率同规则）。
 - 除权过滤（对照版）：样本窗内出现 |C/C_prev|>12% 的疑似除权跳空则剔除该样本。
 - 交替回测：空仓遇笑脸次日开盘买、持仓遇哭脸次日开盘卖，期末强平；
   成本买 0.075% / 卖 0.125%（佣金万2.5+印花税0.05%+滑点5bp）；同时报零成本档。
@@ -36,7 +36,7 @@ CACHE = REPO / "data" / "wyckoff" / "daily"
 UNIVERSE_RE = re.compile(r"^(?:(?:60|68|51|56|58)\d{4}\.SH|(?:00|30|15)\d{4}\.SZ)$")
 WARMUP = 60          # 每票前 N 根不取信号（次新/数据头）
 GAP_DAYS = 10        # 日线停牌跳空阈值（日历日）
-GAP_WEEKS = 21       # 周线停牌跳空阈值（日历日）
+GAP_WEEKS = 21       # 周线停牌跳空阈值（周；按周序号差比较，前瞻窗上限 h*5+20 同单位）
 DAILY_H = [1, 3, 5, 10, 20]
 WEEKLY_H = [1, 2, 4, 8]
 COST_BUY, COST_SELL = 0.00075, 0.00125
@@ -77,6 +77,8 @@ def resample_weekly(di, o, c):
 
     周键 = (days+4)//7 对齐周一（1970-01-01 是周四）。纯向量化；
     节前提前收周与 W-FRI 等价（周五收盘=周末前最后收盘）。
+
+    返回的周序号不是日期：交给 event_returns 时必须显式传 dnum=周序号（阈值按周给）。
     """
     days = _days_from_civil(di // 10000, di // 100 % 100, di % 100)
     weeks = (days + 3) // 7
@@ -93,10 +95,16 @@ def ex_div_mask(di, c, thresh=0.12):
     return m
 
 
-def event_returns(di, o, sig, h, gap, exdiv=None):
+def event_returns(di, o, sig, h, gap, exdiv=None, dnum=None):
     """信号 i 的前瞻收益 = O[i+1+h]/O[i+1]-1；返回有效样本（索引, 收益）。
 
     同一函数对全量索引调用即得基础率（同窗同截尾）。
+
+    dnum：间隔计量数组（与 di 等长、单调），阈值 gap 与 h*5+20 都按它的单位。缺省 = 把 di
+    当 YYYYMMDD 解析成日历日（日线调用）。周线调用必须显式传周序号（resample_weekly 的
+    返回值）：周序号是连续周计数，可直接当间隔单位、阈值按周给；它不是日期，按 YYYYMMDD
+    解析会在每跨 100 时回跳 68 天，跨界的长停牌窗被漏剔（2026-11-26 max 评审 r5 I-1：
+    2026-11-25 的历法日修根漏掉了周线这一换位形态）。di 含非法年月日时直接抛错，不静默解析。
     """
     n = len(o)
     idx = np.nonzero(sig)[0]
@@ -104,9 +112,13 @@ def event_returns(di, o, sig, h, gap, exdiv=None):
     if not len(idx):
         return idx, np.array([])
     nxt = idx + 1
-    dciv = _days_from_civil(di // 10000, di // 100 % 100, di % 100)  # 历法日：YYYYMMDD 整数差跨月 71>10 会把跨月窗当停牌误删（Q-20261125-04）
-    ok = (dciv[nxt] - dciv[idx]) <= gap  # i→i+1 间隔（停牌复牌跳空剔除）
-    ok &= (dciv[idx + 1 + h] - dciv[nxt]) <= h * 5 + 20  # 前瞻窗跨长期停牌剔除
+    if dnum is None:
+        mo, dy = di // 100 % 100, di % 100
+        if not bool(((mo >= 1) & (mo <= 12) & (dy >= 1) & (dy <= 31)).all()):
+            raise ValueError("event_returns：di 含非 YYYYMMDD 值——周线调用须显式传 dnum=周序号")
+        dnum = _days_from_civil(di // 10000, mo, dy)  # 历法日：YYYYMMDD 整数差跨月 71>10 会把跨月窗当停牌误删（Q-20261125-04）
+    ok = (dnum[nxt] - dnum[idx]) <= gap  # i→i+1 间隔（停牌复牌跳空剔除）
+    ok &= (dnum[idx + 1 + h] - dnum[nxt]) <= h * 5 + 20  # 前瞻窗跨长期停牌剔除
     idx = idx[ok]
     if exdiv is not None:
         cum = np.cumsum(exdiv)
@@ -231,18 +243,19 @@ def main(argv=None) -> int:
 
             def wbase_mean(h, xd=False):
                 if (h, xd) not in wbase_cache:
-                    _, br = event_returns(wd, wo, wbase_all, h, GAP_WEEKS, exdiv=exw if xd else None)
+                    _, br = event_returns(wd, wo, wbase_all, h, GAP_WEEKS, exdiv=exw if xd else None,
+                                          dnum=wd)
                     wbase_cache[(h, xd)] = float(br.mean()) if len(br) else None
                 return wbase_cache[(h, xd)]
 
             for tag, sig in (("buy", wb), ("sell", ws)):
                 for h in WEEKLY_H:
-                    si, sr = event_returns(wd, wo, sig, h, GAP_WEEKS)
+                    si, sr = event_returns(wd, wo, sig, h, GAP_WEEKS, dnum=wd)
                     row[f"w_{tag}_{h}_sig"] = float(sr.mean()) if len(sr) else None
                     row[f"w_{tag}_{h}_n"] = len(sr)
                     row[f"w_{tag}_{h}_base"] = wbase_mean(h)
                 for h in (2, 4):
-                    si, sr = event_returns(wd, wo, sig, h, GAP_WEEKS, exdiv=exw)
+                    si, sr = event_returns(wd, wo, sig, h, GAP_WEEKS, exdiv=exw, dnum=wd)
                     row[f"w_{tag}_{h}_sigxd"] = float(sr.mean()) if len(sr) else None
                     row[f"w_{tag}_{h}_basexd"] = wbase_mean(h, xd=True)
             wspans, whold = run_backtest(wd, wo, wb, ws, warmup=12)
@@ -317,7 +330,9 @@ def main(argv=None) -> int:
         lab = "日线" if freq == "d" else "周线"
         t = (cagr_s - cagr_b).mean() / ((cagr_s - cagr_b).std(ddof=1) / np.sqrt(len(rs)))
         print(f"\n==== {lab} 交替持仓 vs 买入持有（{len(rs)} 票，>=5 笔） ====")
-        for name, arr in (("策略毛收益中位", g), ("策略净收益中位", n_), ("买入持有中位", b),
+        # gross/net/bh 是净值倍数（连乘），减 1 才是收益率——原按 .2% 直接打印会把 ×0.94 显示成 94%
+        # （2026-11-26 max 评审 r5 N-1，卡上「毛收益 vs BH」列同错）
+        for name, arr in (("策略毛收益中位", g - 1.0), ("策略净收益中位", n_ - 1.0), ("买入持有中位", b - 1.0),
                           ("策略年化中位", cagr_s), ("BH年化中位", cagr_b), ("年化差 策略-BH 中位", cagr_s - cagr_b)):
             print(f"  {name:<14} {np.median(arr):>9.2%}   均值 {arr.mean():>9.2%}")
         print(f"  年化差均值 { (cagr_s-cagr_b).mean():.2%}  t={t:.1f}  持仓占比中位 {np.median(hold):.0%}  单笔胜率中位 {np.median(win):.0%}")

@@ -253,7 +253,9 @@ def main(argv=None) -> int:
         cagr_b = np.sign(b) * np.abs(b) ** (1 / yrs) - 1
         t = (cagr_s - cagr_b).mean() / ((cagr_s - cagr_b).std(ddof=1) / np.sqrt(len(rs)))
         print(f"\n==== 交替持仓（出击进/KD死叉出）vs 买入持有：{label}（{len(rs)} 票，>=5 笔） ====")
-        for name, arr in (("毛收益中位", g), ("净收益中位", n_), ("BH中位", b),
+        # gross/net/bh 是净值倍数（连乘），减 1 才是收益率——原按 .2% 直接打印会把 ×1.14 显示成 114%
+        # （2026-11-26 max 评审 r5 N-1，与 tools/jinniu/run_backtest.py 同款）
+        for name, arr in (("毛收益中位", g - 1.0), ("净收益中位", n_ - 1.0), ("BH中位", b - 1.0),
                           ("净年化中位", cagr_s), ("BH年化中位", cagr_b), ("年化差中位", cagr_s - cagr_b)):
             print(f"  {name:<10} {np.median(arr):>9.2%}   均值 {arr.mean():>9.2%}")
         print(f"  年化差均值 {(cagr_s-cagr_b).mean():.2%}  t={t:.1f}  持仓占比中位 {np.median(hold):.0%}  "

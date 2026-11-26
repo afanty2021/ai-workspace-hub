@@ -13,20 +13,21 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from jinniu import icon_signals  # noqa: E402
-from run_backtest import (CACHE, WARMUP, GAP_DAYS, GAP_WEEKS, ex_div_mask,
+from run_backtest import (CACHE, GAP_DAYS, GAP_WEEKS, UNIVERSE_RE, WARMUP, ex_div_mask,
                           event_returns, load_symbol, resample_weekly)
 
 
-def pooled_by_year(di, o, sig, h, gap, exdiv=None, year_arr=None):
+def pooled_by_year(di, o, sig, h, gap, exdiv=None, year_arr=None, dnum=None):
     """返回 {年: (信号收益列表, 当年全部可采样日收益列表)}。
 
     信号年份必须用 event_returns 过滤后的 idx 取（gap/exdiv 会剔除部分信号）。
     year_arr：显式年份数组（周线时传入，di 是周序号无法直接取年）。
+    dnum：间隔计量数组，透传给 event_returns——周线必须传周序号（与 di 相同），见其 docstring。
     """
-    si, sr = event_returns(di, o, sig, h, gap, exdiv=exdiv)
+    si, sr = event_returns(di, o, sig, h, gap, exdiv=exdiv, dnum=dnum)
     years_sig = year_arr[si] if year_arr is not None else di[si] // 10000
     n_all = np.ones(len(di), dtype=bool)
-    ai, ar = event_returns(di, o, n_all, h, gap, exdiv=exdiv)
+    ai, ar = event_returns(di, o, n_all, h, gap, exdiv=exdiv, dnum=dnum)
     years_all = year_arr[ai] if year_arr is not None else di[ai] // 10000
     out = defaultdict(lambda: ([], []))
     for k in range(len(si)):
@@ -39,7 +40,9 @@ def pooled_by_year(di, o, sig, h, gap, exdiv=None, year_arr=None):
 def main() -> int:
     agg_d = defaultdict(lambda: [[], []])   # 年 -> [信号收益们, 基础收益们]
     agg_w = defaultdict(lambda: [[], []])
-    files = sorted(CACHE.glob("*.jsonl"))
+    # 宇宙白名单，与 run_backtest 同口径（2026-11-26 max 评审 r5 M-8：原裸 glob 把 LOF/基金/
+    # 跨资产序列/板块指数共 367 个非标的文件混进分年度表）
+    files = sorted(p for p in CACHE.glob("*.jsonl") if UNIVERSE_RE.match(p.stem))
     for k, path in enumerate(files):
         try:
             di, o, c = load_symbol(path)
@@ -60,7 +63,8 @@ def main() -> int:
             exw = ex_div_mask(wd, wc)
             # 周序号 → 周一年份：days = week*7 - 3（resample 对齐），再转公历年
             wyear = ((wd * 7 - 3).astype("datetime64[D]").astype("datetime64[Y]").astype(int) + 1970)
-            for y, (ss, bb) in pooled_by_year(wd, wo, wb, 4, GAP_WEEKS, exdiv=exw, year_arr=wyear).items():
+            for y, (ss, bb) in pooled_by_year(wd, wo, wb, 4, GAP_WEEKS, exdiv=exw, year_arr=wyear,
+                                              dnum=wd).items():
                 agg_w[y][0].extend(ss)
                 agg_w[y][1].extend(bb)
         if (k + 1) % 1000 == 0:
