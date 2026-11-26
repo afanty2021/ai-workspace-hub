@@ -67,6 +67,10 @@ def test_main_empty_default_range_warns_and_exits_nonzero(tmp_path, monkeypatch,
     assert cch.main(["--repo", str(tmp_path), "--base", "HEAD~3"]) == 0
     assert "没有提交" in capsys.readouterr().out
 
+    # 复查 r2（席 A M-2）：`--base ""` 空串归一为未设，不得绕过缺省空区间守卫。
+    assert cch.main(["--repo", str(tmp_path), "--base", ""]) == 2
+    assert "缺省区间" in capsys.readouterr().out
+
 
 def test_check_commit_distinguishes_green_and_red_commits_in_a_real_repo(tmp_path):
     repo = tmp_path / "repo"

@@ -78,3 +78,18 @@ def test_deoverlap_t_drops_nan_before_subsampling():
     expected_sub = ic.dropna().to_numpy()[::1]
     expected = expected_sub.mean() / expected_sub.std(ddof=1) * np.sqrt(len(expected_sub))
     assert t == pytest.approx(expected, rel=1e-12)
+
+
+def test_deoverlap_t_subsampling_order_is_drop_first():
+    # 复查 r2 补锁（2026-11-26 席 A M-3）：step=1 时「先剔后抽」与「先抽后剔」逐位相同，
+    # 顺序型变异（[::step] 再 dropna）只有 step>1 才与正确值分叉——故本锁抽 step=2。
+    ic = pd.Series([0.1, np.nan, 0.3, np.nan, 0.9, 0.2, np.nan, 0.5, 0.4, np.nan] * 5)
+    t = deoverlap_t(ic, 2)
+    expected_sub = ic.dropna().to_numpy()[::2]
+    expected = expected_sub.mean() / expected_sub.std(ddof=1) * np.sqrt(len(expected_sub))
+    assert t == pytest.approx(expected, rel=1e-12)
+    # 对照自检：sample-first（变异方向）必须给出不同值——保证夹具对顺序变异有区分度
+    wrong_sub = ic.to_numpy()[::2]
+    wrong_sub = wrong_sub[~np.isnan(wrong_sub)]
+    wrong = wrong_sub.mean() / wrong_sub.std(ddof=1) * np.sqrt(len(wrong_sub))
+    assert wrong != pytest.approx(expected, rel=1e-6)

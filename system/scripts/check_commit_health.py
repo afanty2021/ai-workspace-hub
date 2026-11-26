@@ -116,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="显式放行空区间（缺省区间为空通常=已全部推送，确属无需检查时用）")
     ap.add_argument("--repo", default=None, type=Path, help="仓库路径，缺省=当前目录所在仓库")
     args = ap.parse_args(argv)
+    # 复查 r2（2026-11-26 席 A M-2）：`--base ""` 空串此前走 default_base 解析出缺省基点、
+    # 但下方 args.base is None 判不住空串，空区间绕过 exit-2 守卫——空串归一为未设。
+    args.base = args.base or None
     try:
         repo = (args.repo or Path(_git(Path.cwd(), "rev-parse", "--show-toplevel"))).resolve()
     except subprocess.CalledProcessError:
