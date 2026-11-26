@@ -76,20 +76,21 @@ TIERS = ("base", "stress")
 # ---- 判据阈值（固定种子回归基线；非预注册、非校准）----
 # 来源：市场定版后在本市场实测，留余量取整；各行注释的「出厂实测」即标定依据。
 # 没有独立标定集——改生成器参数或换种子后必须重测重标（r4 I-2）。
+# 2026-11-26：注释里的出厂实测已按停牌过滤 / 预热修根后的读数更新（r5 M-1），阈值本身未动。
 EVENT_H = 5                      # 事件研究主判定前瞻窗（反弹注入 10 日，h=5 落在注入段内）
 EVENT_H_REPORT = (1, 3, 10, 20)  # 其余窗只报告不判定
-EDGE_ALPHA_MIN = 0.007           # 埋边票 chuji 事件 alpha 下限（出厂实测 +1.441%，约取半）
-EDGE_T_MIN = 5.0                 # 埋边票横截面 t 下限（出厂实测 8.22，约取六成；12 只反弹票为独立单元）
+EDGE_ALPHA_MIN = 0.007           # 埋边票 chuji 事件 alpha 下限（出厂实测 +1.44%，约取半）
+EDGE_T_MIN = 5.0                 # 埋边票横截面 t 下限（出厂实测 10.7，约取一半；12 只反弹票为独立单元）
 EDGE_POS_MIN = 0.9               # 埋边票 alpha>0 占比下限（出厂实测 100%）
-EDGE_NSIG_MIN = 300              # 埋边票合计信号数下限（出厂实测 737，约取四成）
+EDGE_NSIG_MIN = 300              # 埋边票合计信号数下限（出厂实测 973，约取三成）
 NOISE_NEFF_MIN = 10              # 对照臂有效票数下限（不足=无法判定，不得算干净）
-NOISE_ALPHA_MAX = 0.005          # 对照票 |alpha| 上限（出厂实测 chuji +0.029% / jinniu +0.032%）
-NOISE_T_MAX = 2.0                # 对照票 |t| 上限（出厂实测 0.31 / 0.69）——2σ 判据，名义误报约 5%/臂
-RPS_SPREAD_MIN = 0.05            # 埋边市场 RPS250 十分位 D9−D0（fwd20）价差下限（出厂实测 +16.47pp，约取 30%）
-RPS_IC_MEAN_MIN = 0.03           # 埋边市场 RankIC 日均下限（出厂实测 +12.99%，约取 23%）
-RPS_IC_T_MIN = 3.5               # 埋边市场去重叠 t（相位 0）下限（出厂实测 8.65，全相位 7.15~9.03，约取四成）
-RPS_NOISE_SPREAD_MAX = 0.01      # 对照市场 |D9−D0| 上限（出厂实测 +0.32pp）
-RPS_NOISE_T_MAX = 2.0            # 对照市场 |去重叠 t| 上限（出厂实测 0.02）——2σ 判据
+NOISE_ALPHA_MAX = 0.005          # 对照票 |alpha| 上限（出厂实测 chuji +0.03% / jinniu -0.02%）
+NOISE_T_MAX = 2.0                # 对照票 |t| 上限（出厂实测 |t| 0.4 / 0.4）——2σ 判据，名义误报约 5%/臂
+RPS_SPREAD_MIN = 0.05            # 埋边市场 RPS250 十分位 D9−D0（fwd20）价差下限（出厂实测 +15.83pp，约取三成）
+RPS_IC_MEAN_MIN = 0.03           # 埋边市场 RankIC 日均下限（出厂实测 +12.47%，约取四分之一）
+RPS_IC_T_MIN = 3.5               # 埋边市场去重叠 t（相位 0）下限（出厂实测 6.88，全相位 6.86~8.42，约取一半）
+RPS_NOISE_SPREAD_MAX = 0.01      # 对照市场 |D9−D0| 上限（出厂实测 +0.11pp）
+RPS_NOISE_T_MAX = 2.0            # 对照市场 |去重叠 t| 上限（出厂实测 -0.67）——2σ 判据
 RPS_MIN_WINDOWS = 20             # 去重叠窗口数下限（出厂实测 75；不足=无法判定）
 RPS_NAIVE_T_FLAG = 2.0           # 对照市场出厂 naive t 口径的「过松」报告线（只报告）
 RPS_PERIODS = (50, 120, 250)
@@ -559,12 +560,24 @@ def real_bundle_overlap(bundle_path: Path) -> dict:
 
 # ---------------------------------------------------------------- 多种子校准（Q-20261125-02）
 
-# 校准用种子偏移：全部从 1 起数、各管道各侧互不重叠——0 号市场是阈值标定用的，不算
-# 独立抽样（标定集上测误报率是循环论证，r4 I-2 教训的正面应用）。
-CALIB_NOISE_BASE = 1000        # 对照侧第 k 个市场的种子偏移 = CALIB_NOISE_BASE * k
-CALIB_EDGE_BASE = 100000       # 埋边扫档第 j 个种子的偏移 = CALIB_EDGE_BASE + CALIB_NOISE_BASE * j
-CALIB_RPS_NOISE_BASE = 200000  # rps 对照侧偏移基数（与事件族的噪声市场抽样独立）
-CALIB_RPS_EDGE_BASE = 300000
+# 校准用种子方案（r5 I-7 修根，2026-11-26 用户追认后拉开并全量重跑）：0 号市场是阈值标定用的，
+# 不算独立抽样（标定集上测误报率是循环论证，r4 I-2 教训的正面应用）。
+# 旧方案（三族种子基数 1000/2000/4000、市场偏移 1000·k）下对照市场在 lag 1~3 上互相共享 12 条
+# 逐字节相同序列（EDGE_MOM(k)≡EDGE_BOUNCE(k+1)、NOISE(k)≡EDGE_MOM(k+2)、NOISE(k)≡EDGE_BOUNCE(k+3)），
+# 标定 0 号与对照 1 号也共享——「50 个独立对照市场」不成立，rps 全横截面统计受影响。
+# 新方案两道防线：①算术上拉开——同族相邻市场步长 CALIB_STRIDE（100000），四族基数两两远离；
+# 单市场内部种子 = SEED_BOUNCE/MOM/NOISE + i（偏移 1000..4034），族间基数尾差被步长推到
+# lag≥100 才可能重合（实测探针：--n-markets>100 时 rps 对照#101 与 rps 埋边#1 撞），故支持域
+# n_markets ≤ 100（默认 50）；②机械兜底——calibrate 入口 _calib_seed_uniqueness 按本次实跑
+# 参数把全部计划市场（含出厂 0 号）的每条序列种子枚举出来对撞，撞种子拒绝开跑——支持域
+# 不是靠注释维持的，超界参数在这里红。
+# 出厂市场 seed_shift=0 的种子算术逐字节不变，标定与阈值不受影响。
+CALIB_STRIDE = 100000              # 同族相邻对照市场的种子步长：shift = CALIB_STRIDE·k（k≥1；0 号=出厂标定市场）
+CALIB_EVENT_EDGE_BASE = 70000037   # event 埋边族基数（尾数 > 种子跨度 35）
+CALIB_SR_EDGE_BASE = 60000041   # SR 埋边族基数（不再与 event 埋边共用一族）
+CALIB_RPS_NOISE_BASE = 80000043  # rps 对照族基数
+CALIB_RPS_EDGE_BASE = 90000047  # rps 埋边族基数
+
 BOUNCE_LEVELS = (0.002, 0.004, 0.006, 0.008, 0.010)   # 反弹注入/日；0.010=出厂
 MOM_COEF_LEVELS = (0.05, 0.10, 0.15, 0.20, 0.25)      # 动量系数；rps 出厂 0.25 / SR 出厂 0.20
 
@@ -574,11 +587,47 @@ def _edge_alpha_mean(stats: list[dict]) -> float:
     return float(np.mean(vals)) if vals else float("nan")
 
 
+def _calib_seed_uniqueness(n_markets: int, edge_seeds: int) -> None:
+    """calibrate 开跑前对全部计划市场的种子做机械枚举断言（r5 I-7 修根兜底）。
+
+    对照市场 k=1..n、三族埋边 j=1..edge_seeds、外加出厂 0 号市场（标定集）：任何一条序列的
+    种子只允许出现一次——出厂与对照/埋边零共享，各族之间零共享。同族埋边的同 j 种子跨边强度
+    档复用是设计内的（每档换注入强度，不换种子），故埋边每 j 只枚举一次。撞种子说明族基数
+    或种子算术被动过，直接拒绝开跑。"""
+    seen: dict[int, str] = {}
+
+    def take(seeds, tag: str) -> None:
+        for s in seeds:
+            if s in seen:
+                if seen[s] == tag:
+                    continue  # 同一市场族的重复枚举——出厂 event 与出厂 noise 同 eps 种子是设计内配对
+                raise SystemExit(f"[calibrate] 种子撞车：{tag} 的 seed={s} 已属 {seen[s]}"
+                                 "——族基数拉开失效，拒绝开跑")
+            seen[s] = tag
+
+    take((t["seed"] for t in synth.event_market_tickers().values()), "出厂 event/noise(配对)")
+    take((t["seed"] for t in synth.noise_market_tickers().values()), "出厂 event/noise(配对)")
+    take(synth.sr_market_seeds(), "出厂 sr")
+    for k in range(1, n_markets + 1):
+        take((t["seed"] for t in synth.noise_market_tickers(seed_shift=CALIB_STRIDE * k).values()),
+             f"event/noise#{k}")
+        take(synth.sr_market_seeds(seed_shift=CALIB_STRIDE * k), f"sr/noise#{k}")
+        take((t["seed"] for t in synth.noise_market_tickers(
+            seed_shift=CALIB_RPS_NOISE_BASE + CALIB_STRIDE * k).values()), f"rps/noise#{k}")
+    for j in range(1, edge_seeds + 1):
+        take((t["seed"] for t in synth.event_market_tickers(
+            seed_shift=CALIB_EVENT_EDGE_BASE + CALIB_STRIDE * j).values()), f"event/edge#{j}")
+        take(synth.sr_market_seeds(seed_shift=CALIB_SR_EDGE_BASE + CALIB_STRIDE * j), f"sr/edge#{j}")
+        take((t["seed"] for t in synth.event_market_tickers(
+            seed_shift=CALIB_RPS_EDGE_BASE + CALIB_STRIDE * j).values()), f"rps/edge#{j}")
+
+
 def calibrate_event(cache_root: Path, *, n_markets: int, edge_seeds: int,
                     verbose: bool = False) -> dict:
-    """事件族校准。对照侧：n_markets 个独立噪声市场（偏移 1000·k，k≥1）跑同一套管道，
-    按出厂对照判据（|alpha|<0.5% 且 |t|<2，chuji 与 jinniu buy 两臂）统计实测误报率；
-    接线核对逐市场照跑，读错臂直接抛错。埋边侧：bounce 从 0.2%/日扫到出厂 1%/日，
+    """事件族校准。对照侧：n_markets 个对照噪声市场（偏移 CALIB_STRIDE·k，k≥1；与标定 0 号及各族之间种子零共享，
+    _calib_seed_uniqueness 机械断言兜底）跑同一套管道，按出厂对照判据（|alpha|<0.5% 且 |t|<2，chuji 与
+    jinniu buy 两臂）统计实测误报率；样本不足的市场不计入干净也不计入误报，分母是充足市场数
+    （r5 I-8）。接线核对逐市场照跑，读错臂直接抛错。埋边侧：bounce 从 0.2%/日扫到出厂 1%/日，
     每档 edge_seeds 个独立种子，检出=四条阳性判据全过（_event_edge_pass），逐条判据
     通过率一并报——看哪条判据在弱边上先掉。"""
     noise_syms, edge_syms = set(synth.NOISE), set(synth.EDGE_BOUNCE)
@@ -586,10 +635,11 @@ def calibrate_event(cache_root: Path, *, n_markets: int, edge_seeds: int,
     out: dict = {"n_markets": n_markets, "edge_seeds": edge_seeds}
     clean_c: list[bool] = []
     clean_j: list[bool] = []
-    insuff = 0
+    suf_cs: list[bool] = []
+    suf_js: list[bool] = []
     for k in range(1, n_markets + 1):
         print(f"[calibrate] event 对照市场 {k}/{n_markets}", file=sys.stderr)
-        synth.write_cache(cache_root, synth.noise_market_tickers(seed_shift=CALIB_NOISE_BASE * k))
+        synth.write_cache(cache_root, synth.noise_market_tickers(seed_shift=CALIB_STRIDE * k))
         sb, jn, sb_rows, jn_rows = _run_event_pipes(cache_root, verbose=verbose)
         _jinniu_wiring_ok(jn, cache_root, [r for r in jn_rows if r["sym"] in judged])
         chuji = _stat(sb.summarize, _alpha_rows(
@@ -599,12 +649,19 @@ def calibrate_event(cache_root: Path, *, n_markets: int, edge_seeds: int,
                                    "d_buy", EVENT_H))
         ok_c, suf_c = _noise_arm_state(chuji)
         ok_j, suf_j = _noise_arm_state(jinniu)
-        clean_c.append(ok_c)
-        clean_j.append(ok_j)
-        insuff += int(not (suf_c and suf_j))
-    out["noise"] = {"markets": n_markets, "chuji_clean": sum(clean_c),
-                    "jinniu_clean": sum(clean_j),
-                    "both_clean": int(np.logical_and(clean_c, clean_j).sum()),
+        # 样本不足的臂不计入干净（r5 I-8：原实现把「不足」返回的 True 直接当干净计数，低估误报率）
+        clean_c.append(bool(ok_c and suf_c))
+        clean_j.append(bool(ok_j and suf_j))
+        suf_cs.append(bool(suf_c))
+        suf_js.append(bool(suf_j))
+    insuff = int(sum(not (a and b) for a, b in zip(suf_cs, suf_js)))
+    both_suf = int(sum(a and b for a, b in zip(suf_cs, suf_js)))
+    out["noise"] = {"markets": n_markets,
+                    "chuji_sufficient": int(sum(suf_cs)), "jinniu_sufficient": int(sum(suf_js)),
+                    "both_sufficient": both_suf,
+                    "chuji_clean": int(sum(clean_c)),
+                    "jinniu_clean": int(sum(clean_j)),
+                    "both_clean": int(sum(a and b for a, b in zip(clean_c, clean_j))),
                     "insufficient": insuff}
     sweeps = []
     for b in BOUNCE_LEVELS:
@@ -612,7 +669,7 @@ def calibrate_event(cache_root: Path, *, n_markets: int, edge_seeds: int,
         crit = {"alpha": 0, "t": 0, "pos": 0, "nsig": 0}
         for j in range(1, edge_seeds + 1):
             print(f"[calibrate] event 埋边 bounce={b} 种子 {j}/{edge_seeds}", file=sys.stderr)
-            tickers = synth.event_market_tickers(seed_shift=CALIB_EDGE_BASE + CALIB_NOISE_BASE * j,
+            tickers = synth.event_market_tickers(seed_shift=CALIB_EVENT_EDGE_BASE + CALIB_STRIDE * j,
                                                  bounce=b)
             synth.write_cache(cache_root, tickers)
             sb, jn, sb_rows, jn_rows = _run_event_pipes(cache_root, verbose=verbose)
@@ -631,7 +688,8 @@ def calibrate_event(cache_root: Path, *, n_markets: int, edge_seeds: int,
 
 
 def calibrate_rps(cache_root: Path, *, n_markets: int, edge_seeds: int) -> dict:
-    """rps 校准。对照侧：独立噪声市场（偏移与事件族不重叠）上两条出厂判据
+    """rps 校准。对照侧：对照噪声市场（偏移 CALIB_RPS_NOISE_BASE + CALIB_STRIDE·k；各族基数拉开、种子零共享——r5 I-7 修根，
+    _calib_seed_uniqueness 断言兜底）上两条出厂判据
     （|D9−D0|≤1pp、|去重叠 t|≤2）的实测触发率；出厂 validity.py 臂 C 的 naive 重叠 t
     同款触发率一并报——膨胀是公式性质，纯噪声市场上它就该大面积过 2（√20 膨胀的
     实证，Q-20261125-05）。埋边侧：动量系数 0.05→出厂 0.25 扫档，检出=三条阳性判据
@@ -641,7 +699,7 @@ def calibrate_rps(cache_root: Path, *, n_markets: int, edge_seeds: int) -> dict:
     for k in range(1, n_markets + 1):
         print(f"[calibrate] rps 对照市场 {k}/{n_markets}", file=sys.stderr)
         d = synth.write_cache(cache_root, synth.noise_market_tickers(
-            seed_shift=CALIB_RPS_NOISE_BASE + CALIB_NOISE_BASE * k))
+            seed_shift=CALIB_RPS_NOISE_BASE + CALIB_STRIDE * k))
         a = _rps_arms(_load_rps_bundle(d))["fwd20"]
         spreads.append(a["d9_d0_spread"])
         t_deo.append(a["ic_t"])
@@ -663,7 +721,7 @@ def calibrate_rps(cache_root: Path, *, n_markets: int, edge_seeds: int) -> dict:
         for j in range(1, edge_seeds + 1):
             print(f"[calibrate] rps 埋边 mom_coef={m} 种子 {j}/{edge_seeds}", file=sys.stderr)
             d = synth.write_cache(cache_root, synth.event_market_tickers(
-                seed_shift=CALIB_RPS_EDGE_BASE + CALIB_NOISE_BASE * j, mom_coef=m))
+                seed_shift=CALIB_RPS_EDGE_BASE + CALIB_STRIDE * j, mom_coef=m))
             a = _rps_arms(_load_rps_bundle(d))["fwd20"]
             stats.append(a)
             crit["spread"] += _gt(a["d9_d0_spread"], RPS_SPREAD_MIN)
@@ -686,7 +744,7 @@ def calibrate_sr(sr_root: Path, *, n_markets: int, edge_seeds: int, n_perm: int)
     for k in range(1, n_markets + 1):
         print(f"[calibrate] sr 对照宇宙 {k}/{n_markets}", file=sys.stderr)
         root = synth.write_sr_market(sr_root / "calib-noise", noise_only=True,
-                                     seed_shift=CALIB_NOISE_BASE * k)
+                                     seed_shift=CALIB_STRIDE * k)
         wf = build_weekly_frame(root, _sr_spec(), bench_symbol=synth.SR_BENCH,
                                 pick_bypass_single=True)
         rows, _ = _sr_matrix(wf, n_perm=n_perm)
@@ -702,7 +760,7 @@ def calibrate_sr(sr_root: Path, *, n_markets: int, edge_seeds: int, n_perm: int)
         for j in range(1, edge_seeds + 1):
             print(f"[calibrate] sr 埋边 mom_coef={m} 种子 {j}/{edge_seeds}", file=sys.stderr)
             root = synth.write_sr_market(sr_root / "calib-edge", mom_coef=m,
-                                         seed_shift=CALIB_EDGE_BASE + CALIB_NOISE_BASE * j)
+                                         seed_shift=CALIB_SR_EDGE_BASE + CALIB_STRIDE * j)
             wf = build_weekly_frame(root, _sr_spec(), bench_symbol=synth.SR_BENCH,
                                     pick_bypass_single=True)
             rows, _ = _sr_matrix(wf, n_perm=n_perm)
@@ -719,9 +777,12 @@ def calibrate(cache_root: Path, sr_root: Path, *, n_markets: int = 50, edge_seed
               n_perm: int = 1000, targets=("event", "sr", "rps"),
               verbose: bool = False) -> dict:
     """多种子校准总入口。测量工具不是闸门：结果供阈值重标与「负结果可信度」评估参考，
-    exit code 恒 0。全量约半小时（SR 的置换检验占大头，可降 --n-perm；SR 判定阈值
-    α=0.1，n_perm=200 时 p 值分辨率 1/201 仍够用）。"""
+    exit code 恒 0。全量约 20 分钟（SR 的置换检验占大头，可降 --n-perm；SR 判定阈值
+    α=0.1，n_perm=200 时 p 值分辨率 1/201 仍够用）。targets 为空时 argparse 直接报错，
+    不静默空跑（r5 I-8）。开跑前 _calib_seed_uniqueness 对全部计划市场逐种子断言
+    （撞种子拒绝开跑——r5 I-7 修根的机械兜底）。"""
     out: dict = {}
+    _calib_seed_uniqueness(n_markets, edge_seeds)
     if "event" in targets:
         out["event"] = calibrate_event(cache_root, n_markets=n_markets,
                                        edge_seeds=edge_seeds, verbose=verbose)
@@ -733,16 +794,32 @@ def calibrate(cache_root: Path, sr_root: Path, *, n_markets: int = 50, edge_seed
     return out
 
 
+def _nan_to_none(obj):
+    """落盘前把 NaN / ±Inf 换成 None：json.dumps 默认会写出非标准的 NaN、Infinity 字面量（r5 I-8）。"""
+    if isinstance(obj, dict):
+        return {str(k): _nan_to_none(x) for k, x in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_nan_to_none(x) for x in obj]
+    try:
+        f = float(obj)
+    except (TypeError, ValueError):
+        return obj
+    return None if (f != f or f in (float("inf"), float("-inf"))) else obj
+
+
 def render_calibrate(v: dict) -> str:
     lines = []
     if "event" in v:
         e, nz = v["event"], v["event"]["noise"]
         n = nz["markets"]
-        lines.append(f"== calibrate[event] 对照侧 {n} 个独立噪声市场"
-                     f"（种子偏移 {CALIB_NOISE_BASE}·k，k≥1，不含阈值标定用的 0 号）")
-        lines.append(f"  误报率  chuji 臂 {n - nz['chuji_clean']}/{n}  jinniu 臂 "
-                     f"{n - nz['jinniu_clean']}/{n}  双臂全干净 {nz['both_clean']}/{n}"
-                     f"  样本不足 {nz['insufficient']}（出厂 2σ 判据名义 ≈5%/臂）")
+        # 旧 JSON（2026-11-25 首测，insufficient=0）没有 *_sufficient 字段：分母退回市场数
+        sc, sj, sb = (nz.get(k, n) for k in ("chuji_sufficient", "jinniu_sufficient", "both_sufficient"))
+        lines.append(f"== calibrate[event] 对照侧 {n} 个对照噪声市场"
+                     f"（种子偏移 {CALIB_STRIDE}·k，k≥1，不含阈值标定用的 0 号；对照/埋边/各族种子零共享，"
+                     f"_calib_seed_uniqueness 机械断言）")
+        lines.append(f"  误报率  chuji 臂 {sc - nz['chuji_clean']}/{sc}  jinniu 臂 "
+                     f"{sj - nz['jinniu_clean']}/{sj}  双臂全干净 {nz['both_clean']}/{sb}"
+                     f"  样本不足 {nz['insufficient']}（分母=样本充足的市场数；出厂 2σ 判据名义 ≈5%/臂）")
         for s in e["edge"]:
             lv = f"{s['level'] * 100:.1f}%" + ("（出厂）" if s["level"] == synth.BOUNCE else "")
             c = s["crit"]
@@ -763,8 +840,9 @@ def render_calibrate(v: dict) -> str:
     if "rps" in v:
         r, nz = v["rps"], v["rps"]["noise"]
         n = nz["markets"]
-        lines.append(f"== calibrate[rps] 对照侧 {n} 个独立噪声市场"
-                     f"（偏移 {CALIB_RPS_NOISE_BASE}+{CALIB_NOISE_BASE}·k）")
+        lines.append(f"== calibrate[rps] 对照侧 {n} 个对照噪声市场"
+                     f"（偏移 {CALIB_RPS_NOISE_BASE}+{CALIB_STRIDE}·k；各族基数拉开、种子零共享——r5 I-7 修根，"
+                     f"_calib_seed_uniqueness 断言）")
         lines.append(f"  误报率  |D9−D0|>1pp: {nz['spread_fp']}/{n}  |去重叠t|>2: "
                      f"{nz['t_fp']}/{n}（名义 ≈5%）  双判据全干净 {nz['both_clean']}/{n}")
         lines.append(f"  [口径对照] naive 重叠 t（出厂 validity.py 臂 C 口径）|t|>2: "
@@ -873,14 +951,17 @@ def main(argv: list[str] | None = None) -> int:
         bad = sorted(set(targets) - {"event", "sr", "rps"})
         if bad:
             ap.error(f"--calib-targets 未知管道：{bad}（可选 event/sr/rps）")
+        if not targets:
+            ap.error("--calib-targets 不能为空（可选 event/sr/rps）")
         v = calibrate(args.cache_root, args.sr_root, n_markets=args.n_markets,
                       edge_seeds=args.edge_seeds, n_perm=args.n_perm, targets=targets,
                       verbose=args.verbose)
         print(render_calibrate(v))
         if args.out_json:
             args.out_json.parent.mkdir(parents=True, exist_ok=True)
-            args.out_json.write_text(json.dumps(v, ensure_ascii=False, indent=1, default=float),
-                                     encoding="utf-8")
+            args.out_json.write_text(
+                json.dumps(_nan_to_none(v), ensure_ascii=False, indent=1, default=float),
+                encoding="utf-8")
         return 0
     runs = {"sr": lambda: check_sr(args.sr_root, n_perm=args.n_perm),
             "event": lambda: check_event(args.cache_root, verbose=args.verbose),

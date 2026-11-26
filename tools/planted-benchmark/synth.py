@@ -286,6 +286,12 @@ def _etf_rows_from_index(idx_rows: list[dict], seed: int):
     return out
 
 
+def sr_market_seeds(*, seed_shift: int = 0) -> set[int]:
+    """SR 宇宙种子枚举：与 write_sr_market 的种子算术逐字对应（改动前者必须同步这里，
+    两边漂移会让 run_check._calib_seed_uniqueness 的断言失真）。"""
+    return {SR_SEED + i + seed_shift for i in range(SR_N)} | {SR_BENCH_SEED + seed_shift}
+
+
 def write_sr_market(root: Path, *, n_bars: int = N_SR_WEEKS_BARS,
                     noise_only: bool = False, mom_coef: float | None = None,
                     seed_shift: int = 0) -> Path:

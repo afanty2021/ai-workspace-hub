@@ -520,10 +520,25 @@ def test_cli_event_exit_code_follows_verdict(tmp_path, capsys):
     assert run_check.main(["event", "--cache-root", str(tmp_path / "a")]) == 0
     assert "planted[event] → 量具正常" in capsys.readouterr().out
     # Q-20261125-04 修根后出厂管道无契约偏差注记（保留率 100%），--strict 通过；
-    # 注记触发路径由 test_event_*_retention 用例守（合成带缺口市场仍能把 --strict 打红）
+    # 注记触发路径（把保留率/预热契约伪造出偏差 → ⚠ + --strict 返回 1）由
+    # tests/test_planted_calibrate.py 的 test_event_contract_note_* / test_rps_warmup_contract_note_* 守
+    # （r5 I-5：原注释引用的 test_event_*_retention 用例并不存在）
     assert run_check.main(["event", "--cache-root", str(tmp_path / "a"),
                            "--strict"]) == 0
     assert "⚠" not in capsys.readouterr().out
+
+
+def test_factory_market_has_no_contract_notes_and_full_retention(event_baseline, rps_baseline):
+    """出厂市场必须是「零契约偏差」：Q-20261125-03/04/05 三处修根的回归哨兵（r5 I-5）。
+    此前 tests/ 没有任何文件引用 rps_core / validity / sleeve，把修法改回全量照样绿。
+    event_returns 误删回归 → 保留率 <1 → notes 非空；rps 预热门槛回到 ret 帧计数 →
+    first_bar 变 300/370/500 → warmup_contract.ok=False → notes 非空。"""
+    assert event_baseline["notes"] == []
+    for per_h in event_baseline["retention"].values():
+        assert per_h[run_check.EVENT_H] == pytest.approx(1.0)
+    assert rps_baseline["notes"] == []
+    assert rps_baseline["warmup_contract"]["ok"] is True
+    assert rps_baseline["warmup_contract"]["first_bar"] == {"rps50": 250, "rps120": 250, "rps250": 251}
 
 
 def test_load_module_cached_no_syspath_growth():
