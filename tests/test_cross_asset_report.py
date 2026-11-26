@@ -18,6 +18,7 @@ from datetime import date
 
 from generate_daily_report import (
     CROSS_ASSET_NOTE,
+    CROSS_ASSET_ORDER,
     liquidity_window_note,
     load_rolling_stats,
     render_cross_asset_table,
@@ -67,6 +68,24 @@ class CrossAssetTableTests(unittest.TestCase):
         text = render_cross_asset_table(_QUOTES[:1])  # 只有 CN 个股
         self.assertIn("未取得", text)
         self.assertIn("query_market.py liquidity", text)
+
+    def test_cross_asset_order_slots_crude_between_copper_and_hstech(self) -> None:
+        # Q-20261126-11：WTI/布油入仪表表，铜系之后、HSTECH 之前。
+        self.assertLess(CROSS_ASSET_ORDER.index("HG00Y"), CROSS_ASSET_ORDER.index("CL=F"))
+        self.assertLess(CROSS_ASSET_ORDER.index("CL=F"), CROSS_ASSET_ORDER.index("BZ=F"))
+        self.assertLess(CROSS_ASSET_ORDER.index("BZ=F"), CROSS_ASSET_ORDER.index("HSTECH"))
+
+    def test_crude_rows_render_with_caliber_note(self) -> None:
+        quotes = list(_QUOTES) + [
+            {"ticker": "CL=F", "name": "WTI原油", "market": "CMDTY",
+             "price": 84.039, "changesPercentage": 0.43},
+            {"ticker": "BZ=F", "name": "布伦特原油", "market": "CMDTY",
+             "price": 90.828, "changesPercentage": 0.21},
+        ]
+        text = render_cross_asset_table(quotes)
+        self.assertIn("84.04", text)   # format_num 2 位小数
+        self.assertIn("90.83", text)
+        self.assertLess(text.index("CL=F"), text.index("BZ=F"))  # 固定顺序
 
 
 class RollingStatsTests(unittest.TestCase):

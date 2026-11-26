@@ -391,19 +391,26 @@ class FallbackDegradationMetaTests(unittest.TestCase):
              patch.object(fmd, "fetch_fred_series_quote", return_value=quote), \
              patch.object(fmd, "fetch_eastmoney_global_quote", return_value=None), \
              patch.object(fmd, "fetch_sina_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_tencent_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_cnbc_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_bond_quote", return_value=None), \
              patch.object(fmd, "fetch_eastmoney_quote", return_value=None), \
              patch.object(fmd, "fetch_tencent_quote", return_value=None), \
              patch.object(fmd, "fetch_sina_quote", return_value=None):
             result = fmd.fetch_fallback_quote(
                 {"ticker": "^TNX", "market": "INDEX"}, {"DISABLE_MOOTDX": "1"}, degs)
         self.assertEqual(result, quote)
-        # 链序（2026-11-05 重排）：东财环球（实时）在 FRED（T+1）之前
+        # 链序（2026-11-05 重排 + 2026-11-26 扩环）：东财环球（实时）在 FRED
+        # （T+1）之前；实时备用 CNBC -> 新浪 globalbd 插在 FRED 前。
         self.assertEqual(
             [(d["ticker"], d["source_tried"], d["reason"], d["fallback"]) for d in degs],
             [("^TNX", "nasdaq", "returned no data", "nasdaq-index"),
              ("^TNX", "nasdaq-index", "returned no data", "eastmoney-global"),
              ("^TNX", "eastmoney-global", "returned no data", "sina-global"),
-             ("^TNX", "sina-global", "returned no data", "fred")])
+             ("^TNX", "sina-global", "returned no data", "tencent-global"),
+             ("^TNX", "tencent-global", "returned no data", "cnbc"),
+             ("^TNX", "cnbc", "returned no data", "sina-bond"),
+             ("^TNX", "sina-bond", "returned no data", "fred")])
 
     def test_eastmoney_global_hits_before_fred_for_tnx(self) -> None:
         # ^TNX 实时优先：东财环球命中时 FRED（T+1）不该被触发
@@ -439,6 +446,9 @@ class FallbackDegradationMetaTests(unittest.TestCase):
                           return_value={"symbol": "^TNX", "price": 4.3, "source": "fred"}), \
              patch.object(fmd, "fetch_eastmoney_global_quote", return_value=None), \
              patch.object(fmd, "fetch_sina_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_tencent_global_quote", return_value=None), \
+             patch.object(fmd, "fetch_cnbc_quote", return_value=None), \
+             patch.object(fmd, "fetch_sina_bond_quote", return_value=None), \
              patch.object(fmd, "fetch_eastmoney_quote", return_value=None), \
              patch.object(fmd, "fetch_tencent_quote", return_value=None), \
              patch.object(fmd, "fetch_sina_quote", return_value=None):

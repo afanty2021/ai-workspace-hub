@@ -978,7 +978,17 @@ FRED_SERIES_SYMBOLS = {"^TNX": "DGS10"}
 # production parser; DINIW has no published contract, so the layout below was
 # cross-checked against two independent references and is guarded by length
 # checks (feed values drift into None + warning instead of wrong numbers).
-SINA_GLOBAL_SYMBOLS = {"DX-Y.NYB": "DINIW", "XAUUSD=X": "hf_XAU", "HG=F": "hf_CAD", "HG00Y": "hf_HG"}
+# 2026-11-26 接线（盘前档东财断连缺口族修根）：hf_CL=NYMEX WTI 原油当月连续、
+# hf_OIL=ICE Brent 当月连续（均 USD/桶原值）、hf_NQ=CME E-mini Nasdaq 100 当月
+# 连续（点数原值）——与东财 102.CL00Y/112.B00Y/103.NQ00Y 同合约同单位。live probe
+# 2026-11-26：hf_NQ 昨结 26100.250 / 高 26314.000 / 低 25997.500 与东财 103.NQ00Y
+# f60/f44/f45 逐位一致（今开 26068.5 vs 东财 26066.55 略异——不同时点的开盘参考，
+# 不作对拍锚）；hf_CL 今开 84.090 / 高 84.480 / 低 83.800 与新浪全球期货日线
+# 2026-11-26 行逐位一致。
+SINA_GLOBAL_SYMBOLS = {
+    "DX-Y.NYB": "DINIW", "XAUUSD=X": "hf_XAU", "HG=F": "hf_CAD", "HG00Y": "hf_HG",
+    "CL=F": "hf_CL", "BZ=F": "hf_OIL", "NQ00Y": "hf_NQ",
+}
 
 
 def fetch_nasdaq_index_quote(ticker: str, market: str) -> dict[str, Any] | None:
@@ -1077,6 +1087,37 @@ def _roll_weekend_snapshot_to_friday(trade_date: str) -> str:
     return day.isoformat()
 
 
+def _build_hf_quote(ticker: str, fields: list[str], source: str) -> dict[str, Any] | None:
+    """hf_ 族逗号字段 → quote；新浪 hq.sinajs 与腾讯 qt.gtimg 共用（布局逐字段同位）。
+
+    hf_ feed: 0=current 2=bid 3=ask 4=high 5=low 6=time 7=last_settle
+    8=open 12=date 13=name. Change is computed against last settlement.
+    field 1 两家不同（新浪恒空、腾讯填涨跌幅%，2026-11-26 实测）——未文档化字段
+    不作锚，change 一律自算，两家解析保持同一份代码。
+    """
+    if len(fields) < 14:
+        return None
+    price = parse_float(fields[0])
+    if price is None or price <= 0:
+        return None
+    previous_close = parse_float(fields[7])
+    change = round(price - previous_close, 6) if previous_close else None
+    change_pct = change / previous_close * 100 if change is not None and previous_close else None
+    return {
+        "symbol": ticker,
+        "price": price,
+        "change": change,
+        "changesPercentage": change_pct,
+        "previousClose": previous_close,
+        "open": parse_float(fields[8]),
+        "dayHigh": parse_float(fields[4]),
+        "dayLow": parse_float(fields[5]),
+        "volume": None,  # Spot/level feeds carry no clean volume field.
+        "tradeDate": _roll_weekend_snapshot_to_friday(fields[12]),
+        "source": source,
+    }
+
+
 def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
     code = SINA_GLOBAL_SYMBOLS.get(strip_market_suffix(ticker).upper())
     if code is None:
@@ -1106,16 +1147,7 @@ def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
             day_low = parse_float(fields[7])
             trade_date = fields[10]
         else:
-            # hf_ feed: 0=current 2=bid 3=ask 4=high 5=low 6=time 7=last_settle
-            # 8=open 12=date 13=name. Change is computed against last settlement.
-            if len(fields) < 14:
-                return None
-            price = parse_float(fields[0])
-            previous_close = parse_float(fields[7])
-            open_price = parse_float(fields[8])
-            day_high = parse_float(fields[4])
-            day_low = parse_float(fields[5])
-            trade_date = fields[12]
+            return _build_hf_quote(ticker, fields, "sina")
         trade_date = _roll_weekend_snapshot_to_friday(trade_date)
         if price is None or price <= 0:
             return None
@@ -1140,6 +1172,162 @@ def fetch_sina_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
         return None
 
 
+# 腾讯 qt.gtimg.cn 直接代理新浪同款 hf_ 全球期货族（2026-11-26 接线实测）：老
+# nf_ 族（nf_CL / nf_NQ 等）已下线（逐码 v_pv_none_match，smartbox 搜索亦无此
+# 品种），现行通道=与新浪同名的 hf_ 码，逗号布局与 hq.sinajs 的 hf_ 响应逐字段
+# 同位，共用 _build_hf_quote。live probe 2026-11-26 09:2x：hf_CL 昨结 83.68 /
+# 高 84.48 / 低 83.80 / 今开 84.09 与新浪 hf_CL 逐位一致（现价按采样时点略异，
+# 腾讯 2 位小数、新浪 3 位）；腾讯 field 1=涨跌幅%（0.67=0.56/83.68 自洽）。
+# 腾讯**不代理** hf_NQ / DINIW（批量请求实测丢行）——NQ00Y、DX-Y.NYB 无腾讯备份。
+TENCENT_GLOBAL_SYMBOLS = {
+    "XAUUSD=X": "hf_XAU", "HG=F": "hf_CAD", "HG00Y": "hf_HG", "CL=F": "hf_CL", "BZ=F": "hf_OIL",
+}
+
+
+def fetch_tencent_global_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    """腾讯 hf_ 全球期货族（新浪同布局）；未映射票返回 None 且不发请求。"""
+    code = TENCENT_GLOBAL_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if code is None:
+        return None
+    try:
+        response = requests.get(
+            f"https://qt.gtimg.cn/q={code}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://finance.qq.com"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        return _build_hf_quote(ticker, content[data_start + 1 : data_end].split(","), "tencent")
+    except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "tencent-global", str(exc))
+        log(f"Warning: Tencent global fallback failed for {ticker}: {exc}")
+        return None
+
+
+# 美十债收益率实时备用的第一家独立源（2026-11-26 接线）：CNBC 行情服务（免 Key；
+# 裸 curl 无浏览器 UA 时 http=000，必须带头）。US10Y=Tradeweb 口径的美 10Y 收益率
+# （% 原值，不是雅虎 ^TNX 的 ×10 指数）。live probe 2026-11-26 09:3x：last 4.864 /
+# 昨收 4.902 / change -0.038（last_time 2026-11-25T17:05 ET），与东财 171.US10Y
+# 11-25 收 4.858 差 0.6bp、11-24 收 4.9078 差 0.6bp——跨源水平差 <1bp；change 同为
+# 「美盘收盘 vs 前一美盘收盘」口径，日变动可直接替代东财。
+CNBC_SYMBOLS = {"^TNX": "US10Y"}
+# 收益率量级防呆：非 % 原值（雅虎式 ×10 指数、债券净价 ~98）一律拒收，不落快照。
+_YIELD_PCT_RANGE = (0.0, 25.0)
+
+
+def _cnbc_trade_date(value: Any) -> str:
+    """'2026-11-25T17:05:00.000-0500' -> '2026-11-25'（报价自带的 ET 偏移日期段）；其余原样。"""
+    text = str(value or "")
+    matched = re.match(r"\d{4}-\d{2}-\d{2}", text)
+    return matched.group(0) if matched else text
+
+
+def fetch_cnbc_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    """CNBC 行情（当前仅 ^TNX→US10Y）；未映射票返回 None 且不发请求。"""
+    symbol = CNBC_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if symbol is None:
+        return None
+    try:
+        response = requests.get(
+            "https://quote.cnbc.com/quote-html-webservice/quote.htm",
+            params={"symbols": symbol, "output": "json"},
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        result = payload.get("QuickQuoteResult") if isinstance(payload, dict) else None
+        rows = result.get("QuickQuote") if isinstance(result, dict) else None
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            return None
+        data = rows[0]
+        price = parse_float(data.get("last"))
+        if price is None or not _YIELD_PCT_RANGE[0] < price < _YIELD_PCT_RANGE[1]:
+            return None
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": parse_float(data.get("change")),
+            "changesPercentage": parse_float(data.get("change_pct")),
+            "previousClose": parse_float(data.get("previous_day_closing")),
+            "open": parse_float(data.get("open")),
+            "dayHigh": parse_float(data.get("high")),
+            "dayLow": parse_float(data.get("low")),
+            "volume": None,
+            "tradeDate": _cnbc_trade_date(data.get("last_time")),
+            "source": "cnbc",
+        }
+    except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "cnbc", str(exc))
+        log(f"Warning: CNBC fallback failed for {ticker}: {exc}")
+        return None
+
+
+# 新浪债券族 globalbd_（2026-11-26 接线）：美十债收益率的第二家独立实时源，
+# **只取水平不取涨跌**。live probe 2026-11-26 09:20/09:30 布局：0=名称 1=今开
+# 2=昨收 3=最新 4=最高 5=最低 6=量 7=涨跌幅% 8=涨跌 9/10=买卖(恒 0)
+# 11=unix 时间戳 12=日期 13=时间——与 cn.investing.com 同 vendor 页面逐位同
+# （4.886 / +0.042 / +0.87% / 昨收 4.844 / 幅度 4.799-4.894）。
+# 口径陷阱（所以排在 CNBC 之后、change 恒 None）：①该族按**北京日切**——昨收=前
+# 北京日尾值（=ET 11:00），日涨跌≠美盘收盘对收盘：11-25 样本 +4.2bp
+# （4.844→4.886）vs 真实美盘变动 CNBC -3.8bp（4.902→4.864）/ 东财 -5.0bp
+# （4.9078→4.8579），符号相反；②水平系统性偏离：11-25 4.886 vs 东财 4.858
+# （+2.8bp）、CNBC 4.864；③gcny10 样本出现最新 1.5870 < 最低 1.5890（高低
+# 字段不可靠）——故高低/今开也不透传。日期取 unix 时间戳的 UTC 日（与东财
+# f86 同口径），时间戳不可解析时退回 fields[12]。
+SINA_BOND_SYMBOLS = {"^TNX": "globalbd_usg10y"}
+
+
+def fetch_sina_bond_quote(ticker: str, market: str) -> dict[str, Any] | None:
+    """新浪 globalbd_ 债券族（当前仅 ^TNX→globalbd_usg10y）；仅返回水平，涨跌恒 None。"""
+    code = SINA_BOND_SYMBOLS.get(strip_market_suffix(ticker).upper())
+    if code is None:
+        return None
+    try:
+        response = requests.get(
+            f"https://hq.sinajs.cn/list={code}",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"},
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+        content = response.text
+        data_start, data_end = content.find('"'), content.rfind('"')
+        if data_start == -1 or data_end <= data_start:
+            return None
+        fields = content[data_start + 1 : data_end].split(",")
+        if len(fields) < 14:
+            return None
+        price = parse_float(fields[3])
+        if price is None or not _YIELD_PCT_RANGE[0] < price < _YIELD_PCT_RANGE[1]:
+            return None
+        trade_date = fields[12]
+        quote_ts = parse_float(fields[11])
+        if quote_ts:
+            trade_date = datetime.fromtimestamp(quote_ts, timezone.utc).strftime("%Y-%m-%d")
+        return {
+            "symbol": ticker,
+            "price": price,
+            "change": None,
+            "changesPercentage": None,
+            "previousClose": None,
+            "open": None,
+            "dayHigh": None,
+            "dayLow": None,
+            "volume": None,
+            "tradeDate": trade_date,
+            "source": "sina-bond",
+        }
+    except Exception as exc:  # noqa: BLE001
+        _note_fetch_failure(ticker, "sina-bond", str(exc))
+        log(f"Warning: Sina bond fallback failed for {ticker}: {exc}")
+        return None
+
+
 # Eastmoney serves global venues under their own market numbers; the secids
 # below came from eastmoney's own suggest API (QuoteID) and each was verified
 # live against an independent feed on 2026-10-31 (SOX/IXIC == nasdaq.com,
@@ -1161,13 +1349,21 @@ EASTMONEY_GLOBAL_SYMBOLS = {
                                 # 对拍一致；100.DJI/100.INDU 无效）
     "^SOX": "251.SOX",          # PHLX semiconductor, backup to the nasdaq API
     "^IXIC": "100.NDX",         # eastmoney's NDX is the composite, not NASDAQ-100
-    "^TNX": "171.US10Y",        # 美国10年期国债收益率，实时（FRED 是 T+1 官方序列，降级备用）
+    "^TNX": "171.US10Y",        # 美国10年期国债收益率，实时（断连时 CNBC US10Y → 新浪
+                                # globalbd_usg10y（仅水平）→ FRED DGS10 T+1，2026-11-26 接线）
     "NQ00Y": "103.NQ00Y",       # 小型纳指当月连续（CME E-mini Nasdaq 100 期货），实时
+                                # （新浪 hf_NQ 备用，2026-11-26 接线；腾讯无此码）
     "HSTECH": "124.HSTECH",     # 恒生科技指数（124=东财港股指数段；2026-11-09 实测 11-06 收 4078.23 与 R20261108-13 对拍一致）
     "000300": "1.000300",       # 沪深300指数（1=东财沪市指数段；2026-11-12 接线。push2
                                 # 本机反爬断连时段由腾讯/新浪 sh000300 双备份承载——
                                 # 2026-11-12 盘中 4097.26/+0.53% 两源逐位一致、昨收
                                 # 4075.71 对拍 index/series/000300.jsonl 逐位一致）
+    "CL=F": "102.CL00Y",        # NYMEX WTI 原油当月连续（USD/桶，2026-11-26 接线）。secid
+                                # 取自东财 suggest API QuoteID（Code=CL00Y 名称=NYMEX原油
+                                # MktNum=102）；新浪 hf_CL / 腾讯 hf_CL 备用
+    "BZ=F": "112.B00Y",         # 布伦特原油当月连续（ICE Brent，USD/桶，2026-11-26 接线）。
+                                # secid 取自 suggest API（Code=B00Y 名称=布伦特原油当月连续
+                                # MktNum=112；BZ00Y 查无此码）；新浪 hf_OIL / 腾讯 hf_OIL 备用
 }
 
 
@@ -1298,8 +1494,19 @@ def fetch_fallback_quote(item: dict[str, str], env: dict[str, str],
     # 时的兜底。其余映射票行为不变（fred 对它们本就无映射，试一环空跑而已）。
     # Eastmoney before Sina: fresher prev-close reference for LME; Sina stays
     # as the resilient fallback when eastmoney's anti-bot drops the request.
+    # Tencent hf_ right behind Sina (2026-11-26): same feed family, so the two
+    # keyless vendors go dark together only if both hosts drop.
     chain.append(("eastmoney-global", lambda: fetch_eastmoney_global_quote(ticker, market)))
     chain.append(("sina-global", lambda: fetch_sina_global_quote(ticker, market)))
+    chain.append(("tencent-global", lambda: fetch_tencent_global_quote(ticker, market)))
+    # ^TNX realtime backups before FRED (2026-11-26 wiring; eastmoney push2
+    # dropped the pre-market session on 11-17/11-20/11-26 and FRED's T+1 close
+    # left the yield row stale): CNBC US10Y (Tradeweb, session-over-session
+    # change, <1bp from eastmoney) -> Sina globalbd (level only, change is a
+    # Beijing-day delta and is NOT reported) -> FRED DGS10 last resort. Other
+    # tickers carry no mapping for these two steps: no network call, no-op.
+    chain.append(("cnbc", lambda: fetch_cnbc_quote(ticker, market)))
+    chain.append(("sina-bond", lambda: fetch_sina_bond_quote(ticker, market)))
     chain.append(("fred", lambda: fetch_fred_series_quote(ticker, market)))
 
     # Mootdx per-ticker retry ahead of tushare: recovers individual misses from

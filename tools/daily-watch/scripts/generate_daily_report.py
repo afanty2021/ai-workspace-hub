@@ -312,8 +312,9 @@ def render_other_movers(
 # 跨资产例行扫描（Q-20261109-03 德鲁肯米勒借鉴①）：固定顺序对齐 watchlist「A 股
 # 核心指数」+「海外与宏观」两段与 query_market.LIQUIDITY_TICKERS；quotes 缺的票跳过
 # （抓取失败不造行）。5d/20d 滚动窗口近似「日线看 8-20 天、周线看 8-20 周」三框，
-# 只作观察列不作信号。000300 置首（A 股锚，2026-11-12 入池）。
-CROSS_ASSET_ORDER = ["000300", "^IXIC", "^GSPC", "^DJI", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HG00Y", "HSTECH"]
+# 只作观察列不作信号。000300 置首（A 股锚，2026-11-12 入池）。CL=F/BZ=F（WTI/
+# 布油，2026-11-26 接线）排在铜后、恒生科技前，与 watchlist「海外与宏观」段同序。
+CROSS_ASSET_ORDER = ["000300", "^IXIC", "^GSPC", "^DJI", "^SOX", "^TNX", "NQ00Y", "DX-Y.NYB", "XAUUSD=X", "HG=F", "HG00Y", "CL=F", "BZ=F", "HSTECH"]
 
 _CROSS_ASSET_MARKETS = {"INDEX", "FX", "CMDTY", "FUT"}
 
@@ -1176,11 +1177,13 @@ def apply_hypothesis_updates(
 SOURCE_CALIBER_NOTES = {
     "^GSPC": "标普500（东财 100.SPX 主源，腾讯 usINX 备份；2026-11-11 接线，收盘对拍 AP/CNBC 逐位一致）",
     "^DJI": "道琼斯指数（东财 100.DJIA 主源，腾讯 usDJI 备份；同上接线）",
-    "HG=F": "交付口径为 LME 三月铜（USD/吨）；ticker 名义是 COMEX 铜（USD/磅），两者价位差约 4 倍",
-    "HG00Y": "COMEX 铜当月连续（东财 101.HG00Y 主源，新浪 hf_HG 备用，2026-11-12 接线实测对拍昨结 629 ¢/lb 与 11-11 COMEX 收盘 6.29 一致）；报价为美分/磅，价差行已按 1 公吨=2204.62 磅折吨，COMEX-LME 价差=美国精炼铜关税交易退潮仪表（8 月 +700 → 2026-11-12 +32 USD/t）",
-    "^TNX": "美十债收益率实时快照（东财 171.US10Y；FRED DGS10 T+1 降级备用）",
-    "NQ00Y": "小型纳指当月连续期货实时快照（东财 103.NQ00Y，CME E-mini Nasdaq 100；24 小时交易，日报时点为最新成交）",
-    "XAUUSD=X": "现货金（伦敦金），USD/盎司",
+    "HG=F": "交付口径为 LME 三月铜（USD/吨）；ticker 名义是 COMEX 铜（USD/磅），两者价位差约 4 倍；东财 109.LCPT 主源，新浪 hf_CAD / 腾讯 hf_CAD 备用（腾讯备份 2026-11-26 接线）",
+    "HG00Y": "COMEX 铜当月连续（东财 101.HG00Y 主源，新浪 hf_HG / 腾讯 hf_HG 备用——腾讯备份 2026-11-26 接线，原 2026-11-12 接线实测对拍昨结 629 ¢/lb 与 11-11 COMEX 收盘 6.29 一致）；报价为美分/磅，价差行已按 1 公吨=2204.62 磅折吨，COMEX-LME 价差=美国精炼铜关税交易退潮仪表（8 月 +700 → 2026-11-12 +32 USD/t）",
+    "^TNX": "美十债收益率实时快照，% 原值（东财 171.US10Y 主源；断连时 CNBC `US10Y`（Tradeweb，美盘收盘对收盘口径，与东财水平差 <1bp）→ 新浪 `globalbd_usg10y`（**仅水平**：该族按北京日切、日涨跌不是美盘变动，故日涨跌显示「—」）→ FRED DGS10 T+1，2026-11-26 接线）；跨源水平有 bp 级差异，日变动以同一源前后两日为准，勿跨源相减",
+    "NQ00Y": "小型纳指当月连续期货实时快照（东财 103.NQ00Y 主源，新浪 `hf_NQ` 备用——2026-11-26 实测昨结/高/低逐位一致；腾讯无此码；CME E-mini Nasdaq 100，24 小时交易，日报时点为最新成交）",
+    "CL=F": "WTI 原油当月连续（NYMEX，USD/桶；东财 102.CL00Y 主源，新浪 `hf_CL` / 腾讯 `hf_CL` 备用，2026-11-26 接线）；涨跌=相对昨日结算价；ticker 名义为雅虎 CL=F",
+    "BZ=F": "布伦特原油当月连续（ICE Brent，USD/桶；东财 112.B00Y 主源，新浪 `hf_OIL` / 腾讯 `hf_OIL` 备用，2026-11-26 接线）；注意 CNBC 的 NYMEX Brent（BZ）与 ICE Brent 是不同合约，未接入",
+    "XAUUSD=X": "现货金（伦敦金），USD/盎司；新浪 hf_XAU 主源，腾讯 hf_XAU 备用（2026-11-26 接线）",
     "DX-Y.NYB": "ICE 美元指数（DINIW 口径）",
     "000660.KS": "KRW 计价；EOD 源为收盘价非实时",
     "03800.HK": "HKD 计价；港股成交量单位为股（CN 侧为手，跨市场比较需 ×/÷100）",

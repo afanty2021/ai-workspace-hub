@@ -55,7 +55,7 @@ Agent 首次使用时检查上述条件，缺什么补什么。
 | 1 | mootdx | A 股 + ETF (.SH/.SZ) + 板块指数（880/881 段 `.TDX`） | 无（`DISABLE_MOOTDX=1` 停用） | 免费，TCP 7709 直连通达信，实时快照（板块指数走 index_bars 日线） | [项目](https://github.com/mootdx/mootdx) |
 | 2 | tushare | A 股 (.SH/.SZ) + HK；场外基金净值（fund_nav，`.OF` 主源，120 积分实测可调） | `TUSHARE_TOKEN` | 120 积分非复权日线当前 0 元（EOD）；其他看权限 | [注册](https://tushare.pro/register) |
 | 3 | FMP | 免费 Basic 以美股 EOD/profile 测试为主；扩展市场看套餐 | `FMP_API_KEY` | 免费 250 次/日 / 付费 | [Pricing](https://site.financialmodelingprep.com/developer/docs/pricing) |
-| 4+ | Nasdaq / Finnhub / EODHD / 东财 / 腾讯 / 新浪 / yfinance / 东财 push2his / Nasdaq 官方 historical / 新浪全球日线 / 东财 datacenter+MOFCOM | 各自覆盖（含跨资产历史日线回补——^SOX 历史主源 Nasdaq 官方，与国内 Shibor/社融时序，2026-11-09 接线） | 无 Key 或各自 key | 自动 fallback / 盘后批量脚本 | `DATA-SOURCES.md` |
+| 4+ | Nasdaq / Finnhub / EODHD / 东财 / 腾讯 / 新浪 / 腾讯环球 hf_ / CNBC / yfinance / 东财 push2his / Nasdaq 官方 historical / 新浪全球日线 / 东财 datacenter+MOFCOM | 各自覆盖（^TNX 断连三级实时备用 CNBC→新浪 `globalbd_usg10y`→FRED、NQ00Y/WTI/布油新浪+腾讯 hf_ 备份 2026-11-26 接线；含跨资产历史日线回补——^SOX 历史主源 Nasdaq 官方，与国内 Shibor/社融时序，2026-11-09 接线） | 无 Key 或各自 key | 自动 fallback / 盘后批量脚本 | `DATA-SOURCES.md` |
 
 mootdx 未命中或缺装 → A 股在降级链里先试 tushare（首备用），再东财/腾讯/新浪。mootdx 服务器全网不可用时记 5 分钟负缓存快速失败，不影响整份日报生成。
 

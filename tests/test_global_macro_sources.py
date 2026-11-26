@@ -13,11 +13,14 @@ from unittest.mock import MagicMock, patch
 from _test_paths import REPO_ROOT  # noqa: F401 (also sets up sys.path)
 
 from fetch_market_data import (  # noqa: E402
+    fetch_cnbc_quote,
     fetch_eastmoney_global_quote,
     fetch_fallback_quote,
     fetch_fred_series_quote,
     fetch_nasdaq_index_quote,
+    fetch_sina_bond_quote,
     fetch_sina_global_quote,
+    fetch_tencent_global_quote,
 )
 
 NASDAQ_INDEX_PAYLOAD = {
@@ -48,6 +51,59 @@ CAD_PAYLOAD = (
     'var hq_str_hf_CAD="14128.160,,14129.500,14132.000,14361.000,14107.000,'
     '02:59:24,14154.500,14310.000,0,1,1,2026-10-31,伦铜,23102";'
 )
+# 原油/纳指期货 fixtures（2026-11-26 live probe，字段位保留真实位；field 1
+# 新浪恒空、腾讯填涨跌幅%——解析器一律不锚它，change 自算）。
+CL_PAYLOAD_SINA = (
+    'var hq_str_hf_CL="84.039,,84.09,84.10,84.48,83.80,09:30:00,83.68,84.09,0,0,0,'
+    '2026-11-25,WTI原油";'
+)
+CL_PAYLOAD_TENCENT = (
+    'v_hf_CL="84.04,0.43,84.09,84.10,84.48,83.80,09:30:00,83.68,84.09,0,0,0,'
+    '2026-11-25,WTI原油";'
+)
+BZ_PAYLOAD_SINA = (
+    'var hq_str_hf_OIL="90.828,,90.90,90.95,91.10,90.35,09:30:00,90.64,90.90,0,0,0,'
+    '2026-11-25,布伦特原油";'
+)
+NQ_PAYLOAD_SINA = (
+    'var hq_str_hf_NQ="26286.77,,26288.00,26290.00,26350.00,26080.00,09:30:00,'
+    '26100.25,26200.00,0,0,0,2026-11-25,纳指连续";'
+)
+# CNBC quote.htm（Tradeweb 美十债，% 原值非雅虎 ×10 指数）；last_time 带 ET 偏移，
+# tradeDate 取其日期段。
+CNBC_PAYLOAD = {
+    "QuickQuoteResult": {
+        "QuickQuote": [
+            {
+                "symbol": "US10Y",
+                "name": "US 10 YR",
+                "last": "4.864",
+                "change": "-0.038",
+                "change_pct": "-0.775",
+                "previous_day_closing": "4.902",
+                "open": "4.900",
+                "high": "4.912",
+                "low": "4.850",
+                "last_time": "2026-11-25T17:05:00.000-0500",
+            }
+        ]
+    }
+}
+# globalbd 布局：0=名称 1=今开 2=昨收 3=最新 4=最高 5=最低 6=量 7=涨跌幅% 8=涨跌
+# 9/10=买卖(恒0) 11=unix ts 12=日期 13=时间。ts=1795656000=2026-11-26 01:20 UTC
+# （北京 09:20 快照）。
+GLOBALBD_PAYLOAD = (
+    'var hq_str_globalbd_usg10y="美国10年期国债收益率,4.899,4.844,4.886,4.894,4.799,'
+    '0,0.87,0.042,0,0,1795656000,2026-11-26,09:20:00";'
+)
+
+
+def _cnbc_payload(last: str = "4.864") -> dict:
+    payload = {
+        "QuickQuoteResult": {"QuickQuote": [dict(CNBC_PAYLOAD["QuickQuoteResult"]["QuickQuote"][0])]}
+    }
+    payload["QuickQuoteResult"]["QuickQuote"][0]["last"] = last
+    return payload
 
 
 def _text_response(payload: str) -> MagicMock:
@@ -286,6 +342,182 @@ class EastmoneyGlobalQuoteTests(unittest.TestCase):
         mock_get.assert_not_called()
 
 
+class CrudeHfQuoteTests(unittest.TestCase):
+    """CL=F/BZ=F/NQ00Y 新浪 hf_ 族（2026-11-26 接线，东财断连当日缺口回归）。"""
+
+    @patch("fetch_market_data.requests.get")
+    def test_parses_wti_fields_against_last_settlement(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(CL_PAYLOAD_SINA)
+
+        quote = fetch_sina_global_quote("CL=F", "CMDTY")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 84.039)
+        self.assertEqual(quote["previousClose"], 83.68)  # 昨结
+        self.assertEqual(quote["change"], 0.359)
+        self.assertAlmostEqual(quote["changesPercentage"], 0.359 / 83.68 * 100, places=6)
+        self.assertEqual(quote["open"], 84.09)
+        self.assertEqual(quote["dayHigh"], 84.48)
+        self.assertEqual(quote["dayLow"], 83.80)
+        self.assertIsNone(quote["volume"])
+        self.assertEqual(quote["tradeDate"], "2026-11-25")  # 工作日原样
+        self.assertEqual(quote["source"], "sina")
+
+    @patch("fetch_market_data.requests.get")
+    def test_parses_brent_and_nq_continuous(self, mock_get: MagicMock) -> None:
+        for payload, ticker, price, settle in (
+            (BZ_PAYLOAD_SINA, "BZ=F", 90.828, 90.64),
+            (NQ_PAYLOAD_SINA, "NQ00Y", 26286.77, 26100.25),
+        ):
+            with self.subTest(ticker=ticker):
+                mock_get.return_value = _text_response(payload)
+                quote = fetch_sina_global_quote(ticker, "INDEX")
+                assert quote is not None
+                self.assertEqual(quote["price"], price)
+                self.assertEqual(quote["previousClose"], settle)
+                self.assertEqual(quote["change"], round(price - settle, 6))
+                self.assertEqual(quote["tradeDate"], "2026-11-25")
+
+    @patch("fetch_market_data.requests.get")
+    def test_weekend_snapshot_rolls_wti_to_friday(self, mock_get: MagicMock) -> None:
+        # 周六采集（11-28）冻结周五收盘 -> 交易日标 11-27；与 DINIW/XAU 同款回滚。
+        mock_get.return_value = _text_response(CL_PAYLOAD_SINA.replace("2026-11-25", "2026-11-28"))
+        quote = fetch_sina_global_quote("CL=F", "CMDTY")
+        assert quote is not None
+        self.assertEqual(quote["tradeDate"], "2026-11-27")
+
+
+class TencentGlobalQuoteTests(unittest.TestCase):
+    @patch("fetch_market_data.requests.get")
+    def test_shares_hf_layout_and_ignores_vendor_change_pct_field(self, mock_get: MagicMock) -> None:
+        # 腾讯 field 1=涨跌幅%（0.43=0.36/83.68 自洽）——未文档化字段不作锚，
+        # change 仍按昨结自算；布局与新浪逐字段同位，同一份解析。
+        mock_get.return_value = _text_response(CL_PAYLOAD_TENCENT)
+
+        quote = fetch_tencent_global_quote("CL=F", "CMDTY")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 84.04)  # 腾讯 2 位小数（新浪 3 位）
+        self.assertEqual(quote["previousClose"], 83.68)
+        self.assertEqual(quote["change"], 0.36)
+        self.assertAlmostEqual(quote["changesPercentage"], 0.36 / 83.68 * 100, places=6)
+        self.assertEqual(quote["source"], "tencent")
+        self.assertTrue(
+            str(mock_get.call_args.args[0]).startswith("https://qt.gtimg.cn"),
+            "tencent global endpoint must stay HTTPS",
+        )
+        self.assertIn("hf_CL", str(mock_get.call_args.args[0]))
+
+    @patch("fetch_market_data.requests.get")
+    def test_stays_https_with_referer_and_gates_non_mapped(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(CL_PAYLOAD_TENCENT)
+        fetch_tencent_global_quote("CL=F", "CMDTY")
+        self.assertEqual(
+            mock_get.call_args.kwargs["headers"]["Referer"], "http://finance.qq.com"
+        )
+        # 腾讯不代理 hf_NQ / DINIW（2026-11-26 批量实测丢行）：NQ00Y、美元指数无腾讯备份
+        self.assertIsNone(fetch_tencent_global_quote("NQ00Y", "INDEX"))
+        self.assertIsNone(fetch_tencent_global_quote("DX-Y.NYB", "FX"))
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("fetch_market_data.requests.get")
+    def test_truncated_or_zero_price_payload_returns_none(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response('v_hf_CL="84.04,0.43";')
+        self.assertIsNone(fetch_tencent_global_quote("CL=F", "CMDTY"))
+        mock_get.return_value = _text_response(CL_PAYLOAD_TENCENT.replace("84.04,0.43", "0,0"))
+        self.assertIsNone(fetch_tencent_global_quote("CL=F", "CMDTY"))
+        self.assertEqual(mock_get.call_count, 2)
+
+
+class CnbcQuoteTests(unittest.TestCase):
+    @patch("fetch_market_data.requests.get")
+    def test_parses_us10y_session_fields(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _json_response(_cnbc_payload())
+
+        quote = fetch_cnbc_quote("^TNX", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4.864)
+        self.assertEqual(quote["change"], -0.038)
+        self.assertEqual(quote["changesPercentage"], -0.775)
+        self.assertEqual(quote["previousClose"], 4.902)
+        self.assertEqual(quote["open"], 4.900)
+        self.assertEqual(quote["dayHigh"], 4.912)
+        self.assertEqual(quote["dayLow"], 4.850)
+        self.assertIsNone(quote["volume"])
+        # last_time 的 ET 日期段 -> tradeDate（美盘收盘对收盘口径）。
+        self.assertEqual(quote["tradeDate"], "2026-11-25")
+        self.assertEqual(quote["source"], "cnbc")
+        self.assertEqual(mock_get.call_args.kwargs["params"]["symbols"], "US10Y")
+        # 裸 curl 无 UA 时 http=000：浏览器 UA 必须始终携带。
+        self.assertTrue(mock_get.call_args.kwargs["headers"].get("User-Agent"))
+        self.assertTrue(
+            str(mock_get.call_args.args[0]).startswith("https://"),
+            "cnbc endpoint must stay HTTPS",
+        )
+
+    @patch("fetch_market_data.requests.get")
+    def test_rejects_non_percent_yield_scales(self, mock_get: MagicMock) -> None:
+        # ×10 指数（48.64）与债券净价（98.5）都越出 % 原值防呆区间：拒收不落快照。
+        for bad_last in ("48.64", "98.5"):
+            mock_get.return_value = _json_response(_cnbc_payload(bad_last))
+            self.assertIsNone(fetch_cnbc_quote("^TNX", "INDEX"))
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("fetch_market_data.requests.get")
+    def test_malformed_shapes_return_none(self, mock_get: MagicMock) -> None:
+        for payload in ({}, {"QuickQuoteResult": {}}, {"QuickQuoteResult": {"QuickQuote": []}}):
+            mock_get.return_value = _json_response(payload)
+            self.assertIsNone(fetch_cnbc_quote("^TNX", "INDEX"))
+        self.assertEqual(mock_get.call_count, 3)
+
+    @patch("fetch_market_data.requests.get")
+    def test_only_mapped_tickers_reach_cnbc(self, mock_get: MagicMock) -> None:
+        self.assertIsNone(fetch_cnbc_quote("NQ00Y", "INDEX"))
+        self.assertIsNone(fetch_cnbc_quote("CL=F", "CMDTY"))
+        mock_get.assert_not_called()
+
+
+class SinaBondQuoteTests(unittest.TestCase):
+    @patch("fetch_market_data.requests.get")
+    def test_returns_level_only_beijing_day_cut_trap(self, mock_get: MagicMock) -> None:
+        # 北京日切陷阱：该族昨收/涨跌=北京日尾对北京日尾（11-25 样本 +4.2bp vs
+        # 美盘真变动 -3.8bp，符号相反），且 gcny10 样本高低字段自相矛盾——
+        # 只透传水平，delta/OHLC 一律 None（报告侧显示「—」）。
+        mock_get.return_value = _text_response(GLOBALBD_PAYLOAD)
+
+        quote = fetch_sina_bond_quote("^TNX", "INDEX")
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["price"], 4.886)
+        self.assertEqual(quote["tradeDate"], "2026-11-26")  # unix ts 的 UTC 日
+        self.assertEqual(quote["source"], "sina-bond")
+        for key in ("change", "changesPercentage", "previousClose",
+                    "open", "dayHigh", "dayLow", "volume"):
+            self.assertIsNone(quote[key], key)
+        self.assertEqual(
+            mock_get.call_args.kwargs["headers"]["Referer"], "https://finance.sina.com.cn"
+        )
+
+    @patch("fetch_market_data.requests.get")
+    def test_unparseable_timestamp_falls_back_to_date_field(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(GLOBALBD_PAYLOAD.replace("1795656000", "0"))
+        quote = fetch_sina_bond_quote("^TNX", "INDEX")
+        assert quote is not None
+        self.assertEqual(quote["tradeDate"], "2026-11-26")
+
+    @patch("fetch_market_data.requests.get")
+    def test_rejects_non_percent_and_gates_unmapped(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(GLOBALBD_PAYLOAD.replace(",4.886,", ",48.86,"))
+        self.assertIsNone(fetch_sina_bond_quote("^TNX", "INDEX"))
+        self.assertIsNone(fetch_sina_bond_quote("CL=F", "CMDTY"))
+        self.assertEqual(mock_get.call_count, 1)
+
+
 class GlobalChainRoutingTests(unittest.TestCase):
     @patch("fetch_market_data.requests.get")
     def test_tnx_routes_to_fred_in_the_chain(self, mock_get: MagicMock) -> None:
@@ -348,6 +580,122 @@ class GlobalChainRoutingTests(unittest.TestCase):
         assert quote is not None
         self.assertEqual(quote["source"], "eastmoney")
         self.assertEqual(quote["changesPercentage"], -7.08)
+
+    @patch("fetch_market_data.requests.get")
+    def test_tnx_eastmoney_down_cnbc_takes_over(self, mock_get: MagicMock) -> None:
+        # 2026-11-26 盘前断连回归：东财 push2 挂 -> CNBC（Tradeweb 实时，
+        # 美盘收盘对收盘口径）接管；FRED T+1 只当最后兜底。
+        def dispatch(url: str, **_kwargs: object) -> MagicMock:
+            if "push2.eastmoney.com" in url:
+                raise RuntimeError("RemoteDisconnected")
+            if "quote.cnbc.com" in url:
+                return _json_response(_cnbc_payload())
+            raise AssertionError(f"unexpected request to {url}")
+
+        mock_get.side_effect = dispatch
+        env = {"FINNHUB_API_KEY": "", "EOD_API_KEY": "", "ENABLE_YFINANCE": ""}
+
+        quote = fetch_fallback_quote({"ticker": "^TNX", "market": "INDEX"}, env)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "cnbc")
+        self.assertEqual(quote["price"], 4.864)
+        self.assertEqual(quote["change"], -0.038)
+        # 新浪/腾讯对 ^TNX 无映射（零请求），链路就地停在 cnbc：不落 sina-bond/fred。
+        urls = " ".join(str(c.args[0]) for c in mock_get.call_args_list)
+        self.assertNotIn("hq.sinajs.cn", urls)
+        self.assertNotIn("qt.gtimg.cn", urls)
+        self.assertNotIn("fred.stlouisfed.org", urls)
+
+    @patch("fetch_market_data.requests.get")
+    def test_tnx_all_realtime_down_sina_bond_serves_level_only(self, mock_get: MagicMock) -> None:
+        # 东财+CNBC 双挂 -> 新浪 globalbd 兜底：只给水平（change None），不到 FRED。
+        def dispatch(url: str, **_kwargs: object) -> MagicMock:
+            if "push2.eastmoney.com" in url or "quote.cnbc.com" in url:
+                raise RuntimeError("down")
+            if "hq.sinajs.cn" in url:
+                assert "globalbd_usg10y" in url
+                return _text_response(GLOBALBD_PAYLOAD)
+            raise AssertionError(f"unexpected request to {url}")
+
+        mock_get.side_effect = dispatch
+        env = {"FINNHUB_API_KEY": "", "EOD_API_KEY": "", "ENABLE_YFINANCE": ""}
+
+        quote = fetch_fallback_quote({"ticker": "^TNX", "market": "INDEX"}, env)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "sina-bond")
+        self.assertEqual(quote["price"], 4.886)
+        self.assertIsNone(quote["change"])  # 北京日切口径不报告
+        self.assertNotIn("fred.stlouisfed.org",
+                         " ".join(str(c.args[0]) for c in mock_get.call_args_list))
+
+    @patch("fetch_market_data.requests.get")
+    def test_wti_eastmoney_down_sina_takes_over_then_tencent(self, mock_get: MagicMock) -> None:
+        # CL=F：东财挂 -> 新浪 hf_CL 接管（今晨缺口回归）；新浪也挂 -> 腾讯
+        # 同布局 hf_CL 兜底（两家 keyless vendor 同挂才双双失守）。
+        def sina_up_dispatch(url: str, **_kwargs: object) -> MagicMock:
+            if "push2.eastmoney.com" in url:
+                raise RuntimeError("RemoteDisconnected")
+            if "hq.sinajs.cn" in url:
+                assert "hf_CL" in url
+                return _text_response(CL_PAYLOAD_SINA)
+            raise AssertionError(f"unexpected request to {url}")
+
+        mock_get.side_effect = sina_up_dispatch
+        env = {"FINNHUB_API_KEY": "", "EOD_API_KEY": "", "ENABLE_YFINANCE": ""}
+
+        quote = fetch_fallback_quote({"ticker": "CL=F", "market": "CMDTY"}, env)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "sina")
+        self.assertEqual(quote["price"], 84.039)
+        urls = " ".join(str(c.args[0]) for c in mock_get.call_args_list)
+        self.assertNotIn("qt.gtimg.cn", urls)
+        self.assertNotIn("fred.stlouisfed.org", urls)
+
+        def all_down_dispatch(url: str, **_kwargs: object) -> MagicMock:
+            if "push2.eastmoney.com" in url or "hq.sinajs.cn" in url:
+                raise RuntimeError("down")
+            assert "qt.gtimg.cn" in url, url
+            return _text_response(CL_PAYLOAD_TENCENT)
+
+        mock_get.side_effect = all_down_dispatch
+
+        quote = fetch_fallback_quote({"ticker": "CL=F", "market": "CMDTY"}, env)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "tencent")
+        self.assertEqual(quote["price"], 84.04)
+
+    @patch("fetch_market_data.requests.get")
+    def test_nq00y_eastmoney_down_sina_hf_takes_over(self, mock_get: MagicMock) -> None:
+        # NQ00Y 原为东财单源断连即 miss（今晨缺口之一）；新浪 hf_NQ 接线后接管。
+        # 腾讯无此映射，链路必须停在新浪、不落 fred。
+        def dispatch(url: str, **_kwargs: object) -> MagicMock:
+            if "push2.eastmoney.com" in url:
+                raise RuntimeError("RemoteDisconnected")
+            if "hq.sinajs.cn" in url:
+                assert "hf_NQ" in url
+                return _text_response(NQ_PAYLOAD_SINA)
+            raise AssertionError(f"unexpected request to {url}")
+
+        mock_get.side_effect = dispatch
+        env = {"FINNHUB_API_KEY": "", "EOD_API_KEY": "", "ENABLE_YFINANCE": ""}
+
+        quote = fetch_fallback_quote({"ticker": "NQ00Y", "market": "INDEX"}, env)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote["source"], "sina")
+        self.assertEqual(quote["price"], 26286.77)
+        self.assertEqual(quote["previousClose"], 26100.25)
+        urls = " ".join(str(c.args[0]) for c in mock_get.call_args_list)
+        self.assertNotIn("qt.gtimg.cn", urls)
 
 
 if __name__ == "__main__":

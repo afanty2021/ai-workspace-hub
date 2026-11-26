@@ -512,6 +512,19 @@ class SinaSourceTests(unittest.TestCase):
         secids = [c.kwargs["params"]["secid"] for c in mock_get.call_args_list]
         self.assertEqual(secids, ["100.SPX", "100.DJIA"])
 
+    def test_main_dispatch_routes_crude_to_eastmoney_secids(self) -> None:
+        # Q-20261126-11：原油历史回补与实时接线同 secid 事实（suggest API 实证
+        # 102.CL00Y / 112.B00Y；BZ00Y 无效）。锁 dict 分发防同族漂移；
+        # 新浪 GlobalFuturesService 不作历史回补源（北京日切 vs 东财美盘日切，
+        # 口径不同勿混——见 CROSS_ASSET_HISTORY_SECIDS 内注释）。
+        with patch("update_cross_asset_history.requests.get", return_value=_kline_response([
+                "2026-11-25,84.09,84.039,84.48,83.80,0,0",
+        ])) as mock_get, \
+                patch("market_data_io.resolve_data_root", return_value=self.root):
+            ucah.main(["--tickers", "CL=F,BZ=F", "--throttle", "0"])
+        secids = [c.kwargs["params"]["secid"] for c in mock_get.call_args_list]
+        self.assertEqual(secids, ["102.CL00Y", "112.B00Y"])
+
 
 if __name__ == "__main__":
     unittest.main()

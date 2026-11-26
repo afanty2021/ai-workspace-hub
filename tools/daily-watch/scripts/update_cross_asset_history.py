@@ -64,6 +64,13 @@ CROSS_ASSET_HISTORY_SECIDS: dict[str, str] = {
     "DX-Y.NYB": "100.UDI",
     "HG=F": "109.LCPT",
     "HG00Y": "101.HG00Y",
+    # CL=F / BZ=F（2026-11-26 接线）：NYMEX WTI / ICE Brent 当月连续，USD/桶。
+    # secid 与实时表同源（东财 suggest API QuoteID），受 EastmoneySecidContractTests
+    # 交集断言约束；新浪全球期货日线（GlobalFuturesService symbol=CL/OIL）实测
+    # 可用但日期按北京日切（当日行为盘中值），与东财美盘交易日口径不同源，
+    # 不混入同一序列——东财限流夜按既有策略次日自愈。
+    "CL=F": "102.CL00Y",
+    "BZ=F": "112.B00Y",
     "HSTECH": "124.HSTECH",
 }
 

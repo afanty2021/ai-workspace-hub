@@ -51,6 +51,8 @@ LIQUIDITY_TICKERS: list[tuple[str, str]] = [
     ("XAUUSD=X", "伦敦金"),
     ("HG=F", "伦铜"),
     ("HG00Y", "COMEX铜"),
+    ("CL=F", "WTI原油"),
+    ("BZ=F", "布伦特原油"),
     ("HSTECH", "恒生科技指数"),
 ]
 
