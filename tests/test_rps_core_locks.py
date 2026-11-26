@@ -67,3 +67,14 @@ def test_deoverlap_t_degenerate_inputs_are_nan():
     assert np.isnan(deoverlap_t([np.nan] * 50))
     assert np.isnan(deoverlap_t([0.5] * 200))          # 零方差
     assert np.isnan(deoverlap_t([0.1, 0.2, 0.3], 20))  # 相位 0 子序列只有 1 个点
+
+
+def test_deoverlap_t_drops_nan_before_subsampling():
+    # M24 变异锁（2026-11-26 max 评审）：docstring 承诺「可含 NaN，先剔除」——去掉 dropna
+    # 会因 NaN 传染 std 返回 NaN。含 NaN 输入必须与手工 dropna 后的结果逐位一致。
+    ic = pd.Series([0.1, np.nan, 0.3, np.nan, 0.9, 0.2, np.nan, 0.5, 0.4, np.nan] * 5)
+    t = deoverlap_t(ic, 1)
+    assert np.isfinite(t)
+    expected_sub = ic.dropna().to_numpy()[::1]
+    expected = expected_sub.mean() / expected_sub.std(ddof=1) * np.sqrt(len(expected_sub))
+    assert t == pytest.approx(expected, rel=1e-12)

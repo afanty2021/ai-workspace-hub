@@ -1,7 +1,9 @@
-# 测试期依赖（2026-11-26 max 评审 r5 C-1 新增）
-# tests/ 里有 12 个用例需要前两项组合——缺了会直接失败（不是 skip）：openpyxl 6（test_damodaran_erp）、
-# mootdx 3（test_update_finance_snapshots）、tushare 3（test_open_fund_source）。
-# CI 安装步必须带上（.github/workflows/ci.yml）；用裸环境跑全量测试的本地环境同样需要。
+# 测试期依赖（2026-11-26 max 评审 r5 C-1 新增；同日 max 评审 Q-20261126-15⑥/M-3 修订）
+# tests/ 里这些用例缺包会 skip（不是失败）：openpyxl 6（test_damodaran_erp）、mootdx 3
+# （test_update_finance_snapshots）、tushare 3（test_open_fund_source）、duckdb 15
+# （test_query_market）。CI 安装步必须带上（.github/workflows/ci.yml）——CI 靠本文件保证
+# 不 skip；本地裸环境跑全量同样需要，否则绿是缩水绿（2026-11-26 首跑：缺 duckdb/torch/
+# augur 路径时 CI 150 用例不跑，CI 绿≠全量绿，max 评审 M-15）。
 # 版本下限与 tools/daily-watch/requirements-mootdx.txt / requirements-tushare.txt 保持一致。
 openpyxl>=3.1
 mootdx>=0.11.7
@@ -9,3 +11,5 @@ tushare>=1.4.0
 # tushare 1.4.x 的 trader 模块 import six 却未声明依赖；pandas 3 / python-dateutil 4 环境（py3.12 上
 # pip 会解析到）不再间接带入 six，`import tushare` 会 ModuleNotFoundError。
 six>=1.16
+# query_market 的 DuckDB 视图查询（Q-20261126-15⑥ 拍板入 CI；预编译 wheel 常规可装）。
+duckdb>=1.0

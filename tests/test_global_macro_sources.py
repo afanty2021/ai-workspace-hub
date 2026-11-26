@@ -698,5 +698,97 @@ class GlobalChainRoutingTests(unittest.TestCase):
         self.assertNotIn("qt.gtimg.cn", urls)
 
 
+class BrentMappingLockTests(unittest.TestCase):
+    """X05/X06 变异锁（2026-11-26 max 评审 Q-20261126-15⑤）：布伦特 BZ=F 若改指 hf_CL
+    会静默取到 WTI 价——既有用例只喂 payload 不看 URL，两家的映射都得锁字面。"""
+
+    @patch("fetch_market_data.requests.get")
+    def test_sina_brent_maps_to_hf_oil(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(BZ_PAYLOAD_SINA)
+        quote = fetch_sina_global_quote("BZ=F", "CMDTY")
+        assert quote is not None
+        self.assertEqual(quote["price"], 90.828)
+        url = str(mock_get.call_args.args[0])
+        self.assertIn("hf_OIL", url)
+        self.assertNotIn("hf_CL", url)
+
+    @patch("fetch_market_data.requests.get")
+    def test_tencent_brent_maps_to_hf_oil(self, mock_get: MagicMock) -> None:
+        mock_get.return_value = _text_response(CL_PAYLOAD_TENCENT)  # 只验 URL，body 无关
+        fetch_tencent_global_quote("BZ=F", "CMDTY")
+        url = str(mock_get.call_args.args[0])
+        self.assertIn("hf_OIL", url)
+        self.assertNotIn("hf_CL", url)
+
+
+class TruncatedHfCleanRejectTests(unittest.TestCase):
+    """M01/X08 变异锁（Q-20261126-15⑤）：hf_ 族 len<14 是干净拒绝——结果同为 None，但走
+    异常路径会 _note_fetch_failure + Warning，「干净拒绝」语义未锁时变异不红。
+    区分器写法=断言 _note_fetch_failure 未被调用（11-08 既有惯例）。"""
+
+    @patch("fetch_market_data._note_fetch_failure")
+    @patch("fetch_market_data.requests.get")
+    def test_truncated_payload_returns_none_without_failure_note(self, mock_get, mock_note) -> None:
+        mock_get.return_value = _text_response('var hq_str_hf_CL="84.039,,84.09";')
+        self.assertIsNone(fetch_sina_global_quote("CL=F", "CMDTY"))
+        self.assertIsNone(fetch_tencent_global_quote("CL=F", "CMDTY"))
+        mock_note.assert_not_called()
+
+
+class SinaBondEdgeTests(unittest.TestCase):
+    """X02 变异锁 + 新浪债券 len<14 干净拒绝（Q-20261126-15⑤）。"""
+
+    @patch("fetch_market_data.requests.get")
+    def test_trade_date_is_utc_day_of_unix_ts_not_beijing_local(self, mock_get: MagicMock) -> None:
+        # ts=1795636800 = 2026-11-25 20:00 UTC = 北京 11-26 04:00：按 UTC 取日必须落 11-25；
+        # 变异（去掉 timezone.utc）会落本地时区日。CI 机器缺省 UTC——为让「去掉 UTC」在
+        # UTC 机器上也变红，测试进程内临时把 TZ 钉到 Asia/Shanghai（Windows 无 tzset 则不钉）。
+        import os
+        import time
+
+        payload = GLOBALBD_PAYLOAD.replace("1795656000", "1795636800").replace(
+            ",2026-11-26,09:20:00", ",2026-11-26,04:00:00")
+        old_tz = os.environ.get("TZ")
+        patched = False
+        if hasattr(time, "tzset"):
+            os.environ["TZ"] = "Asia/Shanghai"
+            time.tzset()
+            patched = True
+        try:
+            mock_get.return_value = _text_response(payload)
+            quote = fetch_sina_bond_quote("^TNX", "INDEX")
+            assert quote is not None
+            self.assertEqual(quote["tradeDate"], "2026-11-25")
+        finally:
+            if patched:
+                if old_tz is None:
+                    os.environ.pop("TZ", None)
+                else:
+                    os.environ["TZ"] = old_tz
+                time.tzset()
+
+    @patch("fetch_market_data._note_fetch_failure")
+    @patch("fetch_market_data.requests.get")
+    def test_truncated_bond_payload_rejects_cleanly(self, mock_get, mock_note) -> None:
+        mock_get.return_value = _text_response(
+            'var hq_str_globalbd_usg10y="美国10年期国债收益率,4.899,4.844";')
+        self.assertIsNone(fetch_sina_bond_quote("^TNX", "INDEX"))
+        mock_note.assert_not_called()
+
+
+class LiquidityRosterContractTests(unittest.TestCase):
+    """M15 变异锁（Q-20261126-15⑤）：流动性清单抽掉 WTI 后既有断言（按清单自身长度算）
+    照样绿——核心票必须字面在册。"""
+
+    def test_core_commodity_and_rate_tickers_are_rostered(self) -> None:
+        from query_market import LIQUIDITY_TICKERS
+
+        roster = dict(LIQUIDITY_TICKERS)
+        self.assertEqual(roster.get("CL=F"), "WTI原油")
+        self.assertEqual(roster.get("BZ=F"), "布伦特原油")
+        self.assertEqual(roster.get("NQ00Y"), "小型纳指连续")
+        self.assertEqual(roster.get("^TNX"), "美十债收益率")
+
+
 if __name__ == "__main__":
     unittest.main()

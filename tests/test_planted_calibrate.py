@@ -126,3 +126,12 @@ def test_rps_warmup_contract_note_is_reported_by_default_and_fails_strict(tmp_pa
     out = capsys.readouterr().out
     assert "量具正常" in out and "⚠" in out and "rps_core 预热契约偏差" in out
     assert run_check.main(["rps", "--cache-root", str(tmp_path / "b"), "--strict"]) == 1
+
+
+def test_seed_uniqueness_guard_rejects_stripped_stride(monkeypatch):
+    # M33/X11 变异锁（2026-11-26 max 评审 Q-20261126-15⑤）：入口种子对撞断言此前自身零测试
+    # ——把族步长退回 1000（r5 I-7 病灶值：对照市场 lag 1~3 与出厂共享同种子序列）时，
+    # _calib_seed_uniqueness 的机械枚举必须 SystemExit 拒跑，而不是等复测数字漂了才发现。
+    monkeypatch.setattr(run_check, "CALIB_STRIDE", 1000)
+    with pytest.raises(SystemExit, match="种子撞车"):
+        run_check._calib_seed_uniqueness(n_markets=2, edge_seeds=1)

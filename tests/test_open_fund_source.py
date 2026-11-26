@@ -30,7 +30,9 @@ from mootdx_source import is_mootdx_ticker  # noqa: E402
 
 try:
     import tushare  # noqa: F401
-except ImportError:  # 可选依赖：CI 经 requirements-test.txt 安装；裸环境缺则相关用例 skip（r5 C-1）
+except ModuleNotFoundError as _e:  # 仅「未安装」降级 skip；tushare 已装但缺 six（其 trader 未声明依赖）须红不降级（r5 C-1 + M-3 收窄）
+    if _e.name != "tushare":
+        raise
     tushare = None
 HAS_TUSHARE = tushare is not None
 

@@ -21,7 +21,9 @@ import update_damodaran_erp as ude
 
 try:
     import openpyxl  # noqa: F401
-except ImportError:  # 可选依赖：CI 经 requirements-test.txt 安装；裸环境缺则相关用例 skip（r5 C-1）
+except ModuleNotFoundError as _e:  # 仅「未安装」降级 skip；已装但依赖缺失须红（r5 C-1 + M-3 收窄）
+    if _e.name != "openpyxl":
+        raise
     openpyxl = None
 HAS_OPENPYXL = openpyxl is not None
 

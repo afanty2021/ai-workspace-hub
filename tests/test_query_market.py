@@ -15,7 +15,9 @@ try:
     import duckdb  # noqa: F401
 
     HAS_DUCKDB = True
-except ImportError:
+except ModuleNotFoundError as _e:  # 仅「未安装」降级 skip；已装但依赖缺失须红（M-3）
+    if _e.name != "duckdb":
+        raise
     HAS_DUCKDB = False
 
 

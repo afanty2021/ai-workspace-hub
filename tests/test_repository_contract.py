@@ -204,6 +204,17 @@ class RepositoryContractTests(unittest.TestCase):
             f"接线已进映射表但 AGENTS.md 数据源表未登记（同族第 5 案防线）: {missing}",
         )
 
+    def test_strat_table_prints_returns_not_net_value_multipliers(self) -> None:
+        # M20/M21 变异锁（2026-11-26 max 评审 Q-20261126-15⑤，r5 N-1 同族回归锁）：
+        # gross/net/bh 是净值倍数（连乘），打印必须减 1 才是收益率——×1.14 直接按 .2%
+        # 打会显示成 114%。strat_table 是 main 内嵌函数无法直测，锁字面契约。
+        for path, marker in (
+            ("tools/stage-bottom/run_backtest.py", '("毛收益中位", g - 1.0)'),
+            ("tools/jinniu/run_backtest.py", '("策略毛收益中位", g - 1.0)'),
+        ):
+            src = (REPO_ROOT / path).read_text(encoding="utf-8")
+            self.assertIn(marker, src, f"{path} strat_table 必须对净值倍数减 1 再打印")
+
 
 class EastmoneySecidContractTests(unittest.TestCase):
     """跨模块契约（2026-11-11 max 评审建议落地，同日 I-1 secid 测试盲区
