@@ -84,3 +84,4 @@ planted 检查给 jinniu 接线做独立重数时 59/60 票对不上。回源：
 - gitignored 本地侧已同步：review-queue（Q-20261125-01…09 pending）、friction-log（+3 条）、active-context。
 - `data/planted-benchmark/` 下有首版遗留的 `cache-noise/` 与 `sr/drift/` 两个孤儿目录（本会话生成，gitignored），可删。
 - 仓库级既有观察（非本次引入）挂 Q-20261125-08：CI 同款 lint 在存量文件上报 35 错；`requirements.txt` 不含 numpy / pandas。
+- **2026-11-26 追记**：以上写于 r4 收尾时。同日后续五笔提交（d6d8e12 / 35fb7d0 / ea734c3 / 14c4902 / aa04ee0）已改动既有管道（`event_returns` 与 `sleeve.py` U4 改历法日、`rps_core` 预热门槛、`validity.py` 去重叠 t），`--strict` 转为 exit 0、全量转为 1002 绿；那五笔的评审见 `2026-11-25-max-review-r5.md`。
