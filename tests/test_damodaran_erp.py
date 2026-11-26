@@ -19,6 +19,12 @@ import _test_paths  # noqa: F401
 import requests as _rq
 import update_damodaran_erp as ude
 
+try:
+    import openpyxl  # noqa: F401
+except ImportError:  # 可选依赖：CI 经 requirements-test.txt 安装；裸环境缺则相关用例 skip（r5 C-1）
+    openpyxl = None
+HAS_OPENPYXL = openpyxl is not None
+
 # 模板占位符契约在 test_cross_asset_report.TemplateContractTests 断言 {ERP_SECTION}
 
 _HEADERS = ["Start of month", "S&P 500", "T.Bond Rate", "$ Riskfree Rate",
@@ -58,6 +64,7 @@ def _workbook_bytes(rows: list[dict], sheet: str = "Historical ERP") -> bytes:
     return buf.getvalue()
 
 
+@unittest.skipUnless(HAS_OPENPYXL, "openpyxl 未安装")
 class ParseTests(unittest.TestCase):
     def test_parse_header_map_and_pct_conversion(self) -> None:
         rows = ude.parse_erp_rows(_workbook_bytes(_REAL_ROWS))
@@ -99,6 +106,7 @@ class ParseTests(unittest.TestCase):
             ude.parse_erp_rows(buf.getvalue())
 
 
+@unittest.skipUnless(HAS_OPENPYXL, "openpyxl 未安装")
 class UpdateTests(unittest.TestCase):
     def test_update_idempotent_and_unit_tag(self) -> None:
         payload = _workbook_bytes(_REAL_ROWS)
@@ -143,6 +151,7 @@ class MainTests(unittest.TestCase):
         close = [row for row in rows if row.get("type") == "data-close"][-1]
         self.assertEqual([m["item"] for m in close["missing"]], ["us-erp-monthly"])
 
+    @unittest.skipUnless(HAS_OPENPYXL, "openpyxl 未安装")
     def test_main_records_source_only_on_write(self) -> None:
         payload = _workbook_bytes(_REAL_ROWS)
         with tempfile.TemporaryDirectory() as tmp, \

@@ -14,6 +14,12 @@ from _test_paths import REPO_ROOT  # noqa: F401
 
 import update_finance_snapshots as ufs  # noqa: E402
 
+try:
+    import mootdx  # noqa: F401
+except ImportError:  # 可选依赖：CI 经 requirements-test.txt 安装；裸环境缺则相关用例 skip（r5 C-1）
+    mootdx = None
+HAS_MOOTDX = mootdx is not None
+
 # 19 列 fixture：重名列（净资产收益率/归母/扣非 ×2）模拟 659 列真实结构的关键陷阱
 _COLS = [
     "基本每股收益", "扣除非经常性损益每股收益", "每股净资产", "净资产收益率",          # 0-3（第一次出现）
@@ -117,6 +123,7 @@ class FinanceFlowTests(unittest.TestCase):
         self.assertIn("占位过滤 1 期", joined)
         self.assertIn("gpcw20261231.zip", joined)  # 被滤的是哪只空壳，名字要看得见
 
+    @unittest.skipUnless(HAS_MOOTDX, "mootdx 未安装")
     def test_gp_fallback_pins_bestip_and_restores(self) -> None:
         # gp_fallback≠None 主路径此前零覆盖（复查）：ctx 内 GP 被钉住、退出恢复原值
         from mootdx import config as mootdx_config
@@ -127,6 +134,7 @@ class FinanceFlowTests(unittest.TestCase):
             self.assertEqual(mootdx_config.get("BESTIP")["GP"], ("203.0.113.7", 7709))
         self.assertEqual(mootdx_config.get("BESTIP"), saved)
 
+    @unittest.skipUnless(HAS_MOOTDX, "mootdx 未安装")
     def test_run_with_gp_fallback_routes_through_pinned_channel(self) -> None:
         with patch.object(ufs, "files_with_fallback",
                           return_value=(self.files, ("203.0.113.7", 7709))), \
@@ -137,6 +145,7 @@ class FinanceFlowTests(unittest.TestCase):
         self.assertEqual(stats, {"ok": 1, "skip": 0, "fail": 0})
         gp_ctx.assert_called_once_with("203.0.113.7", 7709)  # download/parse 全程钉在兜底服务器
 
+    @unittest.skipUnless(HAS_MOOTDX, "mootdx 未安装")
     def test_files_with_fallback_clean_error_when_both_channels_dead(self) -> None:
         # N5：负缓存窗口内 _get_mootdx_client 直接 raise——不得以 CLI traceback 收场
         with patch("mootdx.affair.Affair.files", side_effect=RuntimeError("default GP dead")), \

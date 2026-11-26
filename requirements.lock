@@ -1,6 +1,9 @@
 # Pinned dependencies for reproducible installs.
 # Generated from requirements.txt — re-pin after updating.
 # Install with: pip install -r requirements.lock
+# 注意（2026-11-26 实测）：本文件在 Quant-3.11 环境重钉，numpy==2.3.5 要求 Python>=3.11，
+# Python 3.10 上不可装。CI 不使用本文件（只装 requirements.txt + requirements-test.txt），
+# 测试期依赖见 requirements-test.txt（未钉入本 lock）。
 requests==2.34.2
 PySocks==1.7.1
 python-dotenv==1.2.3

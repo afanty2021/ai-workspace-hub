@@ -28,6 +28,12 @@ from fetch_market_data import (  # noqa: E402
 )
 from mootdx_source import is_mootdx_ticker  # noqa: E402
 
+try:
+    import tushare  # noqa: F401
+except ImportError:  # 可选依赖：CI 经 requirements-test.txt 安装；裸环境缺则相关用例 skip（r5 C-1）
+    tushare = None
+HAS_TUSHARE = tushare is not None
+
 # 2026-11-08 真实响应（qt.gtimg.cn/q=jj021179，GBK）：
 # 0=代码 1=名称 5=单位净值 6=累计净值 7=日涨跌% 8=净值日期。
 TENCENT_JJ_PAYLOAD = (
@@ -230,6 +236,7 @@ class TencentOpenFundQuoteTests(unittest.TestCase):
         mock_get.assert_not_called()
 
 
+@unittest.skipUnless(HAS_TUSHARE, "tushare 未安装")
 class OpenFundFallbackChainTests(unittest.TestCase):
     """fetch_fallback_quote 对 .OF ticker 的专用短链与降级记录。"""
 

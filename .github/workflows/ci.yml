@@ -19,11 +19,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -r requirements.txt ruff==0.15.18 pytest
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt ruff==0.15.18 pytest
       - run: python -m pytest tests -v
       - run: ruff check system tools tests
       - run: python -m compileall -q system tools tests
-      - run: python system/scripts/check_workspace.py
+      # workspace/meta/ 与 workspace/review-queue.md 是 gitignored 的实例文件，裸 clone 上
+      # check_workspace 必红；这一步要验的是「全新安装是否 READY」，所以先装到临时目录再查
+      # （2026-11-26 max 评审 r5 C-1）。check_workspace.py 以当前目录为根，子进程必须 cwd 到新装目录。
+      # 用 python 取临时目录，三条腿（ubuntu/bash、windows/pwsh）通吃。
+      - name: Workspace check on a fresh install
+        run: |
+          python -c "import pathlib, subprocess, sys, tempfile; ws = pathlib.Path(tempfile.mkdtemp(prefix='hub-ci-')) / 'ws'; subprocess.check_call([sys.executable, 'system/scripts/install_workspace.py', '--target', str(ws)]); sys.exit(subprocess.call([sys.executable, str(ws / 'system/scripts/check_workspace.py')], cwd=str(ws)))"
       - run: python tools/podcast/scripts/fetch_podcasts.py --help
       - run: python tools/daily-watch/scripts/generate_daily_report.py --help
       - run: python tools/daily-watch/scripts/check_setup.py --init
