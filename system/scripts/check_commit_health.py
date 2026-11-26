@@ -10,7 +10,10 @@ r5 I-6）；同族前科见 friction-log 2026-11-11 / 11-12 / 11-14。CI 只跑 
     python system/scripts/check_commit_health.py --ruff           # 每笔再跑 ruff（需已安装）
     python system/scripts/check_commit_health.py --full           # 每笔再跑全量测试（慢）
 
-每笔默认只跑 tests/test_changelog_freshness.py（本仓自己的 CHANGELOG 契约）。任一笔红则 exit 1。
+每笔默认跑 tests/test_changelog_freshness.py（CHANGELOG 契约）与
+tests/test_knowledge_index_consistency.py（知识索引一致性，Q-20261126-15④）。
+任一笔红则 exit 1。缺省区间为空（通常=已全部推送）时非零退出并提示用 --base，
+确属无需检查用 --allow-empty 放行（I-5：静默 exit 0 是假合规路径）。
 只读：worktree 建在系统临时目录，退出时删除；不改任何分支、索引或工作树。
 """
 from __future__ import annotations
@@ -23,11 +26,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-DEFAULT_TESTS = ["tests/test_changelog_freshness.py"]
+DEFAULT_TESTS = ["tests/test_changelog_freshness.py", "tests/test_knowledge_index_consistency.py"]
+
+# Windows 本地裸跑、非 UTF-8 模式下读中文提交信息会 cp1252 解码炸（与 CI 首跑 Windows
+# 腿编码族同根，ce88e74 修根同款；2026-11-26 max 评审 M-14）——所有 text 子进程显式 utf-8。
+_TEXT_KWARGS = dict(capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", *args], cwd=repo, check=True, **_TEXT_KWARGS).stdout.strip()
 
 
 def default_base(repo: Path) -> str:
@@ -67,22 +74,25 @@ def check_commit(sha: str, repo: Path, tests: list[str], *, ruff: bool = False) 
     wt = tmp / "wt"
     try:
         subprocess.run(["git", "worktree", "add", "--detach", str(wt), sha], cwd=repo,
-                       check=True, capture_output=True, text=True)
-        cmd = [sys.executable, "-m", "pytest", *tests, "-q", "-p", "no:cacheprovider", "--tb=line"]
-        run = subprocess.run(cmd, cwd=wt, capture_output=True, text=True)
+                       check=True, **_TEXT_KWARGS)
+        # 缺省档里较新的测试文件在历史提交的树上还不存在——按存在性过滤（全缺则跳过），
+        # 否则逐提交检查会被「文件不存在」的收集错误整体打红（Q-20261126-15④）。
+        existing = [t for t in tests if (wt / t).exists()]
+        if not existing:
+            return {"pytest": f"（指定测试在该提交尚不存在，跳过：{' '.join(tests)}）", "ruff": "—", "ok": True}
+        cmd = [sys.executable, "-m", "pytest", *existing, "-q", "-p", "no:cacheprovider", "--tb=line"]
+        run = subprocess.run(cmd, cwd=wt, **_TEXT_KWARGS)
         out = {"pytest": pytest_summary(run.stdout + "\n" + run.stderr), "ruff": "—", "ok": run.returncode == 0}
         if ruff:
             if shutil.which("ruff") is None:
                 out["ruff"] = "未安装"
             else:
-                rr = subprocess.run(["ruff", "check", "system", "tools", "tests"], cwd=wt,
-                                    capture_output=True, text=True)
+                rr = subprocess.run(["ruff", "check", "system", "tools", "tests"], cwd=wt, **_TEXT_KWARGS)
                 out["ruff"] = ruff_summary(rr.returncode, rr.stdout + rr.stderr)
                 out["ok"] = out["ok"] and rr.returncode == 0
         return out
     finally:
-        subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo,
-                       capture_output=True, text=True)
+        subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo, **_TEXT_KWARGS)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -102,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tests", nargs="*", default=DEFAULT_TESTS, help="每笔跑的测试路径")
     ap.add_argument("--full", action="store_true", help="每笔跑全量测试（tests/）")
     ap.add_argument("--ruff", action="store_true", help="每笔再跑 ruff check system tools tests")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="显式放行空区间（缺省区间为空通常=已全部推送，确属无需检查时用）")
     ap.add_argument("--repo", default=None, type=Path, help="仓库路径，缺省=当前目录所在仓库")
     args = ap.parse_args(argv)
     try:
@@ -111,6 +123,13 @@ def main(argv: list[str] | None = None) -> int:
     base = args.base or default_base(repo)
     commits = list_commits(repo, base, args.head)
     if not commits:
+        if args.base is None and not args.allow_empty:
+            # I-5（2026-11-26 max 评审）：全部推送后缺省区间为空，一笔都没查却 exit 0
+            # 是假合规路径——非零退出并提示显式指定区间。
+            print(f"缺省区间 {base}..{args.head} 为空（通常=已全部推送）：本命令一笔都没有检查。\n"
+                  f"请用 --base 显式指定要查的区间（如 --base HEAD~3 或评审头 sha）；\n"
+                  f"确属无需检查时用 --allow-empty 放行。")
+            return 2
         print(f"区间 {base}..{args.head} 内没有提交")
         return 0
     tests = ["tests"] if args.full else list(args.tests)

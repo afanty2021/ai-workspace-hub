@@ -22,6 +22,11 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v7
+        with:
+          # 全历史必须拉全：fetch-depth:1（浅克隆）会把边界提交当根提交，git log -1 --
+          # CHANGELOG.md 恒返回 HEAD 本身，freshness 测试的 _lagged 第一轮就 break 恒为空
+          # =CHANGELOG 契约在 CI 上空转（2026-11-26 max 评审 I-4，浅克隆实验坐实）。
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}

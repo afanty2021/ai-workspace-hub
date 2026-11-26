@@ -50,6 +50,24 @@ def test_main_empty_range_is_not_an_error(tmp_path, monkeypatch, capsys):
     assert "没有提交" in capsys.readouterr().out
 
 
+def test_main_empty_default_range_warns_and_exits_nonzero(tmp_path, monkeypatch, capsys):
+    # I-5（2026-11-26 max 评审）：全部推送后缺省区间为空，静默 exit 0 = 假合规路径。
+    # 未给 --base 且区间空 → 非零退出 + 提示；--allow-empty 或显式 --base 放行。
+    monkeypatch.setattr(cch, "list_commits", lambda repo, base, head: [])
+    monkeypatch.setattr(cch, "_git", lambda repo, *a: str(tmp_path))
+    monkeypatch.setattr(cch, "default_base", lambda repo: "origin/main")
+
+    assert cch.main(["--repo", str(tmp_path)]) == 2
+    cap = capsys.readouterr()
+    assert "缺省区间" in cap.out and "--base" in cap.out
+
+    assert cch.main(["--repo", str(tmp_path), "--allow-empty"]) == 0
+    assert "没有提交" in capsys.readouterr().out
+
+    assert cch.main(["--repo", str(tmp_path), "--base", "HEAD~3"]) == 0
+    assert "没有提交" in capsys.readouterr().out
+
+
 def test_check_commit_distinguishes_green_and_red_commits_in_a_real_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
