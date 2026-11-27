@@ -33,7 +33,10 @@ ROOT = Path(os.environ.get("HUB_REPO_ROOT",
 
 # 18:25 档两脚本（同族漏登两次的发生地；cn 侧见模块 docstring 限制）
 DISCOVERY_SCRIPTS = ("update_us_liquidity.py", "update_damodaran_erp.py")
-PINNED_SERIES = ("us-rrp-daily", "us-hy-oas", "us-erp-monthly")
+# 2026-11-27 起补 update_money_etf_premium.py 两序列（脚本常量名 SERIES_511880/
+# SERIES_511990 不匹配 *_SERIES 发现约定，按 docstring 限制钉进 PINNED）
+PINNED_SERIES = ("us-rrp-daily", "us-hy-oas", "us-erp-monthly",
+                 "cn-money-etf-prem-511880", "cn-money-etf-prem-511990")
 DOC_FILES = ("tools/daily-watch/README.md", "DATA-SOURCES.md",
              "system/skills/daily-watch.md")
 

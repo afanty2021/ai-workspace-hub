@@ -488,6 +488,21 @@ def render_damodaran_erp_section(data_root: Path | None = None) -> str:
                 "`tools/daily-watch/scripts/update_damodaran_erp.py`。")
 
 
+def render_money_etf_section(data_root: Path | None = None) -> str:
+    """货币ETF折溢价温度计段（Q-20261127-01）：只读本地
+    cn-money-etf-prem-511880/511990 + 指数/Shibor 序列，零网络。任何失败
+    降级为一行提示，绝不炸日报（同 ERP 段语义）。"""
+    from market_data_io import resolve_data_root
+    from update_money_etf_premium import format_money_etf_section, money_etf_state
+
+    try:
+        root = data_root or resolve_data_root()
+        return format_money_etf_section(money_etf_state(root, today=date.today().isoformat()))
+    except Exception as exc:  # noqa: BLE001 — 显示段失败降级不炸日报
+        return (f"> 货币ETF折溢价读数本轮渲染失败（{exc}）；通路见 "
+                "`tools/daily-watch/scripts/update_money_etf_premium.py`。")
+
+
 def render_earnings_sections(
     earnings: list[dict[str, Any]], enabled: bool, status: dict[str, Any] | None = None
 ) -> tuple[str, str]:
@@ -1283,6 +1298,7 @@ def build_report(
         CROSS_ASSET_NOTE=CROSS_ASSET_NOTE + liquidity_window_note(today),
         THREE_LIGHTS_SECTION=render_three_lights_section(),
         ERP_SECTION=render_damodaran_erp_section(),
+        MONEY_ETF_SECTION=render_money_etf_section(),
         MARKET_SUMMARY=market_summary,
         KEY_MOVERS_TABLE=(render_key_movers(movers, rolling) if quotes else "> 行情未取得，本轮无法判断是否有异动。"),
         OTHER_MOVERS_TABLE=render_other_movers(quotes, movers, rolling),

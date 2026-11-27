@@ -16,6 +16,8 @@
 
 {ERP_SECTION}
 
+{MONEY_ETF_SECTION}
+
 市场情绪：{MARKET_SUMMARY}
 
 ## 个股异动
