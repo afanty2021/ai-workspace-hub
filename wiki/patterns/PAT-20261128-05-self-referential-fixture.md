@@ -55,6 +55,7 @@ failure_signals: ["夹具构造行里有 import 的被测常量", "变异「改�
 | 日期 | 独立案例 | 结果 | 归因 | 来源 |
 |---|---|---|---|---|
 | 2026-11-27 | B 席 M71/72/75/91 四发「改常量」零锁（温度计测试夹具用 ump.EXDIV_MARK 等构造输入） | 修复波：夹具改字面量+新增 ConstantLiteralLockTests 11 常量对拍 | primary | docs/superpowers/notes/2026-11-27-max-review.md Minor #27 |
+| 2026-11-28 | 复查 B-M2：「夹具改字面量」当时未落地（tests 仍用 ump.EXDIV_MARK 构造 note、NAME_*/FUND_* 不在对拍组——卡与树不符） | 二次修复波补落地：夹具全改字面量，对拍组扩至含 FUND_*/NAME_*/A-I1 新常量 | supporting | docs/superpowers/notes/2026-11-28-max-review.md B-M2 |
 
 ## 反例与校准
 
