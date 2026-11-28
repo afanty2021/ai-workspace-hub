@@ -289,7 +289,7 @@ VIX / SPY / QQQ / GLD / WTI / BTC 的当前价和涨跌幅表格
 | 东财 datacenter 宏观 / MOFCOM | 国内 Shibor（隔夜/1W，RPT_IMP_INTRESTRATEN）+ 中国 10Y 国债收益率（RPTA_WEB_TREASURYYIELD，中债估值 EOD T+1，Q-20261113-04）+ 社融增量（MOFCOM shrzgmQuery，月度） | 无 Key | `update_cn_liquidity.py`（写 data/custom/；社融失败只告警不阻塞、Shibor/中国 10Y 失败=非零；DR007 严格口径未接——Shibor-1W 为信用拆借口径，与质押回购有口径差；中国 10Y 与 ^TNX 不同源不同步不互为备份） | 无 |
 | 新浪环球 | 美元指数（DX-Y.NYB → DINIW）、伦敦金（XAUUSD=X，实时 hf_XAU + 历史 GlobalFuturesService 日线）、伦铜备用（hf_CAD = LME 三月铜）、COMEX 铜备用（HG00Y → hf_HG）、WTI/布油备用（CL=F → hf_CL / BZ=F → hf_OIL）、NQ 连续备用（NQ00Y → hf_NQ）、美十债水平（^TNX → globalbd_usg10y，**只取水平不取涨跌**——北京日切口径日变动与美盘真变动可反号，2026-11-26 接线） | 无 Key | 自动 fallback（映射制）；涨跌一律相对昨日结算价自算、周末快照回滚周五；XAUUSD=X 历史为主源（2024-09 起 565 行，11-06 行全 OHLC 与快照逐位一致） | 无 |
 | 腾讯环球 | 新浪同名 hf_ 码代理（qt.gtimg.cn 逐字段同位：hf_XAU/hf_CAD/hf_HG/hf_CL/hf_OIL 五码，新浪环球之后第三备份，2026-11-26 接线；老 nf_ 族已下线，hf_NQ/DINIW 不代理） | 无 Key | 自动 fallback（新浪环球之后；腾讯 2 位小数、新浪 3 位） | 无 |
-| yfinance | 多市场 | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
+| yfinance | 多市场；**美国 3-2-1 裂解价差三腿**（RB=F/HO=F/CL=F 前月连续，ET 日切同源同滚派生 `us-321-crack`，2026-11-28 接线——**禁止与本地 `CL=F.jsonl`（新浪北京日切+东财 kline 混装）跨源拼腿**，11-28 探针同日对拍 yahoo 83.08 vs 本地 sina 行 85.817） | 无 Key；个人研究/教育用途 | 可选 fallback（需额外安装） | `ENABLE_YFINANCE=true` |
 
 完整接入步骤、官方入口和使用边界见工作区根目录的 [`DATA-SOURCES.md`](../../DATA-SOURCES.md)。
 
@@ -431,6 +431,9 @@ python3 tools/daily-watch/scripts/check_setup.py
     # 货币ETF折溢价温度计（511880 主锚+511990 第二腿，18:10 批量第 4 条链内，2026-11-27 接线；
     # --days=回看 K 线根数——新工作区首拉/长缺口回补用 --days 500，只回填序列不重建基线）
     python tools/daily-watch/scripts/update_money_etf_premium.py --days 60
+    # 美国 3-2-1 裂解价差派生序列（us-321-crack，三腿 yfinance RB=F/HO=F/CL=F 同源，手工档无 cron，
+    # 2026-11-28 接线；--days=滚动窗天数，新工作区首拉用 --days 500）
+    python tools/daily-watch/scripts/update_crack_spread.py --days 500
     # 首次部署：全量初始化（3 年回补的唯一路径）
     python tools/daily-watch/scripts/update_market_series.py --scope all --backfill 800
     # 盘中误跑过的修正（动态 bar 被当收盘写并推进了完成标记时）：收盘后 15:00 再跑

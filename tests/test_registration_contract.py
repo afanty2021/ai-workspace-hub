@@ -39,10 +39,11 @@ import batch_ledger
 ROOT = Path(os.environ.get("HUB_REPO_ROOT",
                            Path(__file__).resolve().parents[1]))
 
-# data/custom 序列发现脚本（18:25 档两脚本 + 18:10 第 4 条链内货币ETF；
+# data/custom 序列发现脚本（18:25 档两脚本 + 18:10 第 4 条链内货币ETF +
+# us-321-crack 手工档裂解价差（2026-11-28 接线 Q-20261128-04）；
 # cn 侧 update_cn_liquidity 见模块 docstring 限制）
 DISCOVERY_SCRIPTS = ("update_us_liquidity.py", "update_damodaran_erp.py",
-                     "update_money_etf_premium.py")
+                     "update_money_etf_premium.py", "update_crack_spread.py")
 # 命名约定逃逸时的手工钉入位（当前为空——ump 常量已按约定改名）
 PINNED_SERIES: tuple[str, ...] = ()
 DOC_FILES = ("tools/daily-watch/README.md", "DATA-SOURCES.md",

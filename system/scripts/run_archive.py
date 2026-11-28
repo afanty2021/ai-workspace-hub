@@ -82,8 +82,9 @@ except ImportError:  # importlib 动态加载 / 非脚本目录执行时补路�
     from evidence_lint import parse_frontmatter
 
 KINDS = ("watch", "inspect", "research", "screen", "masters", "backfill",
-          "batch-series", "batch-finance", "batch-crossasset", "batch-liquidity",
-          "batch-us-liquidity", "batch-damodaran-erp", "batch-money-etf")
+         "batch-series", "batch-finance", "batch-crossasset", "batch-liquidity",
+         "batch-us-liquidity", "batch-damodaran-erp", "batch-money-etf",
+         "batch-crack-spread")
 LEDGER_REL = Path(".state") / "run-log.jsonl"
 SENTINEL_REL = Path(".state") / "run-log.error"
 ORPHAN_HOURS = 24
