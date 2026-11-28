@@ -10,8 +10,11 @@ r5 I-6）；同族前科见 friction-log 2026-11-11 / 11-12 / 11-14。CI 只跑 
     python system/scripts/check_commit_health.py --ruff           # 每笔再跑 ruff（需已安装）
     python system/scripts/check_commit_health.py --full           # 每笔再跑全量测试（慢）
 
-每笔默认跑 tests/test_changelog_freshness.py（CHANGELOG 契约）与
-tests/test_knowledge_index_consistency.py（知识索引一致性，Q-20261126-15④）。
+每笔默认跑 tests/test_changelog_freshness.py（CHANGELOG 契约）、
+tests/test_knowledge_index_consistency.py（知识索引一致性，Q-20261126-15④）与
+tests/test_registration_contract.py（kind 枚举+序列三文档登记，2026-11-28 评审
+I-12 修根——b7c15e5 的 registration 红笔缺省档与 --ruff 档都抓不住，只有
+--full 抓得住；拆笔场景仍建议一律 --full）。
 任一笔红则 exit 1。缺省区间为空（通常=已全部推送）时非零退出并提示用 --base，
 确属无需检查用 --allow-empty 放行（I-5：静默 exit 0 是假合规路径）。
 只读：worktree 建在系统临时目录，退出时删除；不改任何分支、索引或工作树。
@@ -26,7 +29,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-DEFAULT_TESTS = ["tests/test_changelog_freshness.py", "tests/test_knowledge_index_consistency.py"]
+DEFAULT_TESTS = ["tests/test_changelog_freshness.py", "tests/test_knowledge_index_consistency.py",
+                 "tests/test_registration_contract.py"]
 
 # Windows 本地裸跑、非 UTF-8 模式下读中文提交信息会 cp1252 解码炸（与 CI 首跑 Windows
 # 腿编码族同根，ce88e74 修根同款；2026-11-26 max 评审 M-14）——所有 text 子进程显式 utf-8。

@@ -231,13 +231,15 @@ class UpdateTickerTests(unittest.TestCase):
     ]))
     def test_shallow_series_gets_full_window(self, mock_get) -> None:
         # 浅 series（快照钩子攒几天、首行晚于窗口起点）→ 必须全窗口回补，
-        # 不能只拿 1-2 行增量（2026-11-09 首跑实测 bug 的回归锁）
-        self._write_series("^SOX", [
-            '{"date": "2026-11-06", "close": 9390.25, "amount": null, "source": "eastmoney"}\n',
-        ])
-        ucah.update_ticker(self.root, "^SOX", "251.SOX", backfill_days=800)
+        # 不能只拿 1-2 行增量（2026-11-09 首跑实测 bug 的回归锁）。
+        # today 注入固定值：原断言用测试侧 date.today() 对拍脚本内 date.today()，
+        # 跨午夜窗口（12-31→01-01）会假红（B 席 #32 时间炸弹盘点）
+        fake_today = date(2026, 11, 27)
+        with patch("update_cross_asset_history.date") as fake_date:
+            fake_date.today.return_value = fake_today
+            ucah.update_ticker(self.root, "^SOX", "251.SOX", backfill_days=800)
         beg = mock_get.call_args.kwargs["params"]["beg"]
-        self.assertEqual(beg[:4], (date.today() - timedelta(days=800)).strftime("%Y"))  # 全窗口起点
+        self.assertEqual(beg[:4], (fake_today - timedelta(days=800)).strftime("%Y"))  # 全窗口起点
 
     @patch("update_cross_asset_history.requests.get", return_value=_kline_response([]))
     def test_empty_klines_returns_empty(self, mock_get) -> None:
@@ -325,18 +327,21 @@ class NasdaqSourceTests(unittest.TestCase):
             '{"date": "2026-07-06", "close": 12900.14, "volume": 0.0, "amount": 0.0, "source": "eastmoney-kline"}\n'
             '{"date": "2026-11-06", "close": 9390.25, "volume": 0.0, "amount": 0.0, "source": "eastmoney-kline"}\n',
             encoding="utf-8")
+        fake_today = date(2026, 11, 27)  # today 注入（B 席 #32：跨午夜窗口不 flaky）
         with patch("update_cross_asset_history.requests.get", return_value=_nasdaq_response([
             _nasdaq_row("11/06/2026", "9,390.25", "9,495.21", "9,627.26", "9,221.35"),
             _nasdaq_row("11/05/2026", "9,011.14", "9,806.31", "9,838.13", "8,997.39"),
-        ])) as mock_get:
+        ])) as mock_get, \
+                patch("update_cross_asset_history.date") as fake_date:
+            fake_date.today.return_value = fake_today
             status = ucah.update_ticker(self.root, "^SOX", "251.SOX",
                                         backfill_days=800, history_source="nasdaq")
         self.assertEqual(status, "written")
         params = mock_get.call_args.kwargs["params"]
         self.assertEqual(params["assetclass"], "index")
-        self.assertEqual(params["todate"], date.today().isoformat())
+        self.assertEqual(params["todate"], fake_today.isoformat())
         self.assertEqual(params["fromdate"][:4],
-                         (date.today() - timedelta(days=800)).strftime("%Y"))  # 全窗起点
+                         (fake_today - timedelta(days=800)).strftime("%Y"))  # 全窗起点
         import json
         lines = (self.root / "market" / "series" / "^SOX.jsonl").read_text(
             encoding="utf-8").splitlines()

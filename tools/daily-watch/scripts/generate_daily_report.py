@@ -491,11 +491,14 @@ def render_damodaran_erp_section(data_root: Path | None = None) -> str:
 def render_money_etf_section(data_root: Path | None = None) -> str:
     """货币ETF折溢价温度计段（Q-20261127-01）：只读本地
     cn-money-etf-prem-511880/511990 + 指数/Shibor 序列，零网络。任何失败
-    降级为一行提示，绝不炸日报（同 ERP 段语义）。"""
-    from market_data_io import resolve_data_root
-    from update_money_etf_premium import format_money_etf_section, money_etf_state
-
+    降级为一行提示，绝不炸日报（同 ERP 段语义）。2026-11-28 评审 I-2 修根：
+    import 挪进 try——模块导入失败（ModuleNotFoundError）时原实现直接炸
+    build_report 整份日报不落盘，「绝不炸日报」承诺两条路径都不成立的那条
+    已堵上（另一条=缺占位符键，SafeFormatDict 回显残留不抛，属残留非崩溃）。"""
     try:
+        from market_data_io import resolve_data_root
+        from update_money_etf_premium import format_money_etf_section, money_etf_state
+
         root = data_root or resolve_data_root()
         return format_money_etf_section(money_etf_state(root, today=date.today().isoformat()))
     except Exception as exc:  # noqa: BLE001 — 显示段失败降级不炸日报

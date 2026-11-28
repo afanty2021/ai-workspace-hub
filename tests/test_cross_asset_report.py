@@ -4,7 +4,9 @@
 - load_rolling_stats：本地 series 滚动计算、行数不足/缺文件/torn 行的 "—" 语义
 - render_market_overview：FMP 无 key 不再渲染 6 行 N/A 死表
 - movers 表 5d/20d 新列
-- 模板占位符契约（CROSS_ASSET_TABLE/CROSS_ASSET_NOTE 防漂移）
+- 模板占位符契约（CROSS_ASSET_TABLE/CROSS_ASSET_NOTE/{MONEY_ETF_SECTION} 防漂移）
+- render_money_etf_section 降级契约（2026-11-28 评审 I-2：import 在 try 外的
+  真崩溃路径修根后，模块导入失败/序列损坏均降级一行不炸日报）
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import _test_paths  # noqa: F401
 from datetime import date
@@ -24,6 +27,7 @@ from generate_daily_report import (
     render_cross_asset_table,
     render_key_movers,
     render_market_overview,
+    render_money_etf_section,
     render_other_movers,
 )
 
@@ -203,6 +207,47 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("liquidity-dashboard", CROSS_ASSET_NOTE)
         self.assertIn("回补", CROSS_ASSET_NOTE)
         self.assertIn("积累期", CROSS_ASSET_NOTE)
+
+    def test_template_has_money_etf_placeholder(self) -> None:
+        # 2026-11-28 评审 I-2：渲染层零契约（B 席 9 发变异全绿）——占位符
+        # 集合契约补 {MONEY_ETF_SECTION}（Q-20261127-01 货币ETF段）
+        text = TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("{MONEY_ETF_SECTION}", text)
+
+
+class MoneyEtfRenderTests(unittest.TestCase):
+    """render_money_etf_section 降级契约（2026-11-28 评审 I-2 修根）：
+
+    - import 挪进 try 后，update_money_etf_premium 模块导入失败也降级一行，
+      不再炸 build_report 整份日报（原实测定罪路径）；
+    - state 计算失败（本地序列损坏等）降级为一行提示（同 ERP 段语义）；
+    - 正常态渲染含读数与状态行。"""
+
+    def test_module_import_failure_degrades_not_crashes(self) -> None:
+        with patch.dict("sys.modules", {"update_money_etf_premium": None}):
+            text = render_money_etf_section()
+        self.assertIn("货币ETF折溢价读数本轮渲染失败", text)
+        self.assertIn("update_money_etf_premium.py", text)
+
+    def test_state_failure_degrades_not_crashes(self) -> None:
+        with patch("update_money_etf_premium.money_etf_state",
+                   side_effect=RuntimeError("series boom")):
+            text = render_money_etf_section()
+        self.assertIn("货币ETF折溢价读数本轮渲染失败", text)
+        self.assertIn("series boom", text)
+
+    def test_normal_state_renders_reading_and_status(self) -> None:
+        state = {"triggered": False, "silent": False, "reason": "",
+                 "rows_880": [{"date": "2026-11-26", "value": -0.15}],
+                 "rows_990": [{"date": "2026-11-26", "value": 0.4}],
+                 "n_rows_880": 539, "asof": "2026-11-26", "today": "2026-11-27",
+                 "index": None, "shibor": None, "poisoned_recent": []}
+        with patch("update_money_etf_premium.money_etf_state",
+                   return_value=state):
+            text = render_money_etf_section()
+        self.assertIn("货币ETF场内折溢价", text)
+        self.assertIn("11-26 -0.15bp", text)
+        self.assertIn("状态：", text)
 
 
 if __name__ == "__main__":

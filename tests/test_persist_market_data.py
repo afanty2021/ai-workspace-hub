@@ -55,12 +55,15 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(pmd.save_daily_snapshot(snap, self.root).name, "2026-11-01.json")
 
     def test_snapshot_falls_back_to_wall_clock_without_valid_fetched_at(self) -> None:
-        # fetched_at 缺失或日历非法（02-31）都退墙钟——与旧行为一致的兜底路径
+        # fetched_at 缺失或日历非法（02-31）都退墙钟——与旧行为一致的兜底路径。
+        # 断言取「运行前后」窗口而非单点 now：跨午夜运行不再假红（B 席 #32）
         for meta in ({}, {"fetched_at": "2026-02-31T09:00:00+00:00"},
                      {"fetched_at": "not-a-date"}):
             snap = {"quotes": [], "movers": [], "earnings": [], "meta": meta}
+            before = datetime.now().strftime("%Y-%m-%d")
             path = pmd.save_daily_snapshot(snap, self.root)
-            self.assertEqual(path.name, datetime.now().strftime("%Y-%m-%d") + ".json", msg=meta)
+            after = datetime.now().strftime("%Y-%m-%d")
+            self.assertIn(path.name[:-len(".json")], {before, after}, msg=meta)
 
     def test_snapshot_today_injection_wins_over_fetched_at(self) -> None:
         snap = dict(_snapshot([]), meta={"fetched_at": "2026-11-01T09:00:00+00:00"})

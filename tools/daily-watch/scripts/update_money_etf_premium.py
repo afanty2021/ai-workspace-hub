@@ -13,13 +13,20 @@
   全史一次拉）→ 天天基金 lsjz（分页）双源 auto 降级，双源对 511880 逐位一致。
   **F10/pingzhongdata 除权日标签比场内价格除权提前一交易日**（2023-12-28
   +174bp / 2024-12-30 +155bp / 2025-12-30 +115bp 三年假溢价实锤）→ 除权修复：
-  净值回落日改用前一日净值对价，修复后三年除权日读数全部回到 ±3bp；修复后
-  仍 |溢价|>50bp 的行=口径断裂毒行，弃用不落盘。
+  净值回落日改用前一日净值对价（回落幅度 ≥EXDIV_MIN_DROP_RATIO 才算除权——
+  净值小幅下修是数据修订非除权，误标会把真触发毒化），修复后三年除权日读数
+  全部回到 ±3bp；修复后仍 |溢价|>POISON_PREM_BP（±200bp）的行=口径断裂毒行，
+  弃用不落盘但**必可见**（log+stats+账本 missing+日报段近期弃行提示）——
+  2026-11-28 评审 C1 修根：原 ±50bp 静默守卫把 −60bp 真实折价一并吞掉（构造
+  两日 -60bp 双腿实测 exit 0+「正常噪声区间」），守卫只可能吃到结构性断裂，
+  ±200bp 内的真实极端读数照记（温度计的存在意义）。
 - 511990 华宝添益（**固定净值型**，原 511988 已换码）：溢价率 = 收盘 ÷ 100
   （固定净值锚近似）。**天天基金 lsjz/fundmobapi 对固定净值型货基的 DWJZ
   字段返回万份收益（~0.26 元≈年化 0.95%）非单位净值**——不得跨基金复用
-  解析；100 锚偏差 = 真实净值对 100 的偏离（11 月实测收盘 99.992~100.012，
-  ±1.2bp 与噪声同量级，可忽略；真净值接口待验证项见 skill）。
+  解析；100 锚偏差 = 真实净值对 100 的偏离，全存量 26 个月溢价中位 +0.1bp
+  ⇒ 系统性锚偏差 ≤0.1bp 量级、与噪声同量级（2026-11-28 评审 I-8 修：原引
+  「11 月收盘 99.992~100.012」量的是溢价本身非净值偏离，论据作废）；
+  511990 真净值接口核实=待验证项，登记 review-queue Q-20261128-02。
 - 触发线（量具纪律：标定窗 2025-06~2026-11 基线 P5=-0.8bp/P95=+2.8bp、样本内
   从未出现，阈值与标定窗分离留待验证期检验）：**连续 2 个交易日 < -5bp 且
   双基金同向**；511880 末 2 日任一含除权修复行 → 触发静默（除权窗剔除）。
@@ -28,10 +35,15 @@
 
 写入 save_custom_data.append_record（同 us-liquidity 模式）：series=
 cn-money-etf-prem-511880 / cn-money-etf-prem-511990，unit=bp，note 存
-close/nav 原始数（除权修复行加 exdiv-repair 标记）。幂等 skip 同 (series,date)。
+close/nav 原始数（4 位小数，2026-11-28 修 %g 截断——511880 存量 484/539 行
+note 无法逐位复算的病灶；除权修复行加 exdiv-repair 标记并另存 nav_raw=当日
+披露净值，修复前假溢价可精确重放）。幂等 skip 同 (series,date)。
 
 性质标注联动（零网络，只读本地）：上证指数日涨跌（data/index/series/
-000001.jsonl）+ Shibor 1W 日变动（data/custom/shibor-1w.jsonl）：
+000001.jsonl）+ Shibor 1W 日变动（data/custom/shibor-1w.jsonl）。**语境行
+= 与 asof（读数日）同日的行及其前一行**——2026-11-28 评审 C2 修根：原取
+序列末两行，净值 T+1 滞后下语境比读数日新一个交易日（11-27 实测 +3.73%
+vs 对齐 +0.01%，三分支翻转率 60.3%），方向标签可被次日行情改写：
 - 触发 + 股指跌 ≥0.5% 或 Shibor 上行 ≥3bp → risk-off 挤赎嫌疑（非做多）；
 - 触发 + 股指涨 ≥0.5% 且 Shibor 变动 ≤+1bp → risk-on 卖货基买股嫌疑；
 - 其余 → 方向不明（人工复核）。均为「嫌疑/待归因」级，不裁决。
@@ -41,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 import time
@@ -50,7 +63,7 @@ from typing import Any
 import requests
 
 from fetch_market_data import DEFAULT_TIMEOUT
-from mootdx_source import _MOOTDX_LOCK, _get_mootdx_client, log
+from mootdx_source import _mootdx_call, log
 from save_custom_data import append_record, show_series
 
 PINGZHONG_URL = "https://fund.eastmoney.com/pingzhongdata/{code}.js"
@@ -58,17 +71,22 @@ LSJZ_URL = "https://api.fund.eastmoney.com/f10/lsjz"
 
 FUND_511880 = "511880"
 FUND_511990 = "511990"
-SERIES_511880 = "cn-money-etf-prem-511880"
-SERIES_511990 = "cn-money-etf-prem-511990"
+PREM_511880_SERIES = "cn-money-etf-prem-511880"
+PREM_511990_SERIES = "cn-money-etf-prem-511990"
 NAME_511880 = "银华日利ETF(511880)场内溢价率（bp，vs 单位净值）"
 NAME_511990 = "华宝添益ETF(511990)场内溢价率（bp，vs 100元固定净值锚）"
 
-NAV_511990_ANCHOR = 100.0  # 固定净值型锚（偏差与噪声同量级，见 docstring）
+NAV_511990_ANCHOR = 100.0  # 固定净值型锚（系统性偏差 ≤0.1bp 量级，见 docstring）
 ALERT_THRESH_BP = -5.0     # 连续 2 日 < -5bp 且双基金同向才触发（标定窗内未出现）
 CONSEC_DAYS = 2
-POISON_PREM_BP = 50.0      # 除权修复后仍超 ±50bp = 口径断裂行，弃用不落盘
+POISON_PREM_BP = 200.0     # 修复后仍超 ±200bp = 口径断裂行，弃用但必可见（C1 修根：
+                           # ±200bp=货币基金到不了的量级，真实极端读数 ±200bp 内照记）
 EXDIV_MARK = "exdiv-repair"
-EXDIV_QUIET_DAYS = 2       # 末 N 日内含除权修复行 → 触发静默
+EXDIV_MIN_DROP_RATIO = 0.0005  # 净值回落 ≥0.05% 才算除权（I-7：下修 ~1e-5 量级
+                               # 是数据修订，误标 exdiv 可毒化真触发）
+BASELINE_P5_BP = -0.8      # 标定窗 2025-06~2026-11 基线（与触发线分离，验证期待检）
+BASELINE_P95_BP = 2.8
+STALE_GAP_DAYS = 10        # asof 距今超此日历日数 → 日报段「序列陈旧」提示
 ROUND_BP = 2
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -76,10 +94,17 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
 
 
 def _mootdx_bars(code: str, offset: int) -> list[dict[str, Any]]:
-    """mootdx 日线 → [{date, close}] 正序（日期升序）。"""
-    with _MOOTDX_LOCK:
-        client = _get_mootdx_client()
-        df = client.bars(symbol=code, frequency=9, offset=offset)
+    """mootdx 日线 → [{date, close}] 正序（日期升序）。
+
+    经 _mootdx_call 走统一「失败弃用服务器再抛」路径（spec §3：update/query
+    类脚本禁直调 client.bars——直调会把掉线后的坏 client 留给第二腿复用，
+    2026-11-28 评审 M2）。offset 上限 800=mootdx 单次拉取上限，超出截断并
+    记 warning（原实现超限行为未定义）。"""
+    if offset > 800:
+        log(f"Warning: mootdx offset {offset} 超单次上限 800，按 800 拉"
+            "（--days 过大时窗头缺行，分次拉或缩窗）")
+        offset = 800
+    df = _mootdx_call("bars", symbol=code, frequency=9, offset=offset)
     if df is None or len(df) == 0:
         raise RuntimeError(f"mootdx {code} 返回空 K 线")
     df = df.reset_index(drop=True)
@@ -172,43 +197,74 @@ def fetch_nav_rows_lsjz(code: str, pages: int) -> list[dict[str, Any]]:
 
 
 def compute_premiums(closes: list[dict[str, Any]], navs: list[dict[str, Any]],
-                     *, fixed_nav: float | None = None) -> list[dict[str, Any]]:
-    """合并价/净值 → 逐日溢价(bp)行，含除权修复与毒行守卫。
+                     *, fixed_nav: float | None = None
+                     ) -> tuple[list[dict[str, Any]], dict[str, list]]:
+    """合并价/净值 → (落盘行, 弃行诊断)，含除权修复与毒行守卫（弃行可见化）。
 
-    - 净值漂移型（fixed_nav=None）：净值回落日（nav[t] < nav[t-1]，货币基金
-      净值只在该日回落）= F10 除权标签日，价格实际次日才除权 → 改用前一日
-      净值对价，行 note 标 exdiv-repair。
+    - 净值漂移型（fixed_nav=None）：净值回落日（nav[t] < nav[t-1] 且回落幅度
+      ≥ EXDIV_MIN_DROP_RATIO，货币基金净值只在该日回落）= F10 除权标签日，
+      价格实际次日才除权 → 改用前一日净值对价，行 note 标 exdiv-repair 并另存
+      nav_raw=当日披露净值。回落幅度低于阈值=数据下修（非除权），不修复照常
+      落行——2026-11-28 评审 I-7：下修误标 exdiv 会把末 2 日的真触发静默毒化。
     - 固定净值型（fixed_nav=100.0）：无净值序列，恒锚。
-    - 修复后 |溢价| > POISON_PREM_BP 的行丢弃（口径断裂不落盘、不毒化序列）。
+    - 修复后 |溢价| > POISON_PREM_BP（±200bp）的行=口径断裂毒行，弃用**不静默**：
+      进 diag["poisoned"]，由调用方 log+计账本 missing（2026-11-28 C1 修根：
+      原 ±50bp 静默 continue 连真实极端行情一并吞掉）。净值缺行（T+1/停披）
+      同样进 diag["nav_missing"] 不静默。close 非法（NaN/非正）在 compute 层
+      拒收进 poisoned——原穿透到 append_record 才炸整腿。
     """
     nav_by_date = {r["date"]: r["nav"] for r in navs}
     ordered_dates = sorted(nav_by_date)
+    pos = {d: i for i, d in enumerate(ordered_dates)}  # 原 ordered_dates.index() O(n²)
     out: list[dict[str, Any]] = []
+    diag: dict[str, list] = {"poisoned": [], "nav_missing": []}
     for row in closes:
         day = row["date"]
+        close = row["close"]
+        if not isinstance(close, (int, float)) or isinstance(close, bool) \
+                or not math.isfinite(close) or close <= 0:
+            diag["poisoned"].append({"date": day, "prem_bp": None,
+                                     "reason": f"close 非法（{close!r}），不落盘"})
+            continue
         if fixed_nav is not None:
-            nav_eff, repaired = fixed_nav, False
+            nav_eff, nav_raw, repaired = fixed_nav, None, False
         else:
             if day not in nav_by_date:
-                continue  # 净值未披露（T+1）或停披，跳过
+                diag["nav_missing"].append(day)  # T+1 未披露或停披——可见不静默
+                continue
             nav_eff = nav_by_date[day]
-            idx = ordered_dates.index(day)
+            nav_raw = nav_eff
             repaired = False
+            idx = pos[day]
             if idx > 0:
                 nav_prev = nav_by_date[ordered_dates[idx - 1]]
-                if nav_eff < nav_prev:  # 净值回落=除权标签日 → 前一日净值对价
-                    nav_eff = nav_prev
+                if nav_eff < nav_prev and \
+                        (nav_prev - nav_eff) / nav_prev >= EXDIV_MIN_DROP_RATIO:
+                    nav_eff = nav_prev  # 除权标签日 → 前一日净值对价
                     repaired = True
-        prem_bp = (row["close"] / nav_eff - 1.0) * 10000.0
+        prem_bp = (close / nav_eff - 1.0) * 10000.0
         if abs(prem_bp) > POISON_PREM_BP:
-            continue  # 毒行守卫：修复失效/口径断裂，弃用
-        note = f"close={row['close']} nav={nav_eff:g}"
+            diag["poisoned"].append({
+                "date": day, "prem_bp": round(prem_bp, ROUND_BP),
+                "reason": f"|溢价|>{POISON_PREM_BP:g}bp 口径断裂毒行（价/净值口径核查后处理）"})
+            continue
+        note = f"close={close:.4f} nav={nav_eff:.4f}"
         if repaired:
-            note += f" {EXDIV_MARK}"
+            note += f" {EXDIV_MARK} nav_raw={nav_raw:.4f}"
         out.append({"date": day, "prem_bp": round(prem_bp, ROUND_BP),
-                    "close": row["close"], "nav": nav_eff,
+                    "close": close, "nav": nav_eff,
                     "exdiv": repaired, "note": note})
-    return out
+    return out, diag
+
+
+def warn_diag(series: str, diag: dict[str, list]) -> None:
+    """弃行诊断打日志（毒行+缺净值行都不静默；C1 修根的可见化半边）。"""
+    for p in diag.get("poisoned", []):
+        log(f"Warning: {series} 弃行（口径断裂，不落盘）: {p}")
+    nav_missing = diag.get("nav_missing", [])
+    if nav_missing:
+        log(f"Warning: {series} {len(nav_missing)} 行缺净值未落盘"
+            f"（T+1 未披露/停披）: {nav_missing}")
 
 
 def upsert_premiums(data_root: Path, series: str, name: str, source: str,
@@ -233,8 +289,13 @@ def upsert_premiums(data_root: Path, series: str, name: str, source: str,
 
 
 def update_511880(data_root: Path, *, days: int,
-                  sink: list[tuple[Path, str]] | None = None) -> dict[str, Any]:
-    """银华日利：净值链 auto（pingzhongdata→lsjz）+ mootdx 收盘 → 溢价落盘。"""
+                  sink: list[tuple[Path, str]] | None = None,
+                  used_sources: set[str] | None = None) -> dict[str, Any]:
+    """银华日利：净值链 auto（pingzhongdata→lsjz）+ mootdx 收盘 → 溢价落盘。
+
+    lsjz 分页页数按「K 线根数（days+40 余量）÷pageSize(20)+2 页」起算——
+    2026-11-28 评审 M11：原 days//20+2 在 --days 61~79 时窗头缺行（余量 0
+    或负），缺净值行在 compute 层即成可见 nav_missing。"""
     closes = _mootdx_bars(FUND_511880, offset=max(days + 40, 80))
     cutoff = closes[0]["date"]
     navs: list[dict[str, Any]] = []
@@ -242,7 +303,7 @@ def update_511880(data_root: Path, *, days: int,
     errors: list[str] = []
     for label, fetch in (("pingzhongdata", lambda: fetch_nav_rows_pingzhong(FUND_511880)),
                          ("lsjz", lambda: fetch_nav_rows_lsjz(
-                             FUND_511880, pages=max(days // 20 + 2, 4)))):
+                             FUND_511880, pages=max((days + 40) // 20 + 2, 4)))):
         try:
             navs = [r for r in fetch() if r["date"] >= cutoff]
             if navs:
@@ -255,35 +316,61 @@ def update_511880(data_root: Path, *, days: int,
         raise RuntimeError(f"511880 净值双源均失败: {'; '.join(errors)}")
     if len(errors) == 1:
         log(f"Warning: 511880 净值部分源失败已降级: {errors[0]}")
-    rows = compute_premiums(closes, navs)
+    rows, diag = compute_premiums(closes, navs)
+    warn_diag(PREM_511880_SERIES, diag)
     source_tag = {"pingzhongdata": "pingzhongdata+mootdx",
                   "lsjz": "lsjz+mootdx"}[used_source]
-    stats = upsert_premiums(data_root, SERIES_511880, NAME_511880,
+    if used_sources is not None:
+        used_sources.add(source_tag)  # upsert 中途失败时已写入行的 source 仍进账本（S6）
+    stats = upsert_premiums(data_root, PREM_511880_SERIES, NAME_511880,
                             source_tag, rows, sink=sink)
-    return {**stats, "source": source_tag}
+    return {**stats, "source": source_tag,
+            "poisoned": diag["poisoned"], "nav_missing": diag["nav_missing"]}
 
 
 def update_511990(data_root: Path, *, days: int,
-                  sink: list[tuple[Path, str]] | None = None) -> dict[str, Any]:
+                  sink: list[tuple[Path, str]] | None = None,
+                  used_sources: set[str] | None = None) -> dict[str, Any]:
     """华宝添益：mootdx 收盘 ÷ 100 固定净值锚 → 溢价落盘（降级语义=告警不阻塞）。"""
     closes = _mootdx_bars(FUND_511990, offset=max(days + 40, 80))
-    rows = compute_premiums(closes, [], fixed_nav=NAV_511990_ANCHOR)
-    stats = upsert_premiums(data_root, SERIES_511990, NAME_511990,
+    rows, diag = compute_premiums(closes, [], fixed_nav=NAV_511990_ANCHOR)
+    warn_diag(PREM_511990_SERIES, diag)
+    if used_sources is not None:
+        used_sources.add("mootdx+nav100anchor")
+    stats = upsert_premiums(data_root, PREM_511990_SERIES, NAME_511990,
                             "mootdx+nav100anchor", rows, sink=sink)
-    return {**stats, "source": "mootdx+nav100anchor"}
+    return {**stats, "source": "mootdx+nav100anchor",
+            "poisoned": diag["poisoned"], "nav_missing": diag["nav_missing"]}
 
 
 def _read_series(data_root: Path, series: str, tail: int) -> list[dict[str, Any]]:
     return show_series(data_root, series, tail=tail)
 
 
-def _index_daily_chg(data_root: Path) -> dict[str, Any] | None:
-    """上证指数末两行 → 最新日涨跌 %（零网络；缺序列/行数不足返回 None）。"""
-    path = data_root / "index" / "series" / "000001.jsonl"
+def _index_daily_chg(data_root: Path, asof: str | None = None
+                     ) -> dict[str, Any] | None:
+    """上证指数日涨跌 %（零网络；缺序列/行数不足返回 None）。
+
+    语境锚=asof（读数日）：取日期 ≤asof 的末两行——2026-11-28 评审 C2 修根：
+    原取序列末两行，净值 T+1 滞后下语境比读数日新一个交易日（11-27 实测
+    +3.73% vs 对齐 +0.01%，三分支翻转率 60.3%）。asof=None 保持旧口径（末两
+    行）。坏行跳过不整段降级（原裸 json.loads 一行 torn 即丢整段语境）。"""
+    from market_data_io import index_series_file
+
+    path = index_series_file(data_root, "000001")
     if not path.exists():
         return None
-    rows = [json.loads(x) for x in
-            path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    if asof:
+        rows = [r for r in rows if str(r.get("date", "")) <= asof]
     if len(rows) < 2:
         return None
     prev, last = rows[-2], rows[-1]
@@ -294,9 +381,11 @@ def _index_daily_chg(data_root: Path) -> dict[str, Any] | None:
     return {"date": last.get("date"), "chg_pct": round(chg, 2)}
 
 
-def _shibor_1w_move(data_root: Path) -> dict[str, Any] | None:
-    """Shibor 1W 末两行 → 最新值与日变动 bp（零网络）。"""
-    rows = _read_series(data_root, "shibor-1w", tail=2)
+def _shibor_1w_move(data_root: Path, asof: str | None = None
+                    ) -> dict[str, Any] | None:
+    """Shibor 1W 日变动 bp（零网络；语境锚=asof，同 _index_daily_chg C2 口径）。"""
+    rows = [r for r in (_read_series(data_root, "shibor-1w", tail=None) or [])
+            if not asof or str(r.get("date", "")) <= asof]
     if len(rows) < 2:
         return None
     try:
@@ -307,6 +396,46 @@ def _shibor_1w_move(data_root: Path) -> dict[str, Any] | None:
             "chg_bp": round((last - prev) * 100.0, 1)}
 
 
+POISON_SIDECAR_RECENT_DAYS = 14  # 日报段「近期弃行」提示的回看窗（日历日）
+
+
+def _record_poison_sidecar(data_root: Path, poisoned: list[dict[str, Any]],
+                           today: str | None) -> None:
+    """毒行弃用落 data/.state/money-etf-poison.json——日报段「近期弃行」
+    提示的持久载体（弃行不落 series，state 从 sidecar 读；C1 修根）。
+    失败只 log 不抛：sidecar 是提示面，不影响更新与退出码。"""
+    if not poisoned:
+        return
+    path = data_root / ".state" / "money-etf-poison.json"
+    try:
+        old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        if not isinstance(old, list):
+            old = []
+        entries = [e for e in old if isinstance(e, dict)][-50:]
+        entries += [dict(e, recorded_at=today or _today_iso()) for e in poisoned]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entries, ensure_ascii=False, indent=1) + "\n",
+                        encoding="utf-8")
+    except OSError as exc:
+        log(f"Warning: 毒行 sidecar 写入失败（提示面缺失，不影响数据）: {exc}")
+
+
+def _read_poison_sidecar(data_root: Path, today: str | None) -> list[dict[str, Any]]:
+    """读 sidecar 中回看窗内的弃行记录（无文件/坏 JSON=无弃行，不抛）。"""
+    path = data_root / ".state" / "money-etf-poison.json"
+    if not path.exists() or not today:
+        return []
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, dict)
+            and isinstance(e.get("recorded_at"), str)
+            and _calendar_gap_days(e["recorded_at"], today) <= POISON_SIDECAR_RECENT_DAYS]
+
+
 def money_etf_state(data_root: Path, today: str | None = None) -> dict[str, Any]:
     """只读本地序列 → 温度计状态（触发判定+语境标注原料）。零网络。
 
@@ -314,10 +443,10 @@ def money_etf_state(data_root: Path, today: str | None = None) -> dict[str, Any]
     滞后 511990 一天——511990 走 100 锚无净值依赖，按各自末行比较会永久
     错位）：511990 在同日期有行才参与触发；触发 = 两基金在同日期的值全 <
     ALERT_THRESH_BP。511880 该窗口任一行含 exdiv-repair 标记 → 静默。"""
-    rows_880 = _read_series(data_root, SERIES_511880, tail=CONSEC_DAYS)
-    rows_990_all = _read_series(data_root, SERIES_511990,
+    rows_880 = _read_series(data_root, PREM_511880_SERIES, tail=CONSEC_DAYS)
+    rows_990_all = _read_series(data_root, PREM_511990_SERIES,
                                 tail=CONSEC_DAYS + 2)  # 511990 天然超前，多读兜对齐
-    full_880 = _read_series(data_root, SERIES_511880, tail=None) or []
+    full_880 = _read_series(data_root, PREM_511880_SERIES, tail=None) or []
     by990 = {r["date"]: r for r in rows_990_all}
     asof = rows_880[-1]["date"] if rows_880 else (
         rows_990_all[-1]["date"] if rows_990_all else None)
@@ -327,7 +456,10 @@ def money_etf_state(data_root: Path, today: str | None = None) -> dict[str, Any]
     triggered = False
     silent = False
     reason = ""
-    if len(rows_880) < CONSEC_DAYS:
+    if not rows_880:
+        # 2026-11-28 评审 M9：主序列空时原只静默回退 asof 到 990 日期，易被读成正常
+        reason = "511880 序列空（读数日回退以 511990 末行为准，非正常态）"
+    elif len(rows_880) < CONSEC_DAYS:
         reason = "样本不足（511880 行数 <2）"
     elif any(x is None for x in rows_990):
         missing = [r["date"] for r, x in zip(rows_880, rows_990) if x is None]
@@ -352,20 +484,29 @@ def money_etf_state(data_root: Path, today: str | None = None) -> dict[str, Any]
         "triggered": triggered,
         "silent": silent,
         "reason": reason,
-        "index": _index_daily_chg(data_root),
-        "shibor": _shibor_1w_move(data_root),
+        "poisoned_recent": _read_poison_sidecar(data_root, today or asof),
+        "index": _index_daily_chg(data_root, asof=asof),
+        "shibor": _shibor_1w_move(data_root, asof=asof),
         "today": today,
     }
 
 
 def classify_state(state: dict[str, Any]) -> str:
-    """触发时的性质标注（嫌疑级，联动股指/Shibor；不触发返回常规文案）。"""
+    """触发时的性质标注（嫌疑级，联动股指/Shibor；不触发返回常规文案）。
+
+    基线/触发线文案一律由常量拼装（2026-11-28 评审 M10：原写死在文案与
+    常量脱钩）。「样本不足/序列空」按 object-model 词表落 missing（该查没
+    查成 ≠ 未触发，M13）。"""
     if not state["triggered"]:
         if state["silent"]:
             return f"静默：{state['reason']}"
         if state["reason"]:
+            if "样本不足" in state["reason"] or "序列空" in state["reason"]:
+                return f"missing（该查没查成，不判读）：{state['reason']}"
             return f"未触发（{state['reason']}）"
-        return "正常噪声区间（基线 P5=-0.8bp/P95=+2.8bp；触发线连续2日<-5bp且双基金同向）"
+        return (f"正常噪声区间（基线 P5={BASELINE_P5_BP:+.1f}bp/"
+                f"P95={BASELINE_P95_BP:+.1f}bp；触发线连续{CONSEC_DAYS}日"
+                f"<{ALERT_THRESH_BP:g}bp且双基金同向）")
     index = state.get("index")
     shibor = state.get("shibor")
     index_chg = index["chg_pct"] if index else None
@@ -376,8 +517,8 @@ def classify_state(state: dict[str, Any]) -> str:
               (shibor_d is not None and shibor_d <= 1.0)
     ctx = (f"上证{index_chg:+.2f}%（{index['date']}）"
            if index else "上证读数缺") + \
-          ("；Shibor 1W {:.3f}%（{:+.1f}bp）".format(
-              shibor["value_pct"], shibor_d) if shibor else "；Shibor 读数缺")
+          (f"；Shibor 1W {shibor['value_pct']:.3f}%（{shibor_d:+.1f}bp，"
+           f"{shibor['date']}）" if shibor else "；Shibor 读数缺")
     if risk_off:
         return (f"⚠️ 触发，{ctx} → risk-off 挤赎嫌疑（2016-12 型：货基遭赎回应对"
                 "流动性紧张，非做多信号）——人工复核")
@@ -401,12 +542,21 @@ def format_money_etf_section(state: dict[str, Any]) -> str:
         f"｜华宝添益 511990（vs 100锚）：{_brief(state['rows_990'])}",
         f"> - 状态：{classify_state(state)}",
     ]
+    pois = state.get("poisoned_recent") or []
+    if pois:
+        days = sorted({str(p.get("date")) for p in pois if p.get("date")})
+        lines.append(
+            f"> - ⚠️ 近期弃行 {len(pois)} 条（口径断裂毒行，未落盘）"
+            f"{'，涉及 ' + '、'.join(days) if days else ''}——±200bp 内真实极端"
+            "读数照记；此提示=结构性口径断裂，人工核查价/净值口径"
+            "（update_money_etf_premium.py）")
     if state.get("today") and state.get("asof"):
         gap = (state["today"] > state["asof"])
         if gap and state["n_rows_880"] and \
-                _calendar_gap_days(state["asof"], state["today"]) > 10:
-            lines.append(f"> - ⚠️ 序列陈旧：末行 {state['asof']}，距今超 10 日，"
-                         "通路可能异常（update_money_etf_premium.py）")
+                _calendar_gap_days(state["asof"], state["today"]) > STALE_GAP_DAYS:
+            lines.append(f"> - ⚠️ 序列陈旧：末行 {state['asof']}，距今超 "
+                         f"{STALE_GAP_DAYS} 日，通路可能异常"
+                         "（update_money_etf_premium.py）")
     return "\n".join(lines)
 
 
@@ -420,12 +570,18 @@ def _calendar_gap_days(older: str, newer: str) -> int:
     return (b - a).days
 
 
+def _today_iso() -> str:
+    from datetime import date
+    return date.today().isoformat()  # 仅作 sidecar recorded_at 运行时点元数据
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="货币ETF场内折溢价温度计更新（511880 主锚+511990 第二腿，"
                     "Q-20261127-01）")
     parser.add_argument("--days", type=int, default=60,
-                        help="回看窗天数（默认 60；首拉/长缺口回补用 --days 500）")
+                        help="回看 K 线根数（交易日；净值链按根数+40 余量对齐，"
+                             "默认 60；首拉/长缺口回补用 --days 500）")
     args = parser.parse_args(argv)
     from market_data_io import resolve_data_root
 
@@ -436,30 +592,42 @@ def main(argv: list[str] | None = None) -> int:
     written: list[tuple[Path, str]] = []
     missing: list[dict] = []
     used: set[str] = set()
+    poisoned_all: list[dict[str, Any]] = []
     fail = False
     # 511880 = 主锚：失败非零（同 RRP 主系列语义）；511990 = 第二腿确认：
-    # 失败告警+missing 不阻塞（同 HY OAS 降级语义，次日自愈）。
+    # 失败告警+missing 不阻塞（同 HY OAS 降级语义，次日自愈）。毒行弃用不
+    # 静默：进 missing（object-model：口径断裂属 missing 词表）+ sidecar。
     try:
-        stats = update_511880(data_root, days=args.days, sink=written)
-        if stats["imported"] > 0:
-            used.add(stats["source"])
+        stats = update_511880(data_root, days=args.days, sink=written,
+                              used_sources=used)
+        poisoned_all += [dict(p, series=PREM_511880_SERIES)
+                         for p in stats.get("poisoned", [])]
     except Exception as exc:  # noqa: BLE001
         fail = True
-        missing.append({"item": SERIES_511880, "reason": str(exc)})
+        missing.append({"item": PREM_511880_SERIES, "reason": str(exc)})
         log(f"Warning: 511880 溢价更新失败: {exc}")
     try:
-        stats990 = update_511990(data_root, days=args.days, sink=written)
-        if stats990["imported"] > 0:
-            used.add(stats990["source"])
+        stats990 = update_511990(data_root, days=args.days, sink=written,
+                                 used_sources=used)
+        poisoned_all += [dict(p, series=PREM_511990_SERIES)
+                         for p in stats990.get("poisoned", [])]
     except Exception as exc:  # noqa: BLE001
-        missing.append({"item": SERIES_511990, "reason": str(exc)})
+        missing.append({"item": PREM_511990_SERIES, "reason": str(exc)})
         log(f"Warning: 511990 溢价更新失败: {exc}")
+    for p in poisoned_all:
+        missing.append({"item": str(p.get("series", "")),
+                        "reason": f"{p.get('date')} 毒行弃用不落盘"
+                                  f"（{p.get('reason', '')}）；补数=人工核查该日"
+                                  "价/净值口径后重跑（现无 --repair 通道，"
+                                  "Q-20261128-03）"})
     close_batch(run_id, written, data_root, sources=sorted(used), missing=missing)
+    if poisoned_all:
+        _record_poison_sidecar(data_root, poisoned_all, today=_today_iso())
     try:
         state = money_etf_state(data_root)
-        log("state: asof={} triggered={} silent={} n={}".format(
+        log("state: asof={} triggered={} silent={} n={} poisoned_recent={}".format(
             state["asof"], state["triggered"], state["silent"],
-            state["n_rows_880"]))
+            state["n_rows_880"], len(state["poisoned_recent"])))
     except Exception as exc:  # noqa: BLE001 — 状态汇总失败不影响更新判定
         log(f"Warning: 温度计状态汇总失败: {exc}")
     return 1 if fail else 0
