@@ -42,7 +42,18 @@ def _load_rows(data_root: Path, series: str) -> list[dict[str, Any]]:
     path = _series_path(data_root, series)
     if not path.exists():
         return []
-    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    # 2026-11-28 评审 A-M10 修根：单行 torn JSON 跳过该行并告警，不再让一行
+    # 坏行把整段序列读取（show_series/update 全消费方）炸成整段降级——与
+    # update_money_etf_premium._index_daily_chg 的逐行 try 同口径
+    rows: list[dict[str, Any]] = []
+    for x in path.read_text(encoding="utf-8").splitlines():
+        if not x.strip():
+            continue
+        try:
+            rows.append(json.loads(x))
+        except ValueError:
+            log(f"Warning: {series} 序列文件单行 torn JSON 已跳过（不整段降级）")
+    return rows
 
 
 def _validate_series(series: str) -> None:

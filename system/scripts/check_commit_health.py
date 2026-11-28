@@ -140,6 +140,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"区间 {base}..{args.head} 内没有提交")
         return 0
     tests = ["tests"] if args.full else list(args.tests)
+    # B-I6 修根（2026-11-28 评审）：--tests/缺省档里的路径在本仓 HEAD 树上不存在
+    # =打错字或文件被删——原被 check_commit 的「按存在性过滤」静默吞掉成假合规。
+    # 只校验当前树；历史提交里缺新测试文件仍按存在性跳过（Q-20261126-15④ 口径）。
+    missing_now = [t for t in tests if not (repo / t).exists()]
+    if missing_now:
+        print(f"指定测试路径在当前树不存在（打错字或已删？）: {missing_now}", file=sys.stderr)
+        return 2
     rows = []
     for sha, subject in commits:
         res = check_commit(sha, repo, tests, ruff=args.ruff)

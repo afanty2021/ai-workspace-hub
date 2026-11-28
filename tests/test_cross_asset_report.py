@@ -250,8 +250,28 @@ class MoneyEtfRenderTests(unittest.TestCase):
         self.assertIn("状态：", text)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class BuildReportMoneyEtfSmokeTests(unittest.TestCase):
+    """B-I5：build_report 接线零契约（M176/M180-M184 全绿；11-27 I-2 修法
+    第四项「build_report 输出含段断言」原未落）。最小冒烟：临时 workspace+
+    真实模板+空行情 → 断言货币ETF段真实落地（降级行不含「场内」二字）且无
+    字面占位符残留；模板占位符独占一行（挪进 HTML 注释藏匿形态不可过）。"""
+
+    def test_build_report_renders_money_etf_section(self) -> None:
+        from generate_daily_report import build_report
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("market_data_io.resolve_data_root", return_value=root):
+                path = build_report(root, {}, TEMPLATE.read_text(encoding="utf-8"),
+                                    {}, {}, [], [])
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("货币ETF场内折溢价", text)
+        self.assertNotIn("{MONEY_ETF_SECTION}", text)
+        self.assertNotIn("渲染失败", text)  # 空序列=正常态而非降级
+
+    def test_template_money_etf_placeholder_standalone_line(self) -> None:
+        lines = [ln.strip() for ln in TEMPLATE.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([ln for ln in lines if "MONEY_ETF_SECTION" in ln],
+                         ["{MONEY_ETF_SECTION}"])
 
 
 class DerivedRowTests(unittest.TestCase):
@@ -321,3 +341,7 @@ class LiquidityWindowNoteTests(unittest.TestCase):
         self.assertEqual(liquidity_window_note(date(2026, 11, 14)), "")
         self.assertEqual(liquidity_window_note(date(2026, 11, 26)), "")
         self.assertEqual(liquidity_window_note(date(2026, 11, 5)), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -26,7 +26,16 @@ def test_pytest_and_ruff_summaries():
     assert cch.ruff_summary(1, "[*] 6 fixable with the `--fix` option") == "rc=1"  # 无 Found 行时兜底为 rc
 
 
+def _make_default_test_files(root: Path) -> None:
+    # B-I6：main 现校验 --tests/缺省档路径在当前树存在（fake repo 也要造出这几份）
+    for t in cch.DEFAULT_TESTS:
+        p = root / t
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# placeholder\n", encoding="utf-8")
+
+
 def test_main_exit_code_follows_worst_commit(tmp_path, monkeypatch, capsys):
+    _make_default_test_files(tmp_path)
     monkeypatch.setattr(cch, "list_commits",
                         lambda repo, base, head: [("aaa0001", "feat: a"), ("bbb0002", "fix: b"), ("ccc0003", "docs: c")])
     fake = {"aaa0001": {"pytest": "8 passed in 0.05s", "ruff": "—", "ok": True},
@@ -70,6 +79,28 @@ def test_main_empty_default_range_warns_and_exits_nonzero(tmp_path, monkeypatch,
     # 复查 r2（席 A M-2）：`--base ""` 空串归一为未设，不得绕过缺省空区间守卫。
     assert cch.main(["--repo", str(tmp_path), "--base", ""]) == 2
     assert "缺省区间" in capsys.readouterr().out
+
+
+def test_default_tests_locked_by_literals_and_exist():
+    # B-I6：缺省档自身零锁（M187-M189/M27 同点）——删 registration 或 freshness
+    # 条目、路径打错字，原全量绿。清单=字面量元组且逐个真实存在。
+    assert cch.DEFAULT_TESTS == ["tests/test_changelog_freshness.py",
+                                 "tests/test_knowledge_index_consistency.py",
+                                 "tests/test_registration_contract.py"]
+    for t in cch.DEFAULT_TESTS:
+        assert (REPO_ROOT / t).exists(), f"缺省档路径不存在: {t}"
+
+
+def test_missing_test_path_fails_fast(tmp_path, monkeypatch, capsys):
+    # B-I6：--tests 打错字原被 check_commit 的「按存在性过滤」静默吞掉
+    # （假合规路径）——main 对当前树缺失的路径非零退出。
+    monkeypatch.setattr(cch, "list_commits",
+                        lambda repo, base, head: [("aaa0001", "feat: a")])
+    monkeypatch.setattr(cch, "_git", lambda repo, *a: str(tmp_path))
+    code = cch.main(["--repo", str(tmp_path), "--base", "HEAD~1",
+                     "--tests", "tests/bogus_missing_test.py"])
+    assert code == 2
+    assert "不存在" in capsys.readouterr().err
 
 
 def test_check_commit_distinguishes_green_and_red_commits_in_a_real_repo(tmp_path):

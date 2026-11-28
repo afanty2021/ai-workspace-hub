@@ -195,7 +195,13 @@ class HyOasParseTests(unittest.TestCase):
                          {"id": "BAMLH0A0HYM2", "cosd": "2026-11-18"})
 
     def test_update_idempotent_and_unit_tag(self) -> None:
-        csv_text = "observation_date,BAMLH0A0HYM2\n2026-11-19,3.52\n"
+        # 夹具日期随墙钟（today−1，同文件下方 test_main_hy_failure 同写法）——
+        # 原写死 2026-11-19 的版本是老化时间炸弹：脚本窗口=[today−30, today]，
+        # 2026-12-20 起夹具日期滑出窗口 → FRED 返回 0 行 → 全量必红（11-28 评审
+        # 5.4 冻结复现：12-19 是 12 passed、12-20 起 1 failed）。
+        today = date.today()
+        day = (today - timedelta(days=1)).isoformat()
+        csv_text = f"observation_date,BAMLH0A0HYM2\n{day},3.52\n"
         with tempfile.TemporaryDirectory() as tmp, \
                 patch("update_us_liquidity.requests.get",
                       return_value=_fred_response(csv_text)):
@@ -210,6 +216,7 @@ class HyOasParseTests(unittest.TestCase):
         self.assertEqual(second["skipped"], 1)
         self.assertEqual(first["source"], "fred-bamlh0a0hym2")
         self.assertIn('"unit": "bp"', rows[0])
+        self.assertIn(day, rows[0])
 
     def test_main_hy_failure_does_not_block_rrp(self) -> None:
         """降级语义（同社融）：HY OAS 失败只告警+missing，RRP 成功则退出码 0。"""

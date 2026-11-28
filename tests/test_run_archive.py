@@ -187,7 +187,7 @@ def test_chain_break_on_deleted_middle_line(data_root: Path, tmp_path: Path) -> 
 
 
 def test_invalid_kind_rejected(data_root: Path) -> None:
-    """kind 六值校验：库抛 ValueError；CLI argparse 直接拒（exit 2，不落盘）。"""
+    """kind 枚举校验（白名单=run_archive.KINDS，不写计数词——评审 D-I3/A-M11）：库抛 ValueError；CLI argparse 直接拒（exit 2，不落盘）。"""
     with pytest.raises(ValueError, match="kind"):
         RA.append_open(data_root, "bogus", "2026-11-03", now=NOW)
     with pytest.raises(SystemExit) as excinfo:

@@ -45,7 +45,7 @@ NYFED_RRP_URL = ("https://markets.newyorkfed.org/api/rp/reverserepo/"
                  "propositions/search.json")
 FRED_RRP_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
-SERIES = "us-rrp-daily"
+RRP_SERIES = "us-rrp-daily"  # 命名约定：以 SERIES 结尾的大写常量=序列 id
 SERIES_NAME = "美联储隔夜逆回购（ON RRP）用量"
 
 FRED_HYOAS_ID = "BAMLH0A0HYM2"
@@ -204,7 +204,7 @@ def update_rrp(data_root: Path, *, days: int = 500, source: str = "auto",
     stats = {"imported": 0, "skipped": 0}
     for item in rows:
         try:
-            path = append_record(data_root, series=SERIES, name=SERIES_NAME,
+            path = append_record(data_root, series=RRP_SERIES, name=SERIES_NAME,
                                  date=item["date"], value=item["value"],
                                  unit="十亿美元", source=source_tag)
             stats["imported"] += 1
@@ -216,7 +216,7 @@ def update_rrp(data_root: Path, *, days: int = 500, source: str = "auto",
             else:
                 raise
     stats["source"] = source_tag  # 供 main 账本记源（实际写入才记，见 main）
-    log(f"{SERIES}[{used_source}]: {stats}")
+    log(f"{RRP_SERIES}[{used_source}]: {stats}")
     return stats
 
 
@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
             used.add(stats["source"])
     except Exception as exc:  # noqa: BLE001 — 主系列失败=非零（同 Shibor 语义）
         fail = True
-        missing.append({"item": SERIES, "reason": str(exc)})
+        missing.append({"item": RRP_SERIES, "reason": str(exc)})
         log(f"Warning: ON RRP 更新失败: {exc}")
     # HY OAS（Q-20261123-04）：降级语义同社融——失败告警+missing，不置非零，
     # 不阻塞 RRP（三灯 1c 数据源晚一天到不致命，18:25 档次日自愈）。

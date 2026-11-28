@@ -24,6 +24,10 @@
 变异验证：HUB_REPO_ROOT 指向 /tmp 仓库副本、改副本内文档应红（doc 侧两方向
 均验证过：object-model 删 kind → test①红；README 删序列名 → test②红；
 2026-11-28：AGENTS/CLAUDE 触发线数值漂移 → test③红，四处同改事实同红）。
+2026-11-28 评审 B-I7 修根：网自身配置原无自保护——发现正则回退旧约定、清单
+缩减、事实值文档集缩水，全量均绿（9 发变异全零锁）。NetSelfCheckTests 把
+三份清单与字面量元组对拍、发现集 ⊇ 已接线序列字面量（首发即抓到 us-rrp-daily
+常量名裸 SERIES 逃逸发现）、发现脚本缺失即红。
 """
 
 from __future__ import annotations
@@ -77,9 +81,10 @@ class SeriesRegistrationContractTests(unittest.TestCase):
         names: set[str] = set()
         for fname in DISCOVERY_SCRIPTS:
             path = ROOT / "tools" / "daily-watch" / "scripts" / fname
-            if path.exists():
-                names |= set(_SERIES_CONST_RE.findall(
-                    path.read_text(encoding="utf-8")))
+            # B-I7：发现脚本缺失=配置漂移，直接 fail（原静默跳过=网可被整体关掉）
+            self.assertTrue(path.exists(), f"发现脚本不存在（路径漂移？）: {fname}")
+            names |= set(_SERIES_CONST_RE.findall(
+                path.read_text(encoding="utf-8")))
         return names
 
     def test_1825_series_registered_in_three_docs(self) -> None:
@@ -95,23 +100,66 @@ class SeriesRegistrationContractTests(unittest.TestCase):
             f"18:25 档序列未按 checklist ①②③ 落三文档：{missing}")
 
 
+class NetSelfCheckTests(unittest.TestCase):
+    """登记网自身配置的自保护（2026-11-28 评审 B-I7）：改测试自身 9 发变异
+    全零锁——发现正则回退、清单缩减、事实值文档集缩水全量均绿。本组把配置
+    钉进字面量：改网先红在这里。"""
+
+    def test_config_lists_locked_by_literals(self) -> None:
+        self.assertEqual(DISCOVERY_SCRIPTS,
+                         ("update_us_liquidity.py", "update_damodaran_erp.py",
+                          "update_money_etf_premium.py", "update_crack_spread.py"))
+        self.assertEqual(DOC_FILES,
+                         ("tools/daily-watch/README.md", "DATA-SOURCES.md",
+                          "system/skills/daily-watch.md"))
+        self.assertEqual(FACT_VALUE_DOCS,
+                         ("AGENTS.md", "CLAUDE.md",
+                          "system/templates/AGENTS.md", "system/templates/CLAUDE.md"))
+        self.assertEqual(PINNED_SERIES, ())
+
+    def test_discovered_covers_all_wired_series(self) -> None:
+        # ⊇ 已接线序列字面量：命名约定逃逸（如裸 SERIES 常量）在此先行暴露
+        discovered = SeriesRegistrationContractTests()._discovered()
+        required = {"us-rrp-daily", "us-hy-oas", "us-erp-monthly",
+                    "us-321-crack", "cn-money-etf-prem-511880",
+                    "cn-money-etf-prem-511990"}
+        self.assertTrue(required <= discovered,
+                        f"已接线序列逃逸发现约定（须改常量名或钉入 PINNED_SERIES）："
+                        f"{sorted(required - discovered)}")
+
+
 class FactValueContractTests(unittest.TestCase):
     """关键事实值锁（2026-11-28 评审 I-10，B 席 D08 判例）：四处同源行「一起
     改事实」（触发线 <-5bp 漂到 <-3bp）原全绿——存在性断言不锁值。本组把
-    触发线数值锚到代码常量：文档漂移或代码漂移任一方向都红。"""
+    触发线数值锚到代码常量：文档漂移或代码漂移任一方向都红。
+    B-M8 扩面（同行其余事实原不在锁内）：毒行阈值 ±200bp 四处一起改成 ±50bp、
+    「方向不明」第三分支整段删除，原全量绿——同源行关键数值/分支一并入锁。
+    needle 一律锚「数值/分支 token」而非整句格式（同源行允许转义竖线等排版
+    差异，D-M1 修根后 `|溢价|` 带反斜杠不碍值锁）。"""
 
-    def test_trigger_line_value_locked_in_four_entrypoint_docs(self) -> None:
+    @staticmethod
+    def _needles() -> list[str]:
         import update_money_etf_premium as ump
         days = str(ump.CONSEC_DAYS)
         thresh = f"{abs(ump.ALERT_THRESH_BP):g}"
-        needle = f"连续 {days} 日 <-{thresh}bp 且双基金同向"
+        return [
+            f"连续 {days} 日 <-{thresh}bp 且双基金同向",       # 触发线（I-10）
+            f"±{ump.POISON_PREM_BP:g}bp",                     # 毒行阈值（B-M8/D-E10）
+            "方向不明",                                       # 第三分支（B-M8/D-E11）
+            f"P5={ump.BASELINE_P5_BP:+.1f}bp",                # 基线（B-M8 同行事实）
+            f"P95={ump.BASELINE_P95_BP:+.1f}bp",
+        ]
+
+    def test_trigger_line_value_locked_in_four_entrypoint_docs(self) -> None:
+        needles = self._needles()
         for doc in FACT_VALUE_DOCS:
             path = ROOT / doc
             self.assertTrue(path.exists(), f"{doc} 不存在（路径漂移？）")
             text = path.read_text(encoding="utf-8")
-            self.assertIn(needle, text,
-                          f"{doc} 触发线事实值与代码常量漂移"
-                          f"（期望 {needle}）——四处同源行一起改也须同步改代码")
+            for needle in needles:
+                self.assertIn(needle, text,
+                              f"{doc} 事实值与代码常量漂移（期望 {needle}）"
+                              "——四处同源行一起改也须同步改代码")
             # 空壳形态不可过：核心语义 token 被掏空（只留序列名）即红
             self.assertIn("双基金同向", text, f"{doc} 触发语义句被掏空")
             self.assertIn("risk-off", text, f"{doc} 性质标注句被掏空")
